@@ -1,0 +1,205 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  BUYER
+  SELLER
+  ADMIN
+}
+
+enum ItemCondition {
+  NEW
+  LIKE_NEW
+  USED
+}
+
+enum ListingStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AuctionStatus {
+  SCHEDULED
+  ACTIVE
+  CLOSED
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id                 String                   @id @default(cuid())
+  name               String
+  email              String                   @unique
+  passwordHash       String
+  role               UserRole
+  isEmailVerified    Boolean                  @default(false)
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+  listings           Listing[]                @relation("SellerListings")
+  bids               Bid[]                    @relation("BuyerBids")
+  watchlistEntries   Watchlist[]
+  auctionsAsSeller   Auction[]                @relation("SellerAuctions")
+  emailTokens        EmailVerificationToken[]
+  passwordResetCodes PasswordResetToken[]
+  refreshTokens      RefreshToken[]
+  notifications      Notification[]
+  winningTxns        AuctionTransaction[]     @relation("WinnerTransactions")
+  sellingTxns        AuctionTransaction[]     @relation("SellerTransactions")
+  auditLogs          AuditLog[]               @relation("ActorAuditLogs")
+}
+
+model Listing {
+  id              String        @id @default(cuid())
+  listingCode     String        @unique
+  sellerId        String
+  title           String
+  category        String
+  condition       ItemCondition
+  description     String
+  startPrice      Int
+  reservePrice    Int?
+  minIncrement    Int
+  startAt         DateTime
+  durationDays    Int
+  status          ListingStatus @default(PENDING)
+  rejectionReason String?
+  imageUrl        String?
+  emoji           String?
+  submittedAt     DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  seller          User          @relation("SellerListings", fields: [sellerId], references: [id])
+  auction         Auction?
+}
+
+model Auction {
+  id            String        @id @default(cuid())
+  listingId     String        @unique
+  sellerId      String
+  title         String
+  category      String
+  condition     ItemCondition
+  description   String
+  imageUrl      String?
+  emoji         String?
+  startPrice    Int
+  reservePrice  Int?
+  minIncrement  Int
+  currentBid    Int
+  bidCount      Int           @default(0)
+  status        AuctionStatus @default(SCHEDULED)
+  startTime     DateTime
+  endTime       DateTime
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  listing       Listing       @relation(fields: [listingId], references: [id])
+  seller        User          @relation("SellerAuctions", fields: [sellerId], references: [id])
+  bids          Bid[]
+  watchlistBy   Watchlist[]
+  transactions  AuctionTransaction[]
+}
+
+model Bid {
+  id        String   @id @default(cuid())
+  auctionId String
+  buyerId   String
+  amount    Int
+  createdAt DateTime @default(now())
+  auction   Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  buyer     User     @relation("BuyerBids", fields: [buyerId], references: [id], onDelete: Cascade)
+
+  @@index([auctionId, createdAt])
+}
+
+model Watchlist {
+  userId    String
+  auctionId String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auction   Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, auctionId])
+}
+
+model EmailVerificationToken {
+  id         String    @id @default(cuid())
+  userId     String
+  code       String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, code])
+}
+
+model PasswordResetToken {
+  id         String    @id @default(cuid())
+  userId     String
+  code       String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, code])
+}
+
+model RefreshToken {
+  id                String       @id @default(cuid())
+  userId            String
+  tokenHash         String       @unique
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  replacedByTokenId String?
+  createdAt         DateTime     @default(now())
+  userAgent         String?
+  ipAddress         String?
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuctionTransaction {
+  id          String            @id @default(cuid())
+  auctionId   String
+  winnerId    String
+  sellerId    String
+  finalAmount Int
+  status      TransactionStatus @default(PENDING)
+  createdAt   DateTime          @default(now())
+  auction     Auction           @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  winner      User              @relation("WinnerTransactions", fields: [winnerId], references: [id], onDelete: Cascade)
+  seller      User              @relation("SellerTransactions", fields: [sellerId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  action      String
+  entityType  String
+  entityId    String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  actor       User?    @relation("ActorAuditLogs", fields: [actorUserId], references: [id], onDelete: SetNull)
+}
