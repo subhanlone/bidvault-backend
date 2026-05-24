@@ -142,8 +142,10 @@ router.post(
 
     await triggerN8nWorkflow('user.registered', {
       userId: user.id,
+      name: user.name,
       email: user.email,
       role: user.role,
+      code,
     });
 
     ok(
@@ -353,7 +355,9 @@ router.post(
 
     await triggerN8nWorkflow('user.password_reset_requested', {
       userId: user.id,
+      name: user.name,
       email: user.email,
+      code,
     });
 
     ok(res, {
@@ -468,7 +472,9 @@ router.post(
 
     await triggerN8nWorkflow('user.email_verification_resent', {
       userId: user.id,
+      name: user.name,
       email: user.email,
+      code,
     });
 
     ok(res, {

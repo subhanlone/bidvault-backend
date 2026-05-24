@@ -10,6 +10,7 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
   async (job) => {
     const auction = await prisma.auction.findUnique({
       where: { id: job.data.auctionId },
+      include: { seller: true },
     });
 
     if (!auction) {
@@ -26,7 +27,10 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
         await triggerN8nWorkflow('auction.started', {
           auctionId: auction.id,
           listingId: auction.listingId,
+          title: auction.title,
           startedAt: new Date().toISOString(),
+          sellerName: auction.seller.name,
+          sellerEmail: auction.seller.email,
         });
       }
       return;
@@ -37,6 +41,7 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
         const winningBid = await prisma.bid.findFirst({
           where: { auctionId: auction.id },
           orderBy: { amount: 'desc' },
+          include: { buyer: true },
         });
 
         await prisma.$transaction(async (tx) => {
@@ -61,10 +66,15 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
         await triggerN8nWorkflow('auction.ended', {
           auctionId: auction.id,
           listingId: auction.listingId,
+          title: auction.title,
           endedAt: new Date().toISOString(),
           finalBid: auction.currentBid,
           bidCount: auction.bidCount,
+          sellerName: auction.seller.name,
+          sellerEmail: auction.seller.email,
           winnerId: winningBid?.buyerId ?? null,
+          winnerName: winningBid?.buyer.name ?? null,
+          winnerEmail: winningBid?.buyer.email ?? null,
           finalAmount: winningBid?.amount ?? null,
         });
       }

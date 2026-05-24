@@ -94,7 +94,10 @@ router.post(
       listingCode: listing.listingCode,
       sellerId: listing.sellerId,
       sellerName: listing.seller.name,
+      sellerEmail: listing.seller.email,
       title: listing.title,
+      category: listing.category,
+      startPrice: listing.startPrice,
     });
 
     ok(res, toListingDto(listing), 201);
@@ -133,6 +136,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const listing = await prisma.listing.findUnique({
       where: { id: req.params.listingId },
+      include: { seller: true },
     });
 
     if (!listing) {
@@ -198,8 +202,12 @@ router.post(
     io?.emit('listing:approved', { listingId: listing.id, auctionId: result.auction?.id });
     await triggerN8nWorkflow('listing.approved', {
       listingId: listing.id,
+      listingCode: listing.listingCode,
       auctionId: result.auction?.id,
       approvedAt: new Date().toISOString(),
+      sellerName: listing.seller?.name ?? '',
+      sellerEmail: listing.seller?.email ?? '',
+      title: listing.title,
     });
 
     ok(res, {
@@ -215,7 +223,10 @@ router.post(
   requireAuth(['ADMIN']),
   validateBody(rejectListingSchema),
   asyncHandler(async (req, res) => {
-    const listing = await prisma.listing.findUnique({ where: { id: req.params.listingId } });
+    const listing = await prisma.listing.findUnique({
+      where: { id: req.params.listingId },
+      include: { seller: true },
+    });
 
     if (!listing) {
       fail(res, 'Listing not found.', 404);
@@ -239,8 +250,12 @@ router.post(
     io?.emit('listing:rejected', { listingId: listing.id });
     await triggerN8nWorkflow('listing.rejected', {
       listingId: listing.id,
+      listingCode: listing.listingCode,
       rejectedAt: new Date().toISOString(),
       reason: updated.rejectionReason ?? '',
+      sellerName: listing.seller?.name ?? '',
+      sellerEmail: listing.seller?.email ?? '',
+      title: listing.title,
     });
 
     ok(res, {
