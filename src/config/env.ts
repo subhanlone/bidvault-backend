@@ -8,6 +8,8 @@ const schema = z.object({
   REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
   N8N_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
   N8N_WEBHOOK_TOKEN: z.string().optional(),
+  STRIPE_SECRET_KEY: z.string().min(1),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(16),
   JWT_ACCESS_EXPIRES_IN: z.string().default('1d'),
   JWT_REFRESH_SECRET: z.string().min(16),

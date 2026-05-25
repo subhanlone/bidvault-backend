@@ -6,6 +6,7 @@ import authRoutes from './modules/auth/auth.routes.js';
 import auctionRoutes from './modules/auctions/auctions.routes.js';
 import listingRoutes from './modules/listings/listings.routes.js';
 import watchlistRoutes from './modules/watchlist/watchlist.routes.js';
+import paymentRoutes from './modules/payments/payments.routes.js';
 import { env } from './config/env.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
 import { ok } from './utils/response.js';
@@ -20,6 +21,7 @@ export function createApp() {
     }),
   );
   app.use(helmet());
+  app.use('/api/v1/payments/webhook', express.raw({ type: 'application/json' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(morgan('dev'));
 
@@ -31,6 +33,7 @@ export function createApp() {
   app.use('/api/v1/auctions', auctionRoutes);
   app.use('/api/v1/listings', listingRoutes);
   app.use('/api/v1/watchlist', watchlistRoutes);
+  app.use('/api/v1/payments', paymentRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

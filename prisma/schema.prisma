@@ -181,16 +181,17 @@ model Notification {
 }
 
 model AuctionTransaction {
-  id          String            @id @default(cuid())
-  auctionId   String
-  winnerId    String
-  sellerId    String
-  finalAmount Int
-  status      TransactionStatus @default(PENDING)
-  createdAt   DateTime          @default(now())
-  auction     Auction           @relation(fields: [auctionId], references: [id], onDelete: Cascade)
-  winner      User              @relation("WinnerTransactions", fields: [winnerId], references: [id], onDelete: Cascade)
-  seller      User              @relation("SellerTransactions", fields: [sellerId], references: [id], onDelete: Cascade)
+  id                   String            @id @default(cuid())
+  auctionId            String
+  winnerId             String
+  sellerId             String
+  finalAmount          Int
+  status               TransactionStatus @default(PENDING)
+  stripePaymentIntentId String?          @unique
+  createdAt            DateTime          @default(now())
+  auction              Auction           @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  winner               User              @relation("WinnerTransactions", fields: [winnerId], references: [id], onDelete: Cascade)
+  seller               User              @relation("SellerTransactions", fields: [sellerId], references: [id], onDelete: Cascade)
 }
 
 model AuditLog {
