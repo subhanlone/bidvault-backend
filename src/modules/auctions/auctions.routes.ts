@@ -266,8 +266,8 @@ router.post(
       return;
     }
 
-    if (auction.status !== AuctionStatus.ACTIVE) {
-      fail(res, 'Only ACTIVE auctions can be test-ended.', 400);
+    if (auction.status === AuctionStatus.CLOSED) {
+      fail(res, 'Auction is already closed.', 400);
       return;
     }
 
@@ -275,7 +275,7 @@ router.post(
 
     await prisma.auction.update({
       where: { id: auctionId },
-      data: { endTime: newEndTime },
+      data: { status: AuctionStatus.ACTIVE, startTime: new Date(), endTime: newEndTime },
     });
 
     const existingJob = await auctionLifecycleQueue.getJob(`auction:end:${auctionId}`);
