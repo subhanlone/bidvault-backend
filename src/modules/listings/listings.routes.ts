@@ -190,12 +190,18 @@ router.post(
       return { updatedListing, auction };
     });
 
-    if (result.auction) {
-      await scheduleAuctionLifecycle({
-        auctionId: result.auction.id,
-        startTime: result.auction.startTime,
-        endTime: result.auction.endTime,
-      });
+    if (result.auction && result.auction.status !== 'CLOSED') {
+      try {
+        await scheduleAuctionLifecycle({
+          auctionId: result.auction.id,
+          startTime: result.auction.startTime,
+          endTime: result.auction.endTime,
+        });
+      } catch (err) {
+        console.error(`[listings] Failed to schedule lifecycle for auction ${result.auction.id}:`, err);
+        fail(res, 'Listing approved but auction scheduling failed — check Redis connection.', 500);
+        return;
+      }
     }
 
     const io = req.app.get('io') as Server | undefined;
