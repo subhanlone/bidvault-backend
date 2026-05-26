@@ -9,6 +9,7 @@ import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { getAuctionRuntimeState, setAuctionRuntimeState } from '../../services/auction-state.service.js';
 import { triggerN8nWorkflow } from '../../services/n8n.service.js';
+import { auctionLifecycleQueue } from '../../queues/auction-lifecycle.queue.js';
 
 const router = Router();
 
@@ -248,6 +249,51 @@ router.post(
       amount: bid.amount,
       timestamp: bid.createdAt.toISOString(),
     }, 201);
+  }),
+);
+
+// TEST-ONLY: reschedules auction:end to fire in 60 seconds for end-to-end testing
+router.post(
+  '/:auctionId/test-end',
+  requireAuth(['ADMIN']),
+  asyncHandler(async (req, res) => {
+    const { auctionId } = req.params;
+
+    const auction = await prisma.auction.findUnique({ where: { id: auctionId } });
+
+    if (!auction) {
+      fail(res, 'Auction not found.', 404);
+      return;
+    }
+
+    if (auction.status !== AuctionStatus.ACTIVE) {
+      fail(res, 'Only ACTIVE auctions can be test-ended.', 400);
+      return;
+    }
+
+    const newEndTime = new Date(Date.now() + 60_000);
+
+    await prisma.auction.update({
+      where: { id: auctionId },
+      data: { endTime: newEndTime },
+    });
+
+    const existingJob = await auctionLifecycleQueue.getJob(`auction:end:${auctionId}`);
+    if (existingJob) {
+      await existingJob.remove();
+    }
+
+    await auctionLifecycleQueue.add(
+      'auction:end',
+      { auctionId },
+      { delay: 60_000, jobId: `auction:end:${auctionId}` },
+    );
+
+    ok(res, {
+      auctionId,
+      newEndTime: newEndTime.toISOString(),
+      message: 'Auction will end in 60 seconds.',
+    });
   }),
 );
 
