@@ -10,8 +10,11 @@ const schema = z.object({
   N8N_WEBHOOK_TOKEN: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().min(1),
   STRIPE_WEBHOOK_SECRET: z.string().min(1),
+  CLOUDINARY_CLOUD_NAME: z.string().min(1),
+  CLOUDINARY_API_KEY: z.string().min(1),
+  CLOUDINARY_API_SECRET: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(16),
-  JWT_ACCESS_EXPIRES_IN: z.string().default('1d'),
+  JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_SECRET: z.string().min(16),
   JWT_REFRESH_EXPIRES_IN_DAYS: z.coerce.number().int().positive().default(14),
 });

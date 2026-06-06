@@ -37,47 +37,66 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
     }
 
     if (job.name === 'auction:end') {
-      if (auction.status !== AuctionStatus.CLOSED) {
-        const winningBid = await prisma.bid.findFirst({
+      // NEW-09: fetch winningBid inside the transaction under a FOR UPDATE lock
+      // to prevent a race where two retries both read status=ACTIVE and create duplicate transactions.
+      const txResult = await prisma.$transaction(async (tx) => {
+        const [locked] = await tx.$queryRaw<Array<{ status: string }>>`
+          SELECT status FROM "Auction" WHERE id = ${auction.id} FOR UPDATE
+        `;
+        if (!locked || locked.status === 'CLOSED') return { alreadyClosed: true, winningBid: null };
+
+        const winBid = await tx.bid.findFirst({
           where: { auctionId: auction.id },
           orderBy: { amount: 'desc' },
           include: { buyer: true },
         });
 
-        await prisma.$transaction(async (tx) => {
-          await tx.auction.update({
-            where: { id: auction.id },
-            data: { status: AuctionStatus.CLOSED },
+        await tx.auction.update({
+          where: { id: auction.id },
+          data: { status: AuctionStatus.CLOSED },
+        });
+
+        if (winBid) {
+          await tx.auctionTransaction.create({
+            data: {
+              auctionId: auction.id,
+              winnerId: winBid.buyerId,
+              sellerId: auction.sellerId,
+              finalAmount: winBid.amount,
+              status: 'PENDING',
+            },
           });
 
-          if (winningBid) {
-            await tx.auctionTransaction.create({
-              data: {
-                auctionId: auction.id,
-                winnerId: winningBid.buyerId,
-                sellerId: auction.sellerId,
-                finalAmount: winningBid.amount,
-                status: 'PENDING',
-              },
-            });
-          }
-        });
+          await tx.notification.create({
+            data: {
+              userId: winBid.buyerId,
+              type: 'AUCTION_WON',
+              title: 'You won the auction!',
+              message: `Congratulations! You won "${auction.title}" with a bid of PKR ${winBid.amount.toLocaleString()}. Complete your payment to claim it.`,
+            },
+          });
+        }
 
-        await triggerN8nWorkflow('auction.ended', {
-          auctionId: auction.id,
-          listingId: auction.listingId,
-          title: auction.title,
-          endedAt: new Date().toISOString(),
-          finalBid: auction.currentBid,
-          bidCount: auction.bidCount,
-          sellerName: auction.seller.name,
-          sellerEmail: auction.seller.email,
-          winnerId: winningBid?.buyerId ?? null,
-          winnerName: winningBid?.buyer.name ?? null,
-          winnerEmail: winningBid?.buyer.email ?? null,
-          finalAmount: winningBid?.amount ?? null,
-        });
-      }
+        return { alreadyClosed: false, winningBid: winBid ?? null };
+      });
+
+      if (txResult.alreadyClosed) return;
+      const winningBid = txResult.winningBid;
+
+      await triggerN8nWorkflow('auction.ended', {
+        auctionId: auction.id,
+        listingId: auction.listingId,
+        title: auction.title,
+        endedAt: new Date().toISOString(),
+        finalBid: auction.currentBid,
+        bidCount: auction.bidCount,
+        sellerName: auction.seller.name,
+        sellerEmail: auction.seller.email,
+        winnerId: winningBid?.buyerId ?? null,
+        winnerName: winningBid?.buyer.name ?? null,
+        winnerEmail: winningBid?.buyer.email ?? null,
+        finalAmount: winningBid?.amount ?? null,
+      });
     }
   },
   {

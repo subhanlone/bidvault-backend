@@ -39,6 +39,22 @@ router.get(
   }),
 );
 
+router.get(
+  '/seller-stats',
+  requireAuth(['SELLER']),
+  asyncHandler(async (req, res) => {
+    const sellerId = req.auth!.userId;
+    const txs = await prisma.auctionTransaction.findMany({
+      where: { sellerId, status: 'COMPLETED' },
+      select: { finalAmount: true },
+    });
+    ok(res, {
+      totalRevenue: txs.reduce((sum, tx) => sum + tx.finalAmount, 0),
+      itemsSold: txs.length,
+    });
+  }),
+);
+
 router.post(
   '/create-intent',
   requireAuth(['BUYER']),
@@ -78,7 +94,7 @@ router.post(
     }
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: tx.finalAmount * 100,
+      amount: tx.finalAmount,
       currency: 'pkr',
       metadata: { transactionId: tx.id, auctionId: tx.auctionId, winnerId },
       description: `BidVault - ${tx.auction.title}`,

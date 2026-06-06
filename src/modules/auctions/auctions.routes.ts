@@ -171,18 +171,22 @@ router.post(
       result = await prisma.$transaction(async (tx) => {
         const [row] = await tx.$queryRaw<Array<{
           id: string;
+          sellerId: string;
+          title: string;
           currentBid: number;
+          bidCount: number;
           minIncrement: number;
           status: AuctionStatus;
           endTime: Date;
         }>>`
-          SELECT id, "currentBid", "minIncrement", status, "endTime"
+          SELECT id, "sellerId", title, "currentBid", "bidCount", "minIncrement", status, "endTime"
           FROM "Auction"
           WHERE id = ${auctionId}
           FOR UPDATE
         `;
 
         if (!row) throw new BidError(404, 'Auction not found.');
+        if (row.sellerId === buyerId) throw new BidError(403, 'You cannot bid on your own auction.');
         if (row.status !== 'ACTIVE') throw new BidError(400, 'Bidding is closed for this auction.');
         if (new Date(row.endTime).getTime() <= Date.now()) throw new BidError(400, 'Auction has already ended.');
 
@@ -190,6 +194,15 @@ router.post(
         if (amount < minAllowed) {
           throw new BidError(400, `Bid must be at least PKR ${minAllowed.toLocaleString()}.`);
         }
+
+        // NEW-05: outbid notification — find previous highest bidder before updating
+        const prevHighest = row.bidCount > 0
+          ? await tx.bid.findFirst({
+              where: { auctionId: row.id, amount: row.currentBid },
+              orderBy: { createdAt: 'desc' },
+              select: { buyerId: true },
+            })
+          : null;
 
         const createdBid = await tx.bid.create({
           data: { auctionId: row.id, buyerId, amount },
@@ -201,6 +214,17 @@ router.post(
           data: { currentBid: amount, bidCount: { increment: 1 } },
           select: { currentBid: true, bidCount: true },
         });
+
+        if (prevHighest && prevHighest.buyerId !== buyerId) {
+          await tx.notification.create({
+            data: {
+              userId: prevHighest.buyerId,
+              type: 'BID_OUTBID',
+              title: "You've been outbid",
+              message: `Your bid on "${row.title}" was outbid. New leading bid: PKR ${amount.toLocaleString()}.`,
+            },
+          });
+        }
 
         return { bid: createdBid, updatedAuction: nextAuction };
       });

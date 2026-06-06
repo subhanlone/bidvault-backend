@@ -339,10 +339,16 @@ router.post(
     const { email } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
+    // FP-01: return generic 200 regardless — prevents email enumeration
     if (!user) {
-      fail(res, 'No account found with this email address.', 404);
+      ok(res, { message: 'If that email is registered, a reset code was sent.' });
       return;
     }
+
+    // FP-03: revoke all unconsumed reset tokens before issuing a new one
+    await prisma.passwordResetToken.deleteMany({
+      where: { userId: user.id, consumedAt: null },
+    });
 
     const code = generateOtp();
     await prisma.passwordResetToken.create({
@@ -460,6 +466,11 @@ router.post(
       ok(res, { message: 'If that email exists and is unverified, a new code was sent.' });
       return;
     }
+
+    // EV-02: revoke all unconsumed tokens before issuing a new one
+    await prisma.emailVerificationToken.deleteMany({
+      where: { userId: user.id, consumedAt: null },
+    });
 
     const code = generateOtp();
     await prisma.emailVerificationToken.create({

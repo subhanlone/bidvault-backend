@@ -120,6 +120,7 @@ model Bid {
   buyer     User     @relation("BuyerBids", fields: [buyerId], references: [id], onDelete: Cascade)
 
   @@index([auctionId, createdAt])
+  @@index([buyerId, createdAt])
 }
 
 model Watchlist {
@@ -192,6 +193,8 @@ model AuctionTransaction {
   auction              Auction           @relation(fields: [auctionId], references: [id], onDelete: Cascade)
   winner               User              @relation("WinnerTransactions", fields: [winnerId], references: [id], onDelete: Cascade)
   seller               User              @relation("SellerTransactions", fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@unique([auctionId])
 }
 
 model AuditLog {

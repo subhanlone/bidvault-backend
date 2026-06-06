@@ -4,6 +4,7 @@ import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { prisma } from './db/prisma.js';
 import { redisConnection } from './infra/redis.js';
+import { verifyAccessToken } from './utils/jwt.js';
 
 const app = createApp();
 const httpServer = createServer(app);
@@ -17,13 +18,32 @@ const io = new SocketIOServer(httpServer, {
 
 app.set('io', io);
 
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token as string | undefined;
+  if (!token) {
+    // Anonymous connections allowed for read-only event reception (live bid updates)
+    return next();
+  }
+  try {
+    const payload = verifyAccessToken(token);
+    socket.data.userId = payload.sub;
+    socket.data.role = payload.role;
+    next();
+  } catch {
+    next(new Error('Invalid or expired token'));
+  }
+});
+
 io.on('connection', (socket) => {
-  socket.on('auction:subscribe', (auctionId: string) => {
-    socket.join(`auction:${auctionId}`);
+  socket.on('auction:subscribe', async (auctionId: unknown) => {
+    if (typeof auctionId !== 'string' || !auctionId.trim()) return;
+    // NEW-02: validate auction exists before joining room
+    const exists = await prisma.auction.findUnique({ where: { id: auctionId }, select: { id: true } });
+    if (exists) socket.join(`auction:${auctionId}`);
   });
 
-  socket.on('auction:unsubscribe', (auctionId: string) => {
-    socket.leave(`auction:${auctionId}`);
+  socket.on('auction:unsubscribe', (auctionId: unknown) => {
+    if (typeof auctionId === 'string') socket.leave(`auction:${auctionId}`);
   });
 });
 

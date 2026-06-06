@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import { ItemCondition, Prisma } from '@prisma/client';
 import type { Server } from 'socket.io';
+import { v2 as cloudinary } from 'cloudinary';
 import { z } from 'zod';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
@@ -10,6 +11,7 @@ import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { scheduleAuctionLifecycle } from '../../queues/auction-lifecycle.queue.js';
 import { triggerN8nWorkflow } from '../../services/n8n.service.js';
+import { env } from '../../config/env.js';
 
 const router = Router();
 
@@ -53,6 +55,7 @@ function toListingDto(
     submittedAt: listing.submittedAt.toISOString(),
     emoji: listing.emoji ?? '📦',
     imageUrl: listing.imageUrl ?? undefined,
+    sellerEmail: listing.seller.email,
   };
 }
 
@@ -63,10 +66,35 @@ function generateListingCode(): string {
 }
 
 router.post(
+  '/upload-signature',
+  requireAuth(['SELLER']),
+  asyncHandler(async (_req, res) => {
+    const timestamp = Math.round(Date.now() / 1000);
+    const folder = 'bidvault/listings';
+    const signature = cloudinary.utils.api_sign_request(
+      { timestamp, folder },
+      env.CLOUDINARY_API_SECRET,
+    );
+    ok(res, {
+      signature,
+      timestamp,
+      apiKey:    env.CLOUDINARY_API_KEY,
+      cloudName: env.CLOUDINARY_CLOUD_NAME,
+      folder,
+    });
+  }),
+);
+
+router.post(
   '/',
   requireAuth(['SELLER']),
   validateBody(submitListingSchema),
   asyncHandler(async (req, res) => {
+    if (req.body.startAt <= new Date()) {
+      fail(res, 'Auction start time must be in the future.', 400);
+      return;
+    }
+
     const listingCode = generateListingCode();
 
     const listing = await prisma.listing.create({
@@ -187,10 +215,11 @@ router.post(
         });
       }
 
-      return { updatedListing, auction };
+      return { updatedListing, auction, isNewAuction: !existingAuction };
     });
 
-    if (result.auction && result.auction.status !== 'CLOSED') {
+    let schedulingFailed = false;
+    if (result.auction && result.auction.status !== 'CLOSED' && result.isNewAuction) {
       try {
         await scheduleAuctionLifecycle({
           auctionId: result.auction.id,
@@ -199,8 +228,7 @@ router.post(
         });
       } catch (err) {
         console.error(`[listings] Failed to schedule lifecycle for auction ${result.auction.id}:`, err);
-        fail(res, 'Listing approved but auction scheduling failed — check Redis connection.', 500);
-        return;
+        schedulingFailed = true;
       }
     }
 
@@ -216,10 +244,30 @@ router.post(
       title: listing.title,
     });
 
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: req.auth!.userId,
+        action: 'LISTING_APPROVED',
+        entityType: 'Listing',
+        entityId: listing.id,
+        metadata: { auctionId: result.auction?.id, schedulingFailed },
+      },
+    }).catch(() => {});
+
+    await prisma.notification.create({
+      data: {
+        userId: listing.sellerId,
+        type: 'LISTING_APPROVED',
+        title: 'Listing approved',
+        message: `Your listing "${listing.title}" has been approved and your auction is now scheduled.`,
+      },
+    }).catch(() => {});
+
     ok(res, {
       listingId: result.updatedListing.id,
       status: result.updatedListing.status,
       auctionId: result.auction?.id,
+      ...(schedulingFailed && { warning: 'scheduling-failed' }),
     });
   }),
 );
@@ -263,6 +311,25 @@ router.post(
       sellerEmail: listing.seller?.email ?? '',
       title: listing.title,
     });
+
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: req.auth!.userId,
+        action: 'LISTING_REJECTED',
+        entityType: 'Listing',
+        entityId: listing.id,
+        metadata: { reason: req.body.reason },
+      },
+    }).catch(() => {});
+
+    await prisma.notification.create({
+      data: {
+        userId: listing.sellerId,
+        type: 'LISTING_REJECTED',
+        title: 'Listing rejected',
+        message: `Your listing "${listing.title}" was not approved. Reason: ${req.body.reason}`,
+      },
+    }).catch(() => {});
 
     ok(res, {
       listingId: updated.id,

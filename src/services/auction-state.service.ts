@@ -27,7 +27,12 @@ export async function getAuctionRuntimeState(auctionId: string): Promise<{
     return {};
   }
 
-  const currentBid = data.currentBid ? Number(data.currentBid) : undefined;
-  const bidCount = data.bidCount ? Number(data.bidCount) : undefined;
+  const parseRedisNum = (val: string | undefined): number | undefined => {
+    if (val == null) return undefined;
+    const n = Number(val);
+    return Number.isNaN(n) ? undefined : n;
+  };
+  const currentBid = parseRedisNum(data.currentBid);
+  const bidCount = parseRedisNum(data.bidCount);
   return { currentBid, bidCount };
 }
