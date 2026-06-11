@@ -5,7 +5,7 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { env } from '../../config/env.js';
-import { triggerN8nWorkflow } from '../../services/n8n.service.js';
+import { sendPaymentCompletedEmail } from '../../services/email.service.js';
 
 const router = Router();
 const stripe = new Stripe(env.STRIPE_SECRET_KEY);
@@ -140,15 +140,11 @@ router.post(
           data: { status: 'COMPLETED' },
         });
 
-        await triggerN8nWorkflow('payment.completed', {
-          transactionId: tx.id,
-          auctionTitle: tx.auction.title,
-          finalAmount: tx.finalAmount,
-          winnerName: tx.winner.name,
-          winnerEmail: tx.winner.email,
-          sellerName: tx.seller.name,
-          sellerEmail: tx.seller.email,
-        });
+        await sendPaymentCompletedEmail(
+          { email: tx.winner.email, name: tx.winner.name },
+          { email: tx.seller.email, name: tx.seller.name },
+          { auctionTitle: tx.auction.title, finalAmount: Number(tx.finalAmount) },
+        );
       }
     }
 

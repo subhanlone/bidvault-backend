@@ -3,7 +3,7 @@ import { AuctionStatus } from '@prisma/client';
 import { redisConnection } from '../infra/redis.js';
 import { prisma } from '../db/prisma.js';
 import type { AuctionLifecycleJobData, AuctionLifecycleJobName } from '../queues/auction-lifecycle.queue.js';
-import { triggerN8nWorkflow } from '../services/n8n.service.js';
+import { sendAuctionStartedEmail, sendAuctionEndedEmail } from '../services/email.service.js';
 
 const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobName>(
   'auction-lifecycle',
@@ -24,14 +24,10 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
           data: { status: AuctionStatus.ACTIVE },
         });
 
-        await triggerN8nWorkflow('auction.started', {
-          auctionId: auction.id,
-          listingId: auction.listingId,
-          title: auction.title,
-          startedAt: new Date().toISOString(),
-          sellerName: auction.seller.name,
-          sellerEmail: auction.seller.email,
-        });
+        await sendAuctionStartedEmail(
+          { email: auction.seller.email, name: auction.seller.name },
+          { title: auction.title, auctionId: auction.id },
+        );
       }
       return;
     }
@@ -83,20 +79,13 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
       if (txResult.alreadyClosed) return;
       const winningBid = txResult.winningBid;
 
-      await triggerN8nWorkflow('auction.ended', {
-        auctionId: auction.id,
-        listingId: auction.listingId,
-        title: auction.title,
-        endedAt: new Date().toISOString(),
-        finalBid: auction.currentBid,
-        bidCount: auction.bidCount,
-        sellerName: auction.seller.name,
-        sellerEmail: auction.seller.email,
-        winnerId: winningBid?.buyerId ?? null,
-        winnerName: winningBid?.buyer.name ?? null,
-        winnerEmail: winningBid?.buyer.email ?? null,
-        finalAmount: winningBid?.amount ?? null,
-      });
+      await sendAuctionEndedEmail(
+        { email: auction.seller.email, name: auction.seller.name },
+        { title: auction.title, finalBid: auction.currentBid, bidCount: auction.bidCount },
+        winningBid
+          ? { email: winningBid.buyer.email, name: winningBid.buyer.name, amount: winningBid.amount }
+          : null,
+      );
     }
   },
   {

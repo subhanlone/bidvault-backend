@@ -12,7 +12,13 @@ import { validateBody } from '../../middleware/validate.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { env } from '../../config/env.js';
 import { hashToken } from '../../utils/token-hash.js';
-import { triggerN8nWorkflow } from '../../services/n8n.service.js';
+import {
+  sendWelcomeEmail,
+  sendEmailVerifiedEmail,
+  sendPasswordResetEmail,
+  sendPasswordResetCompletedEmail,
+  sendVerificationResentEmail,
+} from '../../services/email.service.js';
 
 const router = Router();
 
@@ -140,13 +146,7 @@ router.post(
       },
     });
 
-    await triggerN8nWorkflow('user.registered', {
-      userId: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      code,
-    });
+    await sendWelcomeEmail({ email: user.email, name: user.name }, code);
 
     ok(
       res,
@@ -197,10 +197,7 @@ router.post(
       }),
     ]);
 
-    await triggerN8nWorkflow('user.email_verified', {
-      userId: user.id,
-      email: user.email,
-    });
+    await sendEmailVerifiedEmail({ email: user.email, name: user.name });
 
     ok(res, { message: 'Email verified successfully.' });
   }),
@@ -359,12 +356,7 @@ router.post(
       },
     });
 
-    await triggerN8nWorkflow('user.password_reset_requested', {
-      userId: user.id,
-      name: user.name,
-      email: user.email,
-      code,
-    });
+    await sendPasswordResetEmail({ email: user.email, name: user.name }, code);
 
     ok(res, {
       message: 'Reset code sent.',
@@ -446,10 +438,7 @@ router.post(
       }),
     ]);
 
-    await triggerN8nWorkflow('user.password_reset_completed', {
-      userId: user.id,
-      email: user.email,
-    });
+    await sendPasswordResetCompletedEmail({ email: user.email, name: user.name });
 
     ok(res, { message: 'Password reset successfully.' });
   }),
@@ -481,12 +470,7 @@ router.post(
       },
     });
 
-    await triggerN8nWorkflow('user.email_verification_resent', {
-      userId: user.id,
-      name: user.name,
-      email: user.email,
-      code,
-    });
+    await sendVerificationResentEmail({ email: user.email, name: user.name }, code);
 
     ok(res, {
       message: 'Verification code resent.',

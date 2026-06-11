@@ -10,7 +10,11 @@ import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { scheduleAuctionLifecycle } from '../../queues/auction-lifecycle.queue.js';
-import { triggerN8nWorkflow } from '../../services/n8n.service.js';
+import {
+  sendListingSubmittedEmail,
+  sendListingApprovedEmail,
+  sendListingRejectedEmail,
+} from '../../services/email.service.js';
 import { env } from '../../config/env.js';
 
 const router = Router();
@@ -117,16 +121,10 @@ router.post(
       include: { seller: true },
     });
 
-    await triggerN8nWorkflow('listing.submitted', {
-      listingId: listing.id,
-      listingCode: listing.listingCode,
-      sellerId: listing.sellerId,
-      sellerName: listing.seller.name,
-      sellerEmail: listing.seller.email,
-      title: listing.title,
-      category: listing.category,
-      startPrice: listing.startPrice,
-    });
+    await sendListingSubmittedEmail(
+      { email: listing.seller.email, name: listing.seller.name },
+      { title: listing.title, listingCode: listing.listingCode },
+    );
 
     ok(res, toListingDto(listing), 201);
   }),
@@ -234,15 +232,10 @@ router.post(
 
     const io = req.app.get('io') as Server | undefined;
     io?.emit('listing:approved', { listingId: listing.id, auctionId: result.auction?.id });
-    await triggerN8nWorkflow('listing.approved', {
-      listingId: listing.id,
-      listingCode: listing.listingCode,
-      auctionId: result.auction?.id,
-      approvedAt: new Date().toISOString(),
-      sellerName: listing.seller?.name ?? '',
-      sellerEmail: listing.seller?.email ?? '',
-      title: listing.title,
-    });
+    await sendListingApprovedEmail(
+      { email: listing.seller?.email ?? '', name: listing.seller?.name ?? '' },
+      { title: listing.title, listingCode: listing.listingCode },
+    );
 
     await prisma.auditLog.create({
       data: {
@@ -302,15 +295,10 @@ router.post(
 
     const io = req.app.get('io') as Server | undefined;
     io?.emit('listing:rejected', { listingId: listing.id });
-    await triggerN8nWorkflow('listing.rejected', {
-      listingId: listing.id,
-      listingCode: listing.listingCode,
-      rejectedAt: new Date().toISOString(),
-      reason: updated.rejectionReason ?? '',
-      sellerName: listing.seller?.name ?? '',
-      sellerEmail: listing.seller?.email ?? '',
-      title: listing.title,
-    });
+    await sendListingRejectedEmail(
+      { email: listing.seller?.email ?? '', name: listing.seller?.name ?? '' },
+      { title: listing.title, reason: updated.rejectionReason ?? '' },
+    );
 
     await prisma.auditLog.create({
       data: {

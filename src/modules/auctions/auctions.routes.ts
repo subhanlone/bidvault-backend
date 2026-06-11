@@ -8,7 +8,7 @@ import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { getAuctionRuntimeState, setAuctionRuntimeState } from '../../services/auction-state.service.js';
-import { triggerN8nWorkflow } from '../../services/n8n.service.js';
+import { sendBidPlacedEmail } from '../../services/email.service.js';
 
 const router = Router();
 
@@ -165,6 +165,7 @@ router.post(
     let result: {
       bid: Prisma.BidGetPayload<{ include: { buyer: true } }>;
       updatedAuction: { currentBid: number; bidCount: number };
+      auctionTitle: string;
     };
 
     try {
@@ -226,7 +227,7 @@ router.post(
           });
         }
 
-        return { bid: createdBid, updatedAuction: nextAuction };
+        return { bid: createdBid, updatedAuction: nextAuction, auctionTitle: row.title };
       });
     } catch (err) {
       if (err instanceof BidError) {
@@ -236,7 +237,7 @@ router.post(
       throw err;
     }
 
-    const { bid, updatedAuction } = result;
+    const { bid, updatedAuction, auctionTitle } = result;
 
     await setAuctionRuntimeState({
       auctionId,
@@ -256,13 +257,10 @@ router.post(
       },
     });
 
-    await triggerN8nWorkflow('auction.bid.placed', {
-      auctionId,
-      bidId: bid.id,
-      buyerId: bid.buyerId,
-      amount: bid.amount,
-      bidCount: updatedAuction.bidCount,
-    });
+    await sendBidPlacedEmail(
+      { email: bid.buyer.email, name: bid.buyer.name },
+      { title: auctionTitle, amount: bid.amount, auctionId },
+    );
 
     ok(res, {
       bidId: bid.id,
