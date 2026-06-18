@@ -21,6 +21,7 @@ router.get(
       include: {
         auction: true,
         seller: { select: { name: true, email: true } },
+        review: { select: { id: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -35,6 +36,7 @@ router.get(
       finalAmount: tx.finalAmount,
       status: tx.status,
       createdAt: tx.createdAt.toISOString(),
+      reviewed: tx.review !== null,
     })));
   }),
 );
