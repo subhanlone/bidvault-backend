@@ -58,6 +58,8 @@ model User {
   winningTxns        AuctionTransaction[]     @relation("WinnerTransactions")
   sellingTxns        AuctionTransaction[]     @relation("SellerTransactions")
   auditLogs          AuditLog[]               @relation("ActorAuditLogs")
+  reviewsGiven       SellerReview[]           @relation("BuyerReviews")
+  reviewsReceived    SellerReview[]           @relation("SellerReviews")
 }
 
 model Listing {
@@ -108,6 +110,7 @@ model Auction {
   bids          Bid[]
   watchlistBy   Watchlist[]
   transactions  AuctionTransaction[]
+  reviews       SellerReview[]
 }
 
 model Bid {
@@ -193,8 +196,26 @@ model AuctionTransaction {
   auction              Auction           @relation(fields: [auctionId], references: [id], onDelete: Cascade)
   winner               User              @relation("WinnerTransactions", fields: [winnerId], references: [id], onDelete: Cascade)
   seller               User              @relation("SellerTransactions", fields: [sellerId], references: [id], onDelete: Cascade)
+  review               SellerReview?
 
   @@unique([auctionId])
+}
+
+model SellerReview {
+  id            String   @id @default(cuid())
+  transactionId String   @unique
+  auctionId     String
+  buyerId       String
+  sellerId      String
+  stars         Int
+  comment       String?
+  createdAt     DateTime @default(now())
+  transaction   AuctionTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  auction       Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  buyer         User     @relation("BuyerReviews", fields: [buyerId], references: [id], onDelete: Cascade)
+  seller        User     @relation("SellerReviews", fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId, createdAt])
 }
 
 model AuditLog {
