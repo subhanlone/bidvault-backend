@@ -69,6 +69,102 @@ function generateListingCode(): string {
   return `BV-${year}-${suffix}`;
 }
 
+async function approveOneListing(
+  listing: Prisma.ListingGetPayload<{ include: { seller: true } }>,
+  adminUserId: string,
+  io: Server | undefined,
+): Promise<{ listingId: string; auctionId?: string; warning?: string }> {
+  if (listing.status !== 'PENDING') {
+    throw new Error('Only pending listings can be approved.');
+  }
+
+  const now = new Date();
+  const startTime = listing.startAt;
+  const endTime = new Date(startTime.getTime() + listing.durationDays * 24 * 60 * 60 * 1000);
+  const auctionStatus = endTime <= now ? 'CLOSED' : startTime <= now ? 'ACTIVE' : 'SCHEDULED';
+
+  const result = await prisma.$transaction(async (tx) => {
+    const updatedListing = await tx.listing.update({
+      where: { id: listing.id },
+      data: { status: 'APPROVED', rejectionReason: null },
+    });
+
+    const existingAuction = await tx.auction.findUnique({
+      where: { listingId: listing.id },
+    });
+
+    let auction = existingAuction;
+    if (!auction) {
+      auction = await tx.auction.create({
+        data: {
+          listingId: listing.id,
+          sellerId: listing.sellerId,
+          title: listing.title,
+          category: listing.category,
+          condition: listing.condition,
+          description: listing.description,
+          imageUrl: listing.imageUrl,
+          emoji: listing.emoji,
+          startPrice: listing.startPrice,
+          reservePrice: listing.reservePrice,
+          minIncrement: listing.minIncrement,
+          currentBid: listing.startPrice,
+          startTime,
+          endTime,
+          status: auctionStatus,
+        },
+      });
+    }
+
+    return { updatedListing, auction, isNewAuction: !existingAuction };
+  });
+
+  let schedulingFailed = false;
+  if (result.auction && result.auction.status !== 'CLOSED' && result.isNewAuction) {
+    try {
+      await scheduleAuctionLifecycle({
+        auctionId: result.auction.id,
+        startTime: result.auction.startTime,
+        endTime: result.auction.endTime,
+      });
+    } catch (err) {
+      console.error(`[listings] Failed to schedule lifecycle for auction ${result.auction.id}:`, err);
+      schedulingFailed = true;
+    }
+  }
+
+  io?.emit('listing:approved', { listingId: listing.id, auctionId: result.auction?.id });
+  await sendListingApprovedEmail(
+    { email: listing.seller?.email ?? '', name: listing.seller?.name ?? '' },
+    { title: listing.title, listingCode: listing.listingCode },
+  );
+
+  await prisma.auditLog.create({
+    data: {
+      actorUserId: adminUserId,
+      action: 'LISTING_APPROVED',
+      entityType: 'Listing',
+      entityId: listing.id,
+      metadata: { auctionId: result.auction?.id, schedulingFailed },
+    },
+  }).catch(() => {});
+
+  await prisma.notification.create({
+    data: {
+      userId: listing.sellerId,
+      type: 'LISTING_APPROVED',
+      title: 'Listing approved',
+      message: `Your listing "${listing.title}" has been approved and your auction is now scheduled.`,
+    },
+  }).catch(() => {});
+
+  return {
+    listingId: result.updatedListing.id,
+    auctionId: result.auction?.id,
+    ...(schedulingFailed && { warning: 'scheduling-failed' }),
+  };
+}
+
 router.post(
   '/upload-signature',
   requireAuth(['SELLER']),
@@ -173,98 +269,47 @@ router.post(
       return;
     }
 
-    if (listing.status !== 'PENDING') {
-      fail(res, 'Only pending listings can be approved.', 400);
-      return;
+    const io = req.app.get('io') as Server | undefined;
+    try {
+      const result = await approveOneListing(listing, req.auth!.userId, io);
+      ok(res, {
+        listingId: result.listingId,
+        status: 'APPROVED',
+        auctionId: result.auctionId,
+        ...(result.warning && { warning: result.warning }),
+      });
+    } catch (err) {
+      fail(res, err instanceof Error ? err.message : 'Could not approve listing.', 400);
     }
+  }),
+);
 
-    const now = new Date();
-    const startTime = listing.startAt;
-    const endTime = new Date(startTime.getTime() + listing.durationDays * 24 * 60 * 60 * 1000);
-    const auctionStatus = endTime <= now ? 'CLOSED' : startTime <= now ? 'ACTIVE' : 'SCHEDULED';
-
-    const result = await prisma.$transaction(async (tx) => {
-      const updatedListing = await tx.listing.update({
-        where: { id: listing.id },
-        data: { status: 'APPROVED', rejectionReason: null },
-      });
-
-      const existingAuction = await tx.auction.findUnique({
-        where: { listingId: listing.id },
-      });
-
-      let auction = existingAuction;
-      if (!auction) {
-        auction = await tx.auction.create({
-          data: {
-            listingId: listing.id,
-            sellerId: listing.sellerId,
-            title: listing.title,
-            category: listing.category,
-            condition: listing.condition,
-            description: listing.description,
-            imageUrl: listing.imageUrl,
-            emoji: listing.emoji,
-            startPrice: listing.startPrice,
-            reservePrice: listing.reservePrice,
-            minIncrement: listing.minIncrement,
-            currentBid: listing.startPrice,
-            startTime,
-            endTime,
-            status: auctionStatus,
-          },
-        });
-      }
-
-      return { updatedListing, auction, isNewAuction: !existingAuction };
+router.post(
+  '/approve-all',
+  requireAuth(['ADMIN']),
+  asyncHandler(async (req, res) => {
+    const pending = await prisma.listing.findMany({
+      where: { status: 'PENDING' },
+      include: { seller: true },
     });
-
-    let schedulingFailed = false;
-    if (result.auction && result.auction.status !== 'CLOSED' && result.isNewAuction) {
-      try {
-        await scheduleAuctionLifecycle({
-          auctionId: result.auction.id,
-          startTime: result.auction.startTime,
-          endTime: result.auction.endTime,
-        });
-      } catch (err) {
-        console.error(`[listings] Failed to schedule lifecycle for auction ${result.auction.id}:`, err);
-        schedulingFailed = true;
-      }
-    }
 
     const io = req.app.get('io') as Server | undefined;
-    io?.emit('listing:approved', { listingId: listing.id, auctionId: result.auction?.id });
-    await sendListingApprovedEmail(
-      { email: listing.seller?.email ?? '', name: listing.seller?.name ?? '' },
-      { title: listing.title, listingCode: listing.listingCode },
-    );
+    const failures: { listingId: string; error: string }[] = [];
+    let approved = 0;
 
-    await prisma.auditLog.create({
-      data: {
-        actorUserId: req.auth!.userId,
-        action: 'LISTING_APPROVED',
-        entityType: 'Listing',
-        entityId: listing.id,
-        metadata: { auctionId: result.auction?.id, schedulingFailed },
-      },
-    }).catch(() => {});
+    for (const listing of pending) {
+      try {
+        await approveOneListing(listing, req.auth!.userId, io);
+        approved++;
+      } catch (err) {
+        failures.push({
+          listingId: listing.id,
+          error: err instanceof Error ? err.message : 'Unknown error',
+        });
+      }
+    }
 
-    await prisma.notification.create({
-      data: {
-        userId: listing.sellerId,
-        type: 'LISTING_APPROVED',
-        title: 'Listing approved',
-        message: `Your listing "${listing.title}" has been approved and your auction is now scheduled.`,
-      },
-    }).catch(() => {});
-
-    ok(res, {
-      listingId: result.updatedListing.id,
-      status: result.updatedListing.status,
-      auctionId: result.auction?.id,
-      ...(schedulingFailed && { warning: 'scheduling-failed' }),
-    });
+    ok(res, { approved, failed: failures.length, failures });
   }),
 );
 
