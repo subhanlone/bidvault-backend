@@ -27,7 +27,6 @@ function toAuctionDto(auction: Prisma.AuctionGetPayload<{ include: { seller: tru
     emoji: auction.emoji ?? '📦',
     sellerId: auction.sellerId,
     sellerName: auction.seller.name,
-    sellerVerified: auction.seller.isEmailVerified,
     sellerRating: null as number | null,
     sellerSales: null as number | null,
     startPrice: auction.startPrice,
