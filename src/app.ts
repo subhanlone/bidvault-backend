@@ -9,6 +9,7 @@ import watchlistRoutes from './modules/watchlist/watchlist.routes.js';
 import paymentRoutes from './modules/payments/payments.routes.js';
 import adminRoutes from './modules/admin/admin.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
+import reviewRoutes from './modules/reviews/reviews.routes.js';
 import { env, clientOrigins } from './config/env.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
 import { ok } from './utils/response.js';
@@ -59,6 +60,7 @@ export function createApp() {
   app.use('/api/v1/payments', paymentRoutes);
   app.use('/api/v1/admin', adminRoutes);
   app.use('/api/v1/notifications', notificationRoutes);
+  app.use('/api/v1/reviews', reviewRoutes);
 
   app.use(notFound);
   app.use(errorHandler);
