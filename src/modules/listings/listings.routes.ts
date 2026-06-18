@@ -126,6 +126,9 @@ router.post(
       { title: listing.title, listingCode: listing.listingCode },
     );
 
+    const io = req.app.get('io') as Server | undefined;
+    io?.emit('listing:submitted', { listingId: listing.id, title: listing.title });
+
     ok(res, toListingDto(listing), 201);
   }),
 );
