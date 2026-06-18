@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { Server as SocketIOServer } from 'socket.io';
 import { createApp } from './app.js';
-import { env } from './config/env.js';
+import { env, clientOrigins } from './config/env.js';
 import { prisma } from './db/prisma.js';
 import { redisConnection } from './infra/redis.js';
 import { verifyAccessToken } from './utils/jwt.js';
@@ -11,7 +11,7 @@ const httpServer = createServer(app);
 
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: env.CLIENT_ORIGIN,
+    origin: clientOrigins,
     methods: ['GET', 'POST'],
   },
 });

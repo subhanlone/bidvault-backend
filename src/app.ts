@@ -9,7 +9,7 @@ import watchlistRoutes from './modules/watchlist/watchlist.routes.js';
 import paymentRoutes from './modules/payments/payments.routes.js';
 import adminRoutes from './modules/admin/admin.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
-import { env } from './config/env.js';
+import { env, clientOrigins } from './config/env.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
 import { ok } from './utils/response.js';
 import { prisma } from './db/prisma.js';
@@ -19,7 +19,10 @@ export function createApp() {
 
   app.use(
     cors({
-      origin: env.CLIENT_ORIGIN,
+      origin: (origin, callback) => {
+        if (!origin || clientOrigins.includes(origin)) callback(null, true);
+        else callback(new Error('Not allowed by CORS'));
+      },
       credentials: true,
     }),
   );

@@ -27,3 +27,7 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
+// CLIENT_ORIGIN may be a comma-separated list of allowed origins (e.g. the
+// production domain plus a legacy Vercel subdomain still in use).
+export const clientOrigins = env.CLIENT_ORIGIN.split(',').map(s => s.trim()).filter(Boolean);
