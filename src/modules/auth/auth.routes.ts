@@ -222,7 +222,7 @@ router.post(
     }
 
     if (!user.isEmailVerified) {
-      fail(res, 'Please verify your email first.', 403);
+      fail(res, 'Please verify your email first.', 403, 'EMAIL_NOT_VERIFIED');
       return;
     }
 
