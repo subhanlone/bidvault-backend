@@ -16,7 +16,41 @@ const placeBidSchema = z.object({
   amount: z.coerce.number().int().positive(),
 });
 
-function toAuctionDto(auction: Prisma.AuctionGetPayload<{ include: { seller: true } }>) {
+async function buildSellerStatsMap(sellerIds: string[]) {
+  const uniqueIds = [...new Set(sellerIds)];
+  const map = new Map<string, { rating: number | null; salesCount: number }>();
+  for (const id of uniqueIds) map.set(id, { rating: null, salesCount: 0 });
+
+  if (uniqueIds.length === 0) return map;
+
+  const [ratings, sales] = await Promise.all([
+    prisma.sellerReview.groupBy({
+      by: ['sellerId'],
+      where: { sellerId: { in: uniqueIds } },
+      _avg: { stars: true },
+    }),
+    prisma.auctionTransaction.groupBy({
+      by: ['sellerId'],
+      where: { sellerId: { in: uniqueIds }, status: 'COMPLETED' },
+      _count: { sellerId: true },
+    }),
+  ]);
+
+  for (const r of ratings) {
+    const rounded = r._avg.stars !== null ? Math.round(r._avg.stars * 10) / 10 : null;
+    map.set(r.sellerId, { ...map.get(r.sellerId)!, rating: rounded });
+  }
+  for (const s of sales) {
+    map.set(s.sellerId, { ...map.get(s.sellerId)!, salesCount: s._count.sellerId });
+  }
+  return map;
+}
+
+function toAuctionDto(
+  auction: Prisma.AuctionGetPayload<{ include: { seller: true } }>,
+  statsMap?: Map<string, { rating: number | null; salesCount: number }>,
+) {
+  const stats = statsMap?.get(auction.sellerId);
   return {
     auctionId: auction.id,
     listingId: auction.listingId,
@@ -27,8 +61,8 @@ function toAuctionDto(auction: Prisma.AuctionGetPayload<{ include: { seller: tru
     emoji: auction.emoji ?? '📦',
     sellerId: auction.sellerId,
     sellerName: auction.seller.name,
-    sellerRating: null as number | null,
-    sellerSales: null as number | null,
+    sellerRating: stats?.rating ?? null,
+    sellerSales: stats ? stats.salesCount : null,
     startPrice: auction.startPrice,
     currentBid: auction.currentBid,
     minIncrement: auction.minIncrement,
@@ -69,7 +103,8 @@ router.get(
       orderBy: { endTime: 'asc' },
     });
 
-    ok(res, auctions.map(toAuctionDto));
+    const statsMap = await buildSellerStatsMap(auctions.map(a => a.sellerId));
+    ok(res, auctions.map(a => toAuctionDto(a, statsMap)));
   }),
 );
 
@@ -84,6 +119,8 @@ router.get(
       orderBy: { createdAt: 'desc' },
     });
 
+    const statsMap = await buildSellerStatsMap(bids.map(b => b.auction.sellerId));
+
     ok(
       res,
       bids.map(bid => ({
@@ -93,7 +130,7 @@ router.get(
         buyerName: bid.buyer.name,
         amount: bid.amount,
         timestamp: bid.createdAt.toISOString(),
-        auction: toAuctionDto(bid.auction),
+        auction: toAuctionDto(bid.auction, statsMap),
       })),
     );
   }),
@@ -113,7 +150,8 @@ router.get(
     }
 
     const runtime = await getAuctionRuntimeState(auction.id);
-    const dto = toAuctionDto(auction);
+    const statsMap = await buildSellerStatsMap([auction.sellerId]);
+    const dto = toAuctionDto(auction, statsMap);
     ok(res, {
       ...dto,
       currentBid: runtime.currentBid ?? dto.currentBid,
