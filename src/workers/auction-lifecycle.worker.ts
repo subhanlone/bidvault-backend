@@ -3,7 +3,7 @@ import { AuctionStatus } from '@prisma/client';
 import { redisConnection } from '../infra/redis.js';
 import { prisma } from '../db/prisma.js';
 import type { AuctionLifecycleJobData, AuctionLifecycleJobName } from '../queues/auction-lifecycle.queue.js';
-import { sendAuctionStartedEmail, sendAuctionEndedEmail } from '../services/email.service.js';
+import { sendAuctionEndedEmail } from '../services/email.service.js';
 
 const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobName>(
   'auction-lifecycle',
@@ -17,52 +17,48 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
       return;
     }
 
-    if (job.name === 'auction:start') {
-      if (auction.status === AuctionStatus.SCHEDULED && auction.startTime <= new Date()) {
-        await prisma.auction.update({
-          where: { id: auction.id },
-          data: { status: AuctionStatus.ACTIVE },
-        });
-
-        await sendAuctionStartedEmail(
-          { email: auction.seller.email, name: auction.seller.name },
-          { title: auction.title, auctionId: auction.id },
-        );
+    // Only 'auction:end' is scheduled (auctions launch ACTIVE on approval).
+    // NEW-09: fetch winningBid inside the transaction under a FOR UPDATE lock
+    // to prevent a race where two retries both read status=ACTIVE and create duplicate transactions.
+    const txResult = await prisma.$transaction(async (tx) => {
+      const [locked] = await tx.$queryRaw<Array<{ status: string }>>`
+        SELECT status FROM "Auction" WHERE id = ${auction.id} FOR UPDATE
+      `;
+      if (!locked || locked.status === 'CLOSED') {
+        return { alreadyClosed: true, winningBid: null, notifyWinner: false };
       }
-      return;
-    }
 
-    if (job.name === 'auction:end') {
-      // NEW-09: fetch winningBid inside the transaction under a FOR UPDATE lock
-      // to prevent a race where two retries both read status=ACTIVE and create duplicate transactions.
-      const txResult = await prisma.$transaction(async (tx) => {
-        const [locked] = await tx.$queryRaw<Array<{ status: string }>>`
-          SELECT status FROM "Auction" WHERE id = ${auction.id} FOR UPDATE
-        `;
-        if (!locked || locked.status === 'CLOSED') return { alreadyClosed: true, winningBid: null };
+      const winBid = await tx.bid.findFirst({
+        where: { auctionId: auction.id },
+        orderBy: { amount: 'desc' },
+        include: { buyer: true },
+      });
 
-        const winBid = await tx.bid.findFirst({
-          where: { auctionId: auction.id },
-          orderBy: { amount: 'desc' },
-          include: { buyer: true },
+      await tx.auction.update({
+        where: { id: auction.id },
+        data: { status: AuctionStatus.CLOSED },
+      });
+
+      let notifyWinner = true;
+      if (winBid) {
+        // Respect the winner's notification preference for the in-app AUCTION_WON alert + win email.
+        const winnerPrefs = await tx.user.findUnique({
+          where: { id: winBid.buyerId },
+          select: { notifyWins: true },
+        });
+        notifyWinner = winnerPrefs?.notifyWins ?? true;
+
+        await tx.auctionTransaction.create({
+          data: {
+            auctionId: auction.id,
+            winnerId: winBid.buyerId,
+            sellerId: auction.sellerId,
+            finalAmount: winBid.amount,
+            status: 'PENDING',
+          },
         });
 
-        await tx.auction.update({
-          where: { id: auction.id },
-          data: { status: AuctionStatus.CLOSED },
-        });
-
-        if (winBid) {
-          await tx.auctionTransaction.create({
-            data: {
-              auctionId: auction.id,
-              winnerId: winBid.buyerId,
-              sellerId: auction.sellerId,
-              finalAmount: winBid.amount,
-              status: 'PENDING',
-            },
-          });
-
+        if (notifyWinner) {
           await tx.notification.create({
             data: {
               userId: winBid.buyerId,
@@ -72,21 +68,22 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
             },
           });
         }
+      }
 
-        return { alreadyClosed: false, winningBid: winBid ?? null };
-      });
+      return { alreadyClosed: false, winningBid: winBid ?? null, notifyWinner };
+    });
 
-      if (txResult.alreadyClosed) return;
-      const winningBid = txResult.winningBid;
+    if (txResult.alreadyClosed) return;
+    const winningBid = txResult.winningBid;
 
-      await sendAuctionEndedEmail(
-        { email: auction.seller.email, name: auction.seller.name },
-        { title: auction.title, finalBid: auction.currentBid, bidCount: auction.bidCount },
-        winningBid
-          ? { email: winningBid.buyer.email, name: winningBid.buyer.name, amount: winningBid.amount }
-          : null,
-      );
-    }
+    await sendAuctionEndedEmail(
+      { email: auction.seller.email, name: auction.seller.name },
+      { title: auction.title, finalBid: auction.currentBid, bidCount: auction.bidCount },
+      winningBid
+        ? { email: winningBid.buyer.email, name: winningBid.buyer.name, amount: winningBid.amount }
+        : null,
+      txResult.notifyWinner,
+    );
   },
   {
     connection: redisConnection,

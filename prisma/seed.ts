@@ -69,7 +69,6 @@ async function main() {
       startPrice: 285000,
       reservePrice: 320000,
       minIncrement: 1000,
-      startAt: addHours(new Date(), -2),
       durationDays: 1,
       status: ListingStatus.APPROVED,
       imageUrl:

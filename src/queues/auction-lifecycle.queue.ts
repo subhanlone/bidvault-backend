@@ -1,7 +1,7 @@
 import { Queue } from 'bullmq';
 import { redisConnection } from '../infra/redis.js';
 
-export type AuctionLifecycleJobName = 'auction:start' | 'auction:end';
+export type AuctionLifecycleJobName = 'auction:end';
 
 export interface AuctionLifecycleJobData {
   auctionId: string;
@@ -23,20 +23,13 @@ export const auctionLifecycleQueue = new Queue<AuctionLifecycleJobData, unknown,
   },
 );
 
+// Auctions go ACTIVE the moment a listing is approved, so only the end job is scheduled.
 export async function scheduleAuctionLifecycle(params: {
   auctionId: string;
-  startTime: Date;
   endTime: Date;
 }): Promise<void> {
-  const now = Date.now();
-  const startDelay = Math.max(0, params.startTime.getTime() - now);
-  const endDelay = Math.max(0, params.endTime.getTime() - now);
+  const endDelay = Math.max(0, params.endTime.getTime() - Date.now());
 
-  await auctionLifecycleQueue.add(
-    'auction:start',
-    { auctionId: params.auctionId },
-    { delay: startDelay, jobId: `auction:start:${params.auctionId}` },
-  );
   await auctionLifecycleQueue.add(
     'auction:end',
     { auctionId: params.auctionId },

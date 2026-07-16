@@ -10,7 +10,9 @@ import paymentRoutes from './modules/payments/payments.routes.js';
 import adminRoutes from './modules/admin/admin.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
 import reviewRoutes from './modules/reviews/reviews.routes.js';
+import settingsRoutes from './modules/settings/settings.routes.js';
 import { env, clientOrigins } from './config/env.js';
+import { maintenanceGuard } from './middleware/maintenance.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
 import { ok } from './utils/response.js';
 import { prisma } from './db/prisma.js';
@@ -31,6 +33,7 @@ export function createApp() {
   app.use('/api/v1/payments/webhook', express.raw({ type: 'application/json' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(morgan('dev'));
+  app.use(maintenanceGuard);
 
   app.get('/api/v1/health', (_req, res) => {
     ok(res, { status: 'ok', service: 'bidvault-backend' });
@@ -61,6 +64,7 @@ export function createApp() {
   app.use('/api/v1/admin', adminRoutes);
   app.use('/api/v1/notifications', notificationRoutes);
   app.use('/api/v1/reviews', reviewRoutes);
+  app.use('/api/v1/settings', settingsRoutes);
 
   app.use(notFound);
   app.use(errorHandler);
