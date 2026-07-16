@@ -16,21 +16,23 @@ import {
   sendListingRejectedEmail,
 } from '../../services/email.service.js';
 import { env } from '../../config/env.js';
+import { getPlatformSettings } from '../../services/settings.service.js';
+import { validateCategoryAttributes } from './category-attributes.js';
 
 const router = Router();
 
 const submitListingSchema = z.object({
-  title: z.string().trim().min(3),
+  title: z.string().trim().min(3).max(150),
   category: z.string().trim().min(2),
   condition: z.enum(['NEW', 'LIKE_NEW', 'USED']),
-  description: z.string().trim().min(10),
+  description: z.string().trim().min(10).max(5000),
   startPrice: z.coerce.number().int().positive(),
   reservePrice: z.coerce.number().int().positive().optional(),
   minIncrement: z.coerce.number().int().positive(),
-  startAt: z.coerce.date(),
   durationDays: z.coerce.number().int().positive().max(30),
   imageUrl: z.string().url().optional(),
   emoji: z.string().optional(),
+  attributes: z.record(z.unknown()).optional(),
 });
 
 const rejectListingSchema = z.object({
@@ -52,7 +54,6 @@ function toListingDto(
     startPrice: listing.startPrice,
     reservePrice: listing.reservePrice ?? undefined,
     minIncrement: listing.minIncrement,
-    startAt: listing.startAt.toISOString(),
     durationDays: listing.durationDays,
     status: listing.status,
     rejectionReason: listing.rejectionReason ?? undefined,
@@ -60,6 +61,7 @@ function toListingDto(
     emoji: listing.emoji ?? '📦',
     imageUrl: listing.imageUrl ?? undefined,
     sellerEmail: listing.seller.email,
+    attributes: (listing.attributes as Record<string, unknown> | null) ?? undefined,
   };
 }
 
@@ -78,10 +80,9 @@ async function approveOneListing(
     throw new Error('Only pending listings can be approved.');
   }
 
-  const now = new Date();
-  const startTime = listing.startAt;
+  const startTime = new Date();
   const endTime = new Date(startTime.getTime() + listing.durationDays * 24 * 60 * 60 * 1000);
-  const auctionStatus = endTime <= now ? 'CLOSED' : startTime <= now ? 'ACTIVE' : 'SCHEDULED';
+  const auctionStatus = 'ACTIVE';
 
   const result = await prisma.$transaction(async (tx) => {
     const updatedListing = await tx.listing.update({
@@ -109,6 +110,7 @@ async function approveOneListing(
           reservePrice: listing.reservePrice,
           minIncrement: listing.minIncrement,
           currentBid: listing.startPrice,
+          attributes: (listing.attributes ?? undefined) as Prisma.InputJsonValue | undefined,
           startTime,
           endTime,
           status: auctionStatus,
@@ -124,7 +126,6 @@ async function approveOneListing(
     try {
       await scheduleAuctionLifecycle({
         auctionId: result.auction.id,
-        startTime: result.auction.startTime,
         endTime: result.auction.endTime,
       });
     } catch (err) {
@@ -190,8 +191,19 @@ router.post(
   requireAuth(['SELLER']),
   validateBody(submitListingSchema),
   asyncHandler(async (req, res) => {
-    if (req.body.startAt <= new Date()) {
-      fail(res, 'Auction start time must be in the future.', 400);
+    const settings = await getPlatformSettings();
+    if (req.body.startPrice < settings.minListingPrice) {
+      fail(res, `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`, 400);
+      return;
+    }
+    if (req.body.minIncrement > settings.maxBidIncrement) {
+      fail(res, `Minimum bid increment cannot exceed PKR ${settings.maxBidIncrement.toLocaleString()}.`, 400);
+      return;
+    }
+
+    const attributesResult = validateCategoryAttributes(req.body.category, req.body.attributes);
+    if (!attributesResult.success) {
+      fail(res, attributesResult.error, 400);
       return;
     }
 
@@ -208,10 +220,10 @@ router.post(
         startPrice: req.body.startPrice,
         reservePrice: req.body.reservePrice,
         minIncrement: req.body.minIncrement,
-        startAt: req.body.startAt,
         durationDays: req.body.durationDays,
         imageUrl: req.body.imageUrl,
         emoji: req.body.emoji,
+        attributes: attributesResult.data as Prisma.InputJsonValue,
         status: 'PENDING',
       },
       include: { seller: true },

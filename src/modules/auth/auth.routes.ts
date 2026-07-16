@@ -22,9 +22,18 @@ import {
 
 const router = Router();
 
+// Letters (incl. accented), spaces, hyphens, and apostrophes only — no digits or other symbols.
+const NAME_REGEX = /^[\p{L}\s'-]+$/u;
+// Stricter than zod's built-in .email(): requires a real TLD-shaped domain, rejects
+// consecutive/leading/trailing dots and hyphens in domain labels.
+const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+// Pakistani CNIC: 5 digits - 7 digits - 1 digit
+const CNIC_REGEX = /^\d{5}-\d{7}-\d{1}$/;
+
 const registerSchema = z.object({
-  name: z.string().trim().min(2),
-  email: z.string().trim().email(),
+  name: z.string().trim().min(2).max(100).regex(NAME_REGEX, 'Name can only contain letters, spaces, hyphens, and apostrophes'),
+  email: z.string().trim().regex(EMAIL_REGEX, 'Enter a valid email address'),
+  cnic: z.string().trim().regex(CNIC_REGEX, 'CNIC must be in the format 12345-1234567-1'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
   role: z.enum(['BUYER', 'SELLER']),
 });
@@ -67,9 +76,20 @@ const changePasswordSchema = z.object({
   newPassword: z.string().min(8, 'Password must be at least 8 characters'),
 });
 
+const preferencesSchema = z.object({
+  notifyOutbid: z.boolean().optional(),
+  notifyWins: z.boolean().optional(),
+  notifyNews: z.boolean().optional(),
+});
+
 function generateOtp(): string {
   return String(crypto.randomInt(100000, 1000000));
 }
+
+// Product decision: 60s expiry (tighter than the OWASP ASVS V2.7.2 / NIST 800-63B
+// 10-minute maximum for out-of-band OTPs). Note this is aggressive for an emailed
+// code — send + delivery + spam-filter latency can itself approach this window.
+const OTP_EXPIRY_MS = 60 * 1000;
 
 function sanitizeUser(user: { id: string; name: string; email: string; role: UserRole; isEmailVerified: boolean; createdAt: Date }) {
   return {
@@ -118,7 +138,7 @@ router.post(
   '/register',
   validateBody(registerSchema),
   asyncHandler(async (req, res) => {
-    const { name, email, password, role } = req.body;
+    const { name, email, cnic, password, role } = req.body;
     const normalizedEmail = email.toLowerCase();
 
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
@@ -127,10 +147,17 @@ router.post(
       return;
     }
 
+    const existingCnic = await prisma.user.findUnique({ where: { cnic } });
+    if (existingCnic) {
+      fail(res, 'An account with this CNIC already exists.', 409);
+      return;
+    }
+
     const user = await prisma.user.create({
       data: {
         name,
         email: normalizedEmail,
+        cnic,
         passwordHash: await hashPassword(password),
         role,
         isEmailVerified: false,
@@ -142,7 +169,7 @@ router.post(
       data: {
         userId: user.id,
         code,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
       },
     });
 
@@ -352,7 +379,7 @@ router.post(
       data: {
         userId: user.id,
         code,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
       },
     });
 
@@ -466,7 +493,7 @@ router.post(
       data: {
         userId: user.id,
         code,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
       },
     });
 
@@ -517,6 +544,36 @@ router.get(
       return;
     }
     ok(res, { user: sanitizeUser(user) });
+  }),
+);
+
+router.get(
+  '/me/preferences',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const prefs = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { notifyOutbid: true, notifyWins: true, notifyNews: true },
+    });
+    if (!prefs) {
+      fail(res, 'User not found.', 404);
+      return;
+    }
+    ok(res, prefs);
+  }),
+);
+
+router.patch(
+  '/me/preferences',
+  requireAuth(),
+  validateBody(preferencesSchema),
+  asyncHandler(async (req, res) => {
+    const updated = await prisma.user.update({
+      where: { id: req.auth!.userId },
+      data: req.body,
+      select: { notifyOutbid: true, notifyWins: true, notifyNews: true },
+    });
+    ok(res, updated);
   }),
 );
 

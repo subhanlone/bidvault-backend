@@ -42,9 +42,13 @@ model User {
   id                 String                   @id @default(cuid())
   name               String
   email              String                   @unique
+  cnic               String?                  @unique
   passwordHash       String
   role               UserRole
   isEmailVerified    Boolean                  @default(false)
+  notifyOutbid       Boolean                  @default(true)
+  notifyWins         Boolean                  @default(true)
+  notifyNews         Boolean                  @default(false)
   createdAt          DateTime                 @default(now())
   updatedAt          DateTime                 @updatedAt
   listings           Listing[]                @relation("SellerListings")
@@ -73,12 +77,12 @@ model Listing {
   startPrice      Int
   reservePrice    Int?
   minIncrement    Int
-  startAt         DateTime
   durationDays    Int
   status          ListingStatus @default(PENDING)
   rejectionReason String?
   imageUrl        String?
   emoji           String?
+  attributes      Json?
   submittedAt     DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
   seller          User          @relation("SellerListings", fields: [sellerId], references: [id])
@@ -100,7 +104,8 @@ model Auction {
   minIncrement  Int
   currentBid    Int
   bidCount      Int           @default(0)
-  status        AuctionStatus @default(SCHEDULED)
+  attributes    Json?
+  status        AuctionStatus @default(ACTIVE)
   startTime     DateTime
   endTime       DateTime
   createdAt     DateTime      @default(now())
@@ -227,4 +232,15 @@ model AuditLog {
   metadata    Json?
   createdAt   DateTime @default(now())
   actor       User?    @relation("ActorAuditLogs", fields: [actorUserId], references: [id], onDelete: SetNull)
+}
+
+model PlatformSetting {
+  id                 String   @id @default("singleton")
+  emailNotifsEnabled Boolean  @default(true)
+  maintenanceMode    Boolean  @default(false)
+  maxBidIncrement    Int      @default(500000)
+  minListingPrice    Int      @default(1000)
+  reviewTimeoutHours Int      @default(48)
+  supportEmail       String   @default("support@bidvault.tech")
+  updatedAt          DateTime @updatedAt
 }

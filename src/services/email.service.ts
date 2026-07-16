@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import { env } from '../config/env.js';
+import { getPlatformSettings } from './settings.service.js';
 
 const client = env.RESEND_API_KEY ? new Resend(env.RESEND_API_KEY) : null;
 const FROM = env.RESEND_FROM_EMAIL ?? 'BidVault <onboarding@resend.dev>';
@@ -11,6 +12,16 @@ async function send(to: string | string[], subject: string, html: string): Promi
   }
   const { error } = await client.emails.send({ from: FROM, to, subject, html });
   if (error) console.error(`[email] send failed for "${subject}":`, error.message);
+}
+
+// Activity/alert emails (bid, listing status, auction, payment) honour the platform-wide
+// email toggle. Security emails (welcome/verify, password reset) always send and skip this.
+async function alertsEnabled(): Promise<boolean> {
+  try {
+    return (await getPlatformSettings()).emailNotifsEnabled;
+  } catch {
+    return true;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +75,7 @@ function otpBlock(code: string): string {
         <td align="center" style="background-color:#f8fafc;border:2px dashed #e2e8f0;border-radius:8px;padding:20px;">
           <p style="margin:0 0 4px;color:#64748b;font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">Your Code</p>
           <p style="margin:0;color:#0b1f3a;font-size:36px;font-weight:800;letter-spacing:8px;">${code}</p>
-          <p style="margin:6px 0 0;color:#94a3b8;font-size:11px;">Expires in 10 minutes</p>
+          <p style="margin:6px 0 0;color:#94a3b8;font-size:11px;">Expires in 60 seconds</p>
         </td>
       </tr>
     </table>`;
@@ -181,6 +192,7 @@ export async function sendListingSubmittedEmail(
   to: { email: string; name: string },
   listing: { title: string; listingCode: string },
 ): Promise<void> {
+  if (!(await alertsEnabled())) return;
   await send(to.email, `Listing received — "${listing.title}"`, base(
     'Listing received',
     `
@@ -202,6 +214,7 @@ export async function sendListingApprovedEmail(
   to: { email: string; name: string },
   listing: { title: string; listingCode: string },
 ): Promise<void> {
+  if (!(await alertsEnabled())) return;
   await send(to.email, `Your listing has been approved — "${listing.title}"`, base(
     'Listing approved',
     `
@@ -223,6 +236,7 @@ export async function sendListingRejectedEmail(
   to: { email: string; name: string },
   listing: { title: string; reason: string },
 ): Promise<void> {
+  if (!(await alertsEnabled())) return;
   await send(to.email, `Update on your listing — "${listing.title}"`, base(
     'Listing update',
     `
@@ -248,6 +262,7 @@ export async function sendAuctionStartedEmail(
   to: { email: string; name: string },
   auction: { title: string; auctionId: string },
 ): Promise<void> {
+  if (!(await alertsEnabled())) return;
   await send(to.email, `Your auction is now live — "${auction.title}"`, base(
     'Auction live',
     `
@@ -269,7 +284,9 @@ export async function sendAuctionEndedEmail(
   seller: { email: string; name: string },
   auction: { title: string; finalBid: number; bidCount: number },
   winner: { email: string; name: string; amount: number } | null,
+  notifyWinner = true,
 ): Promise<void> {
+  if (!(await alertsEnabled())) return;
   const pkr = (n: number) => `PKR ${n.toLocaleString()}`;
 
   // Email to seller
@@ -303,8 +320,8 @@ export async function sendAuctionEndedEmail(
 
   await send(seller.email, `Auction ended — "${auction.title}"`, base('Auction ended', sellerBody));
 
-  // Email to winner (if any)
-  if (winner) {
+  // Email to winner (if any, and if they haven't opted out of win notifications)
+  if (winner && notifyWinner) {
     const winnerBody = `
       ${h1('Congratulations — you won!')}
       ${p(`Hi ${winner.name}, you placed the winning bid on this auction. Complete your payment to claim the item.`)}
@@ -324,6 +341,7 @@ export async function sendBidPlacedEmail(
   to: { email: string; name: string },
   bid: { title: string; amount: number; auctionId: string },
 ): Promise<void> {
+  if (!(await alertsEnabled())) return;
   const pkr = (n: number) => `PKR ${n.toLocaleString()}`;
   await send(to.email, `Bid confirmed — ${pkr(bid.amount)} on "${bid.title}"`, base(
     'Bid confirmed',
@@ -350,6 +368,7 @@ export async function sendPaymentCompletedEmail(
   seller: { email: string; name: string },
   details: { auctionTitle: string; finalAmount: number },
 ): Promise<void> {
+  if (!(await alertsEnabled())) return;
   const pkr = (n: number) => `PKR ${n.toLocaleString()}`;
 
   const winnerBody = `

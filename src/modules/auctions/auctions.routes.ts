@@ -73,6 +73,7 @@ function toAuctionDto(
     status: auction.status,
     imageUrl: auction.imageUrl ?? '',
     images: auction.imageUrl ? [auction.imageUrl] : [],
+    attributes: (auction.attributes as Record<string, unknown> | null) ?? undefined,
   };
 }
 
@@ -254,14 +255,20 @@ router.post(
         });
 
         if (prevHighest && prevHighest.buyerId !== buyerId) {
-          await tx.notification.create({
-            data: {
-              userId: prevHighest.buyerId,
-              type: 'BID_OUTBID',
-              title: "You've been outbid",
-              message: `Your bid on "${row.title}" was outbid. New leading bid: PKR ${amount.toLocaleString()}.`,
-            },
+          const recipient = await tx.user.findUnique({
+            where: { id: prevHighest.buyerId },
+            select: { notifyOutbid: true },
           });
+          if (recipient?.notifyOutbid) {
+            await tx.notification.create({
+              data: {
+                userId: prevHighest.buyerId,
+                type: 'BID_OUTBID',
+                title: "You've been outbid",
+                message: `Your bid on "${row.title}" was outbid. New leading bid: PKR ${amount.toLocaleString()}.`,
+              },
+            });
+          }
         }
 
         return { bid: createdBid, updatedAuction: nextAuction, auctionTitle: row.title };
