@@ -6,6 +6,14 @@ const schema = z.object({
   CLIENT_ORIGIN: z.string().default('http://localhost:5173'),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
+  // Namespaces the BullMQ keyspace. Dev and production have historically shared one
+  // Redis instance while pointing at different databases, which let a locally-run
+  // worker consume production jobs (and vice versa) — the stolen job found no
+  // matching auction, returned early, and was marked completed, so that auction
+  // never closed. Defaults to BullMQ's own 'bull' so production is unchanged and
+  // its already-scheduled jobs stay reachable; local .env overrides it to 'bull:dev'.
+  // Deliberately NOT derived from NODE_ENV: the worker service does not set it.
+  QUEUE_PREFIX: z.string().min(1).default('bull'),
   RESEND_API_KEY: z.string().optional(),
   RESEND_FROM_EMAIL: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().min(1),
