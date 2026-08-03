@@ -172,8 +172,13 @@ router.post(
   asyncHandler(async (_req, res) => {
     const timestamp = Math.round(Date.now() / 1000);
     const folder = 'bidvault/listings';
+    // Normalizes every upload to JPEG. Without this, Cloudinary stores whatever format
+    // the browser sent verbatim — iPhone photos default to HEIC, which Chrome/Firefox/Edge
+    // cannot render in an <img> tag, so the listing's image silently never displays for
+    // most visitors even though the upload itself "succeeded".
+    const format = 'jpg';
     const signature = cloudinary.utils.api_sign_request(
-      { timestamp, folder },
+      { timestamp, folder, format },
       env.CLOUDINARY_API_SECRET,
     );
     ok(res, {
@@ -182,6 +187,7 @@ router.post(
       apiKey:    env.CLOUDINARY_API_KEY,
       cloudName: env.CLOUDINARY_CLOUD_NAME,
       folder,
+      format,
     });
   }),
 );
