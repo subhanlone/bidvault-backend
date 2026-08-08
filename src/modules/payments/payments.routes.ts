@@ -5,7 +5,7 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { env } from '../../config/env.js';
-import { sendPaymentCompletedEmail } from '../../services/email.service.js';
+import { dispatchEmail, sendPaymentCompletedEmail } from '../../services/email.service.js';
 
 const router = Router();
 const stripe = new Stripe(env.STRIPE_SECRET_KEY);
@@ -142,11 +142,13 @@ router.post(
           data: { status: 'COMPLETED' },
         });
 
-        await sendPaymentCompletedEmail(
+        // Not awaited: this runs inside the Stripe webhook, and a slow send could push the
+        // handler past Stripe's timeout, causing it to retry an already-processed payment.
+        dispatchEmail(sendPaymentCompletedEmail(
           { email: tx.winner.email, name: tx.winner.name },
           { email: tx.seller.email, name: tx.seller.name },
           { auctionTitle: tx.auction.title, finalAmount: Number(tx.finalAmount) },
-        );
+        ), 'payment completed');
       }
     }
 

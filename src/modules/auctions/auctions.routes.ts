@@ -8,7 +8,7 @@ import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { getAuctionRuntimeState, setAuctionRuntimeState } from '../../services/auction-state.service.js';
-import { sendBidPlacedEmail } from '../../services/email.service.js';
+import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 
 const router = Router();
 
@@ -314,10 +314,12 @@ router.post(
       },
     });
 
-    await sendBidPlacedEmail(
+    // Not awaited: bidding is the most latency-sensitive action in the product and this
+    // send was adding ~3.3s to every bid.
+    dispatchEmail(sendBidPlacedEmail(
       { email: bid.buyer.email, name: bid.buyer.name },
       { title: auctionTitle, amount: bid.amount, auctionId },
-    );
+    ), 'bid placed');
 
     ok(res, {
       bidId: bid.id,

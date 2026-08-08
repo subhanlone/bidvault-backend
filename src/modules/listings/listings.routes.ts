@@ -11,6 +11,7 @@ import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { scheduleAuctionLifecycle } from '../../queues/auction-lifecycle.queue.js';
 import {
+  dispatchEmail,
   sendListingSubmittedEmail,
   sendListingApprovedEmail,
   sendListingRejectedEmail,
@@ -135,10 +136,10 @@ async function approveOneListing(
   }
 
   io?.emit('listing:approved', { listingId: listing.id, auctionId: result.auction?.id });
-  await sendListingApprovedEmail(
+  dispatchEmail(sendListingApprovedEmail(
     { email: listing.seller?.email ?? '', name: listing.seller?.name ?? '' },
     { title: listing.title, listingCode: listing.listingCode },
-  );
+  ), 'listing approved');
 
   await prisma.auditLog.create({
     data: {
@@ -155,7 +156,12 @@ async function approveOneListing(
       userId: listing.sellerId,
       type: 'LISTING_APPROVED',
       title: 'Listing approved',
-      message: `Your listing "${listing.title}" has been approved and your auction is now scheduled.`,
+      // Auctions are created ACTIVE with startTime = now on approval — nothing is scheduled.
+      // The old "is now scheduled" wording was left over from the retired SCHEDULED path and
+      // contradicted the seller-facing banner in create-listing step 2, which correctly says
+      // the auction goes live the moment an admin approves. A seller reading it would
+      // reasonably wait for a start that had already happened.
+      message: `Your listing "${listing.title}" has been approved and your auction is now live.`,
     },
   }).catch(() => {});
 
@@ -235,10 +241,10 @@ router.post(
       include: { seller: true },
     });
 
-    await sendListingSubmittedEmail(
+    dispatchEmail(sendListingSubmittedEmail(
       { email: listing.seller.email, name: listing.seller.name },
       { title: listing.title, listingCode: listing.listingCode },
-    );
+    ), 'listing submitted');
 
     const io = req.app.get('io') as Server | undefined;
     io?.emit('listing:submitted', { listingId: listing.id, title: listing.title });
@@ -361,10 +367,10 @@ router.post(
 
     const io = req.app.get('io') as Server | undefined;
     io?.emit('listing:rejected', { listingId: listing.id });
-    await sendListingRejectedEmail(
+    dispatchEmail(sendListingRejectedEmail(
       { email: listing.seller?.email ?? '', name: listing.seller?.name ?? '' },
       { title: listing.title, reason: updated.rejectionReason ?? '' },
-    );
+    ), 'listing rejected');
 
     await prisma.auditLog.create({
       data: {

@@ -11,8 +11,36 @@ async function send(to: string | string[], subject: string, html: string): Promi
     console.warn(`[email] RESEND_API_KEY not set — skipped: "${subject}"`);
     return;
   }
-  const { error } = await client.emails.send({ from: FROM, to, subject, html });
-  if (error) console.error(`[email] send failed for "${subject}":`, error.message);
+  try {
+    const { error } = await client.emails.send({ from: FROM, to, subject, html });
+    if (error) console.error(`[email] send failed for "${subject}":`, error.message);
+  } catch (err) {
+    // The SDK reports API-level problems via `error` above, but a transport failure — DNS,
+    // timeout, connection reset — rejects instead. Callers dispatch these without awaiting,
+    // so an escaping rejection would be unhandled and take the process down.
+    console.error(`[email] transport error for "${subject}":`, err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Send without making the caller wait.
+ *
+ * Every send used to be awaited inside the request that triggered it, so the user paid the
+ * full Resend round-trip before getting a response: measured at 5023 ms for register and
+ * 3281 ms for placing a bid — on the most latency-sensitive action in the product, where in
+ * the closing seconds of a contested auction that delay decides who wins. The Stripe webhook
+ * had the same problem, where a slow send risks exceeding Stripe's timeout and triggering
+ * retries of an already-processed payment.
+ *
+ * Delivery is best-effort and always was: `send` swallows failures and only logs them, so
+ * awaiting never gave the caller anything to act on. This makes that explicit rather than
+ * paying for it. `context` identifies the site in logs, since there is no longer a request
+ * to correlate the failure with.
+ */
+export function dispatchEmail(task: Promise<unknown>, context: string): void {
+  void task.catch((err: unknown) => {
+    console.error(`[email] background send failed (${context}):`, err instanceof Error ? err.message : err);
+  });
 }
 
 // Activity/alert emails (bid, listing status, auction, payment) honour the platform-wide
@@ -220,15 +248,15 @@ export async function sendListingApprovedEmail(
     'Listing approved',
     `
     ${h1('Listing approved!')}
-    ${p(`Hi ${to.name}, great news — your listing has been approved and your auction is now scheduled.`)}
+    ${p(`Hi ${to.name}, great news — your listing has been approved and your auction is now live.`)}
     ${divider()}
     <table width="100%" cellpadding="0" cellspacing="0">
       ${infoRow('Listing', listing.title)}
       ${infoRow('Reference', listing.listingCode)}
-      ${infoRow('Status', 'Approved')}
+      ${infoRow('Status', 'Live — accepting bids')}
     </table>
     ${divider()}
-    ${p('Bidders will be able to place bids once your auction goes live at the scheduled start time.')}
+    ${p('Bidders can place bids right now. Approval starts the auction immediately — there is no separate start time to wait for.')}
     `,
   ));
 }

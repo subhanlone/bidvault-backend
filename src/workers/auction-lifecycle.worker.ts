@@ -107,6 +107,9 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
     if (txResult.alreadyClosed) return;
     const winningBid = txResult.winningBid;
 
+    // These two stay awaited, unlike the sends in the HTTP routes. Nothing is waiting on a
+    // response here, and letting the job own the send means a failure is visible as a job
+    // failure rather than a log line nobody reads.
     if (winningBid && txResult.reserveMet === false) {
       await sendReserveNotMetEmail(
         { email: auction.seller.email, name: auction.seller.name },

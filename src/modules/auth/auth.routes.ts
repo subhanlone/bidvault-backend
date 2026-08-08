@@ -14,6 +14,7 @@ import { env } from '../../config/env.js';
 import { OTP_EXPIRY_MS } from '../../config/otp.js';
 import { hashToken } from '../../utils/token-hash.js';
 import {
+  dispatchEmail,
   sendWelcomeEmail,
   sendEmailVerifiedEmail,
   sendPasswordResetEmail,
@@ -172,7 +173,7 @@ router.post(
       },
     });
 
-    await sendWelcomeEmail({ email: user.email, name: user.name }, code);
+    dispatchEmail(sendWelcomeEmail({ email: user.email, name: user.name }, code), 'welcome');
 
     ok(
       res,
@@ -224,7 +225,7 @@ router.post(
       }),
     ]);
 
-    await sendEmailVerifiedEmail({ email: user.email, name: user.name });
+    dispatchEmail(sendEmailVerifiedEmail({ email: user.email, name: user.name }), 'email verified');
 
     ok(res, { message: 'Email verified successfully.' });
   }),
@@ -384,7 +385,7 @@ router.post(
       },
     });
 
-    await sendPasswordResetEmail({ email: user.email, name: user.name }, code);
+    dispatchEmail(sendPasswordResetEmail({ email: user.email, name: user.name }, code), 'password reset');
 
     ok(res, {
       message: 'Reset code sent.',
@@ -467,7 +468,7 @@ router.post(
       }),
     ]);
 
-    await sendPasswordResetCompletedEmail({ email: user.email, name: user.name });
+    dispatchEmail(sendPasswordResetCompletedEmail({ email: user.email, name: user.name }), 'password reset completed');
 
     ok(res, { message: 'Password reset successfully.' });
   }),
@@ -500,7 +501,7 @@ router.post(
       },
     });
 
-    await sendVerificationResentEmail({ email: user.email, name: user.name }, code);
+    dispatchEmail(sendVerificationResentEmail({ email: user.email, name: user.name }, code), 'verification resent');
 
     ok(res, {
       message: 'Verification code resent.',
