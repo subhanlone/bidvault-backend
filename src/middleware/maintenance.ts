@@ -6,6 +6,7 @@ import { verifyAccessToken } from '../utils/jwt.js';
 const EXEMPT_PREFIXES = [
   '/api/v1/health',
   '/api/v1/settings/public',
+  '/api/v1/stats', // the login screen fetches this on mount — blocking it locks admins out of the UI
   '/api/v1/auth/login',
   '/api/v1/auth/refresh',
   '/api/v1/payments/webhook',

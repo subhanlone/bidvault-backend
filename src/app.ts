@@ -44,7 +44,12 @@ export function createApp() {
       const [userCount, activeAuctionCount, txSum] = await Promise.all([
         prisma.user.count(),
         prisma.auction.count({ where: { status: 'ACTIVE' } }),
-        prisma.auctionTransaction.aggregate({ _sum: { finalAmount: true } }),
+        // COMPLETED only — a transaction row exists from the moment an auction closes,
+        // long before (and whether or not) the winner actually pays.
+        prisma.auctionTransaction.aggregate({
+          where: { status: 'COMPLETED' },
+          _sum: { finalAmount: true },
+        }),
       ]);
       ok(res, {
         userCount,

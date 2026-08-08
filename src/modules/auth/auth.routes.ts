@@ -11,6 +11,7 @@ import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../uti
 import { validateBody } from '../../middleware/validate.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { env } from '../../config/env.js';
+import { OTP_EXPIRY_MS } from '../../config/otp.js';
 import { hashToken } from '../../utils/token-hash.js';
 import {
   sendWelcomeEmail,
@@ -86,10 +87,7 @@ function generateOtp(): string {
   return String(crypto.randomInt(100000, 1000000));
 }
 
-// Product decision: 60s expiry (tighter than the OWASP ASVS V2.7.2 / NIST 800-63B
-// 10-minute maximum for out-of-band OTPs). Note this is aggressive for an emailed
-// code — send + delivery + spam-filter latency can itself approach this window.
-const OTP_EXPIRY_MS = 60 * 1000;
+// Window length and its rationale live in config/otp.ts, shared with the email templates.
 
 function sanitizeUser(user: { id: string; name: string; email: string; role: UserRole; isEmailVerified: boolean; createdAt: Date }) {
   return {
@@ -165,11 +163,12 @@ router.post(
     });
 
     const code = generateOtp();
+    const codeExpiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
     await prisma.emailVerificationToken.create({
       data: {
         userId: user.id,
         code,
-        expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+        expiresAt: codeExpiresAt,
       },
     });
 
@@ -180,6 +179,7 @@ router.post(
       {
         user: sanitizeUser(user),
         verificationCode: env.NODE_ENV === 'production' ? undefined : code,
+        codeExpiresAt: codeExpiresAt.toISOString(),
       },
       201,
     );
@@ -375,11 +375,12 @@ router.post(
     });
 
     const code = generateOtp();
+    const codeExpiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
     await prisma.passwordResetToken.create({
       data: {
         userId: user.id,
         code,
-        expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+        expiresAt: codeExpiresAt,
       },
     });
 
@@ -388,6 +389,7 @@ router.post(
     ok(res, {
       message: 'Reset code sent.',
       resetCode: env.NODE_ENV === 'production' ? undefined : code,
+      codeExpiresAt: codeExpiresAt.toISOString(),
     });
   }),
 );
@@ -489,11 +491,12 @@ router.post(
     });
 
     const code = generateOtp();
+    const codeExpiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
     await prisma.emailVerificationToken.create({
       data: {
         userId: user.id,
         code,
-        expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+        expiresAt: codeExpiresAt,
       },
     });
 
@@ -502,6 +505,7 @@ router.post(
     ok(res, {
       message: 'Verification code resent.',
       verificationCode: env.NODE_ENV === 'production' ? undefined : code,
+      codeExpiresAt: codeExpiresAt.toISOString(),
     });
   }),
 );

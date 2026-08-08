@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import { env } from '../config/env.js';
+import { OTP_EXPIRY_SECONDS } from '../config/otp.js';
 import { getPlatformSettings } from './settings.service.js';
 
 const client = env.RESEND_API_KEY ? new Resend(env.RESEND_API_KEY) : null;
@@ -75,7 +76,7 @@ function otpBlock(code: string): string {
         <td align="center" style="background-color:#f8fafc;border:2px dashed #e2e8f0;border-radius:8px;padding:20px;">
           <p style="margin:0 0 4px;color:#64748b;font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">Your Code</p>
           <p style="margin:0;color:#0b1f3a;font-size:36px;font-weight:800;letter-spacing:8px;">${code}</p>
-          <p style="margin:6px 0 0;color:#94a3b8;font-size:11px;">Expires in 60 seconds</p>
+          <p style="margin:6px 0 0;color:#94a3b8;font-size:11px;">Expires in ${OTP_EXPIRY_SECONDS} seconds</p>
         </td>
       </tr>
     </table>`;
