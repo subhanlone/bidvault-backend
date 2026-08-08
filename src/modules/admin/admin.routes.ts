@@ -46,11 +46,13 @@ router.get(
         where: { createdAt: { gte: twelveMonthsAgo } },
         select: { createdAt: true },
       }),
+      // No `take` — a truncated groupBy makes the percentages below add up to 100% while
+      // silently omitting whole categories, presenting partial data as the full picture.
+      // Callers that need a short list should aggregate the tail into an "Other" row.
       prisma.listing.groupBy({
         by: ['category'],
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
-        take: 6,
       }),
       prisma.auctionTransaction.groupBy({
         by: ['sellerId'],
@@ -91,13 +93,29 @@ router.get(
       bids:  bidsMap.get(key)    ?? 0,
     }));
 
-    // Category breakdown
+    // Category breakdown.
+    //
+    // Percentages are apportioned by largest remainder rather than rounded independently.
+    // Rounding each share on its own lets the error accumulate — with 8 categories the panel
+    // displayed shares totalling 102%. Floor every share, then hand the leftover points to
+    // the largest fractional remainders, so the column always sums to exactly 100.
     const totalCatCount = categoryGroups.reduce((s, g) => s + g._count.id, 0);
-    const categoryBreakdown = categoryGroups.map(g => ({
-      name:  g.category,
+    const exactShares = categoryGroups.map(g => ({
+      name: g.category,
       count: g._count.id,
-      pct:   totalCatCount > 0 ? Math.round((g._count.id / totalCatCount) * 100) : 0,
+      exact: totalCatCount > 0 ? (g._count.id / totalCatCount) * 100 : 0,
     }));
+    const floored = exactShares.map(s => ({ ...s, pct: Math.floor(s.exact) }));
+    let leftover = (totalCatCount > 0 ? 100 : 0) - floored.reduce((s, c) => s + c.pct, 0);
+    const byRemainder = [...floored].sort(
+      (a, b) => (b.exact - Math.floor(b.exact)) - (a.exact - Math.floor(a.exact)),
+    );
+    for (const row of byRemainder) {
+      if (leftover <= 0) break;
+      row.pct += 1;
+      leftover -= 1;
+    }
+    const categoryBreakdown = floored.map(({ name, count, pct }) => ({ name, count, pct }));
 
     // Top sellers — resolve names
     const sellerIds = sellerTxGroups.map(g => g.sellerId);

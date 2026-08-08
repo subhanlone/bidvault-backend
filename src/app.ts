@@ -41,20 +41,28 @@ export function createApp() {
 
   app.get('/api/v1/stats', async (_req, res, next) => {
     try {
-      const [userCount, activeAuctionCount, txSum] = await Promise.all([
-        prisma.user.count(),
-        prisma.auction.count({ where: { status: 'ACTIVE' } }),
-        // COMPLETED only — a transaction row exists from the moment an auction closes,
-        // long before (and whether or not) the winner actually pays.
-        prisma.auctionTransaction.aggregate({
-          where: { status: 'COMPLETED' },
-          _sum: { finalAmount: true },
-        }),
-      ]);
+      const [userCount, activeAuctionCount, txSum, listingCount, completedSalesCount] =
+        await Promise.all([
+          prisma.user.count(),
+          prisma.auction.count({ where: { status: 'ACTIVE' } }),
+          // COMPLETED only — a transaction row exists from the moment an auction closes,
+          // long before (and whether or not) the winner actually pays.
+          prisma.auctionTransaction.aggregate({
+            where: { status: 'COMPLETED' },
+            _sum: { finalAmount: true },
+          }),
+          // Feeds the public stat panels. They previously padded themselves out with
+          // invented figures ("4.9/5 satisfaction", "99% satisfaction", "99.9% uptime")
+          // that nothing measured; these are real counts so every tile traces to a query.
+          prisma.listing.count({ where: { status: 'APPROVED' } }),
+          prisma.auctionTransaction.count({ where: { status: 'COMPLETED' } }),
+        ]);
       ok(res, {
         userCount,
         activeAuctionCount,
         transactionTotal: txSum._sum.finalAmount ?? 0,
+        listingCount,
+        completedSalesCount,
       });
     } catch (err) {
       next(err);
