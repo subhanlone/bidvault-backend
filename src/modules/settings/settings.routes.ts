@@ -17,12 +17,24 @@ const updateSchema = z.object({
   supportEmail: z.string().trim().email().optional(),
 });
 
-// Public — needed by the frontend before auth (maintenance gate + footer contact)
+// Public — needed by the frontend before auth (maintenance gate + footer contact), and by the
+// create-listing form so it can enforce the same limits POST /listings does.
+//
+// minListingPrice and maxBidIncrement were previously admin-only. The seller's form therefore had
+// no way to know them and could only discover a violation from a 400 on final submit — two steps
+// after the offending field, with no inline error and nothing to indicate what value is legal.
+// These two are safe to publish: they are platform rules a seller has to satisfy anyway, not
+// private data. reviewTimeoutHours and emailNotifsEnabled stay admin-only.
 router.get(
   '/public',
   asyncHandler(async (_req, res) => {
     const s = await getPlatformSettings();
-    ok(res, { maintenanceMode: s.maintenanceMode, supportEmail: s.supportEmail });
+    ok(res, {
+      maintenanceMode: s.maintenanceMode,
+      supportEmail: s.supportEmail,
+      minListingPrice: s.minListingPrice,
+      maxBidIncrement: s.maxBidIncrement,
+    });
   }),
 );
 
