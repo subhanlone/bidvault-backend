@@ -66,9 +66,20 @@ function toAuctionDto(
     startPrice: auction.startPrice,
     currentBid: auction.currentBid,
     minIncrement: auction.minIncrement,
-    reservePrice: auction.reservePrice ?? undefined,
-    // null until the auction closes, and stays null when no reserve was set
-    reserveMet: auction.reserveMet,
+    // reservePrice is deliberately NOT sent. This DTO is served by the public
+    // GET /auctions and GET /auctions/:id, so publishing the amount hands every bidder the
+    // seller's hidden floor: bid exactly the reserve and never a rupee more, or walk away on
+    // seeing it is out of reach. Only the derived verdict goes out. The owning seller and
+    // admins still get the number through the listing DTO, which is role-gated.
+    //
+    // null   = no reserve was set
+    // false  = reserve not reached (live comparison while open, the worker's recorded
+    //          verdict once closed)
+    // true   = reserve reached
+    reserveMet:
+      auction.reservePrice === null
+        ? null
+        : (auction.reserveMet ?? auction.currentBid >= auction.reservePrice),
     bidCount: auction.bidCount,
     startTime: auction.startTime.toISOString(),
     endTime: auction.endTime.toISOString(),
