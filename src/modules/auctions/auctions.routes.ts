@@ -67,6 +67,8 @@ function toAuctionDto(
     currentBid: auction.currentBid,
     minIncrement: auction.minIncrement,
     reservePrice: auction.reservePrice ?? undefined,
+    // null until the auction closes, and stays null when no reserve was set
+    reserveMet: auction.reserveMet,
     bidCount: auction.bidCount,
     startTime: auction.startTime.toISOString(),
     endTime: auction.endTime.toISOString(),

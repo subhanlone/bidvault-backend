@@ -8,7 +8,7 @@ import {
   type AuctionLifecycleJobData,
   type AuctionLifecycleJobName,
 } from '../queues/auction-lifecycle.queue.js';
-import { sendAuctionEndedEmail } from '../services/email.service.js';
+import { sendAuctionEndedEmail, sendReserveNotMetEmail } from '../services/email.service.js';
 
 const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobName>(
   'auction-lifecycle',
@@ -30,7 +30,7 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
         SELECT status FROM "Auction" WHERE id = ${auction.id} FOR UPDATE
       `;
       if (!locked || locked.status === 'CLOSED') {
-        return { alreadyClosed: true, winningBid: null, notifyWinner: false };
+        return { alreadyClosed: true, winningBid: null, notifyWinner: false, reserveMet: null };
       }
 
       const winBid = await tx.bid.findFirst({
@@ -39,13 +39,39 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
         include: { buyer: true },
       });
 
+      // The reserve is the seller's floor — the create-listing form promises "Auction won't close
+      // below this amount". An auction that ends under it closes UNSOLD: no winner is declared and
+      // no AuctionTransaction is created, so nothing is ever owed.
+      const reserveMet =
+        auction.reservePrice === null ? null : (winBid?.amount ?? 0) >= auction.reservePrice;
+
       await tx.auction.update({
         where: { id: auction.id },
-        data: { status: AuctionStatus.CLOSED },
+        data: { status: AuctionStatus.CLOSED, reserveMet },
       });
 
       let notifyWinner = true;
-      if (winBid) {
+      if (winBid && reserveMet === false) {
+        // Bids were placed but the top one was under the floor. Both sides need telling: the
+        // seller that it did not sell, and the top bidder that no invoice is coming. The bidder's
+        // alert is not gated on notifyWins — it corrects an expectation rather than announcing a win.
+        await tx.notification.createMany({
+          data: [
+            {
+              userId: auction.sellerId,
+              type: 'RESERVE_NOT_MET',
+              title: 'Auction ended below your reserve',
+              message: `"${auction.title}" ended at PKR ${winBid.amount.toLocaleString()}, below your reserve of PKR ${auction.reservePrice!.toLocaleString()}. The item was not sold.`,
+            },
+            {
+              userId: winBid.buyerId,
+              type: 'RESERVE_NOT_MET',
+              title: 'Reserve price not met',
+              message: `You were the highest bidder on "${auction.title}" at PKR ${winBid.amount.toLocaleString()}, but the seller's reserve was not met, so the item was not sold. No payment is due.`,
+            },
+          ],
+        });
+      } else if (winBid) {
         // Respect the winner's notification preference for the in-app AUCTION_WON alert + win email.
         const winnerPrefs = await tx.user.findUnique({
           where: { id: winBid.buyerId },
@@ -75,11 +101,24 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
         }
       }
 
-      return { alreadyClosed: false, winningBid: winBid ?? null, notifyWinner };
+      return { alreadyClosed: false, winningBid: winBid ?? null, notifyWinner, reserveMet };
     });
 
     if (txResult.alreadyClosed) return;
     const winningBid = txResult.winningBid;
+
+    if (winningBid && txResult.reserveMet === false) {
+      await sendReserveNotMetEmail(
+        { email: auction.seller.email, name: auction.seller.name },
+        {
+          title: auction.title,
+          reservePrice: auction.reservePrice!,
+          bidCount: auction.bidCount,
+        },
+        { email: winningBid.buyer.email, name: winningBid.buyer.name, amount: winningBid.amount },
+      );
+      return;
+    }
 
     await sendAuctionEndedEmail(
       { email: auction.seller.email, name: auction.seller.name },

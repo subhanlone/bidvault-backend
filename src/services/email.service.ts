@@ -338,6 +338,62 @@ export async function sendAuctionEndedEmail(
   }
 }
 
+/**
+ * Sent instead of sendAuctionEndedEmail when an auction closed below its reserve.
+ *
+ * Both sides need telling explicitly: the seller so they know it did not sell, and the top
+ * bidder so they are not left waiting for an invoice that will never arrive. The bidder's
+ * mail is not gated on notifyWins — it is the correction of an expectation, not a win alert.
+ */
+export async function sendReserveNotMetEmail(
+  seller: { email: string; name: string },
+  auction: { title: string; reservePrice: number; bidCount: number },
+  topBidder: { email: string; name: string; amount: number },
+): Promise<void> {
+  if (!(await alertsEnabled())) return;
+  const pkr = (n: number) => `PKR ${n.toLocaleString()}`;
+  const shortfall = auction.reservePrice - topBidder.amount;
+
+  const sellerBody = `
+    ${h1('Your auction ended below its reserve')}
+    ${p(`Hi ${seller.name}, bidding closed under the reserve price you set, so the item was not sold.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Item', auction.title)}
+      ${infoRow('Your reserve', pkr(auction.reservePrice))}
+      ${infoRow('Highest bid', pkr(topBidder.amount))}
+      ${infoRow('Short by', pkr(shortfall))}
+      ${infoRow('Total bids', String(auction.bidCount))}
+      ${infoRow('Result', 'Not sold — reserve not met')}
+    </table>
+    ${divider()}
+    ${p('You keep the item and no sale was recorded. You can list it again, and lowering the reserve may help it sell.')}
+  `;
+  await send(
+    seller.email,
+    `Not sold — "${auction.title}" ended below reserve`,
+    base('Reserve not met', sellerBody),
+  );
+
+  const bidderBody = `
+    ${h1('The reserve price was not met')}
+    ${p(`Hi ${topBidder.name}, you were the highest bidder on this auction, but the seller had set a reserve price that bidding did not reach — so the item was not sold.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Item', auction.title)}
+      ${infoRow('Your highest bid', pkr(topBidder.amount))}
+      ${infoRow('Result', 'Not sold — reserve not met')}
+    </table>
+    ${divider()}
+    ${p('<strong>No payment is due and nothing has been charged.</strong> Browse BidVault for similar items still open for bidding.')}
+  `;
+  await send(
+    topBidder.email,
+    `Reserve not met — "${auction.title}"`,
+    base('Reserve not met', bidderBody),
+  );
+}
+
 export async function sendBidPlacedEmail(
   to: { email: string; name: string },
   bid: { title: string; amount: number; auctionId: string },

@@ -101,6 +101,11 @@ model Auction {
   emoji         String?
   startPrice    Int
   reservePrice  Int?
+  // Outcome of the reserve check, written once when the auction closes.
+  // null  = no reserve was set, or the auction has not closed yet
+  // true  = closed at or above reserve; an AuctionTransaction exists
+  // false = closed below reserve; deliberately NO transaction, nothing owed
+  reserveMet    Boolean?
   minIncrement  Int
   currentBid    Int
   bidCount      Int           @default(0)
