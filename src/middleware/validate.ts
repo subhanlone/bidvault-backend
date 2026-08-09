@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
-import type { ZodSchema } from 'zod';
+import { z, type ZodType } from 'zod';
 
-export function validateBody<T>(schema: ZodSchema<T>) {
+export function validateBody<T>(schema: ZodType<T>) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const parsed = schema.safeParse(req.body);
 
@@ -9,7 +9,10 @@ export function validateBody<T>(schema: ZodSchema<T>) {
       res.status(400).json({
         success: false,
         error: 'Validation error',
-        details: parsed.error.flatten().fieldErrors,
+        // z.flattenError replaces zod 3's error.flatten(), which is deprecated in
+        // zod 4. Same { formErrors, fieldErrors } shape, so the response body is
+        // byte-for-byte what it was.
+        details: z.flattenError(parsed.error).fieldErrors,
       });
       return;
     }

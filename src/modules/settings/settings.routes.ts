@@ -14,7 +14,9 @@ const updateSchema = z.object({
   maxBidIncrement: z.coerce.number().int().positive().optional(),
   minListingPrice: z.coerce.number().int().positive().optional(),
   reviewTimeoutHours: z.coerce.number().int().positive().optional(),
-  supportEmail: z.string().trim().email().optional(),
+  // .pipe, not z.email().trim(): checks run in the order they are added, so
+  // trimming after the format check would reject a padded address.
+  supportEmail: z.string().trim().pipe(z.email()).optional(),
 });
 
 // Public — needed by the frontend before auth (maintenance gate + footer contact), and by the

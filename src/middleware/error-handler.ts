@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { ZodError } from 'zod';
+import { z, ZodError } from 'zod';
 
 export function notFound(_req: Request, res: Response): void {
   res.status(404).json({ success: false, error: 'Route not found' });
@@ -10,7 +10,8 @@ export function errorHandler(error: unknown, _req: Request, res: Response, _next
     res.status(400).json({
       success: false,
       error: 'Validation error',
-      details: error.flatten().fieldErrors,
+      // See validate.ts — same shape as zod 3's error.flatten().
+      details: z.flattenError(error).fieldErrors,
     });
     return;
   }

@@ -32,6 +32,15 @@ const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-
 // Pakistani CNIC: 5 digits - 7 digits - 1 digit
 const CNIC_REGEX = /^\d{5}-\d{7}-\d{1}$/;
 
+// Everything except register accepts an address in zod's format. Trim runs first
+// via .pipe — string checks fire in the order they are added, so z.email().trim()
+// would test the untrimmed value and reject a pasted address with a stray space.
+//
+// NOTE: this is deliberately NOT the same rule as EMAIL_REGEX above, which is what
+// register enforces. The two disagree, and have since before the zod 4 upgrade —
+// see NEW-10 in TEST-FINDINGS.md.
+const emailField = z.string().trim().pipe(z.email());
+
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(100).regex(NAME_REGEX, 'Name can only contain letters, spaces, hyphens, and apostrophes'),
   email: z.string().trim().regex(EMAIL_REGEX, 'Enter a valid email address'),
@@ -41,26 +50,26 @@ const registerSchema = z.object({
 });
 
 const verifyEmailSchema = z.object({
-  email: z.string().trim().email(),
+  email: emailField,
   otp: z.string().regex(/^\d{6}$/),
 });
 
 const loginSchema = z.object({
-  email: z.string().trim().email(),
+  email: emailField,
   password: z.string().min(1),
 });
 
 const forgotSchema = z.object({
-  email: z.string().trim().email(),
+  email: emailField,
 });
 
 const verifyResetSchema = z.object({
-  email: z.string().trim().email(),
+  email: emailField,
   otp: z.string().regex(/^\d{6}$/),
 });
 
 const resetSchema = z.object({
-  email: z.string().trim().email(),
+  email: emailField,
   otp: z.string().regex(/^\d{6}$/),
   password: z.string().min(8, 'Password must be at least 8 characters'),
 });
@@ -70,7 +79,7 @@ const refreshSchema = z.object({
 });
 
 const resendVerificationSchema = z.object({
-  email: z.string().trim().email(),
+  email: emailField,
 });
 
 const changePasswordSchema = z.object({

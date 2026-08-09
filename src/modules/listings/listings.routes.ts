@@ -31,9 +31,11 @@ const submitListingSchema = z.object({
   reservePrice: z.coerce.number().int().positive().optional(),
   minIncrement: z.coerce.number().int().positive(),
   durationDays: z.coerce.number().int().positive().max(30),
-  imageUrl: z.string().url().optional(),
+  imageUrl: z.url().optional(),
   emoji: z.string().optional(),
-  attributes: z.record(z.unknown()).optional(),
+  // Zod 4 requires the key schema explicitly; single-argument z.record is gone.
+  // Shape is validated per category by validateCategoryAttributes below.
+  attributes: z.record(z.string(), z.unknown()).optional(),
 });
 
 const rejectListingSchema = z.object({
