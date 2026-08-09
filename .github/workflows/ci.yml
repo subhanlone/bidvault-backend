@@ -55,3 +55,9 @@ jobs:
       # to a scratch path because the frontend is not checked out here.
       - name: client types still emit
         run: API_TYPES_OUT="${RUNNER_TEMP}/openapi.d.ts" npm run api:types
+
+      # document.ts lists paths and operations by hand — the one hand-maintained link in an
+      # otherwise generated chain. This walks the live Express router and fails if a route is
+      # served but undocumented, or documented but no longer served.
+      - name: openapi.json matches the served routes
+        run: npm run api:routes

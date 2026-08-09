@@ -11,6 +11,7 @@
     "worker": "node dist/workers/auction-lifecycle.worker.js",
     "api:contract": "tsx scripts/generate-openapi.ts",
     "api:types": "tsx scripts/generate-client-types.ts",
+    "api:routes": "tsx scripts/verify-routes.ts",
     "api:verify": "tsx scripts/verify-contract.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
