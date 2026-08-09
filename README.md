@@ -1,76 +1,137 @@
+[![CI](https://github.com/subhanlone/bidvault-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/subhanlone/bidvault-backend/actions/workflows/ci.yml)
+
 # BidVault Backend
 
-Backend API for BidVault using Node.js, Express, TypeScript, Prisma, PostgreSQL, Redis + BullMQ, JWT auth, Socket.IO, and n8n webhook integrations.
+Auction platform API. Node.js (ESM) + Express + TypeScript + Prisma/PostgreSQL,
+with Redis + BullMQ for auction lifecycle jobs, Socket.IO for live bidding,
+Stripe for payment, Resend for transactional email and Cloudinary for images.
 
-## What is implemented
+Deployed on Railway as two services off this one repo: the API (`npm start`)
+and the lifecycle worker (`npm run worker`).
 
-- Auth:
-  - `POST /api/v1/auth/register`
-  - `POST /api/v1/auth/verify-email`
-  - `POST /api/v1/auth/login`
-  - `POST /api/v1/auth/refresh` (rotating refresh token)
-  - `POST /api/v1/auth/logout`
-  - `POST /api/v1/auth/forgot-password`
-  - `POST /api/v1/auth/verify-reset-otp`
-  - `POST /api/v1/auth/reset-password`
-  - `GET /api/v1/auth/me`
-- Listings:
-  - `POST /api/v1/listings` (seller)
-  - `GET /api/v1/listings/mine` (seller)
-  - `GET /api/v1/listings/pending` (admin)
-  - `POST /api/v1/listings/:listingId/approve` (admin)
-  - `POST /api/v1/listings/:listingId/reject` (admin)
-- Auctions:
-  - `GET /api/v1/auctions`
-  - `GET /api/v1/auctions/:auctionId`
-  - `GET /api/v1/auctions/:auctionId/bids`
-  - `POST /api/v1/auctions/:auctionId/bids` (buyer)
-- Watchlist:
-  - `GET /api/v1/watchlist`
-  - `POST /api/v1/watchlist/:auctionId`
-  - `DELETE /api/v1/watchlist/:auctionId`
-- Health:
-  - `GET /api/v1/health`
-- Queue/automation:
-  - BullMQ queue for auction lifecycle (`auction:start`, `auction:end`)
-  - n8n webhook triggers for listing and auction events
+## API
 
-## Quick start
+All routes are under `/api/v1`.
 
-1. Copy env file:
-   - `cp .env.example .env` (or create `.env` manually on Windows)
-2. Install dependencies:
-   - `npm install`
-3. Ensure services are running:
-   - PostgreSQL
-   - Redis
-4. Generate Prisma client:
-   - `npm run prisma:generate`
-5. Run migrations:
-   - `npm run prisma:migrate -- --name init`
-6. Seed demo data:
-   - `npm run prisma:seed`
-7. Start API server:
-   - `npm run dev`
-8. Start lifecycle worker:
-   - `npm run dev:worker`
+### Auth — `/auth`
 
-Server runs at `http://localhost:4000` by default.
+| Method | Path | Notes |
+| --- | --- | --- |
+| POST | `/register` | |
+| POST | `/verify-email` | body field is `otp` |
+| POST | `/resend-verification` | |
+| POST | `/login` | |
+| POST | `/refresh` | rotating refresh token |
+| POST | `/logout` | |
+| POST | `/forgot-password` | |
+| POST | `/verify-reset-otp` | |
+| POST | `/reset-password` | |
+| POST | `/change-password` | authenticated |
+| GET | `/me` | |
+| GET / PATCH | `/me/preferences` | outbid / wins / news email opt-outs |
 
-## Demo accounts (seed)
+### Listings — `/listings`
 
-- Buyer: `sawera@gmail.com` / `password123`
-- Seller: `ahmed@gmail.com` / `password123`
-- Admin: `admin@bidvault.com` / `admin123`
+| Method | Path | Role |
+| --- | --- | --- |
+| POST | `/upload-signature` | seller — signed Cloudinary upload |
+| POST | `/` | seller |
+| GET | `/mine` | seller |
+| GET | `/pending` | admin |
+| POST | `/:listingId/approve` | admin — creates the auction |
+| POST | `/approve-all` | admin |
+| POST | `/:listingId/reject` | admin — `PENDING` listings only |
+
+### Auctions — `/auctions`
+
+| Method | Path | Role |
+| --- | --- | --- |
+| GET | `/` | public |
+| GET | `/:auctionId` | public |
+| GET | `/:auctionId/bids` | public |
+| GET | `/mine/bids` | buyer |
+| POST | `/:auctionId/bids` | buyer |
+
+Reserve prices are never serialised. The DTO exposes `reserveMet`
+(`true` / `false` / `null` for no reserve) and nothing else about the floor.
+
+### Watchlist — `/watchlist`
+
+`GET /` · `POST /:auctionId` · `DELETE /:auctionId`
+
+### Payments — `/payments`
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/my-wins` | buyer |
+| GET | `/seller-stats` | seller |
+| POST | `/create-intent` | Stripe PaymentIntent |
+| POST | `/webhook` | Stripe — needs the raw body, mounted before `express.json` |
+
+PKR is a zero-decimal currency, so amounts are **not** multiplied by 100.
+
+### Notifications — `/notifications`
+
+`GET /` · `POST /:notificationId/read` · `POST /read-all`
+
+### Reviews — `/reviews`
+
+`POST /` · `GET /seller/:sellerId`
+
+### Settings — `/settings`
+
+`GET /public` (unauthenticated) · `GET /` and `PUT /` (admin).
+Backed by the `PlatformSetting` table with a 10s cache. Controls the minimum
+listing price, maximum bid increment, review timeout, support email,
+whether activity emails send, and maintenance mode.
+
+### Platform — no prefix
+
+- `GET /health` — liveness only; it does not check the database or Redis.
+- `GET /stats` — public counters. Revenue counts `COMPLETED` transactions
+  only, because a transaction row exists from the moment an auction closes,
+  whether or not the winner ever pays.
+
+## Background jobs
+
+One BullMQ queue drives auction closure:
+
+- `auction:end` — closes the auction, picks the winner, decides
+  `reserveMet`, writes the transaction and fires notifications, all inside a
+  single Prisma transaction with `SELECT … FOR UPDATE` on the auction row.
+  If a reserve was set and not met the auction closes unsold: no transaction,
+  no winner, both parties told why.
+- A reconciliation sweep catches auctions whose job was lost.
+
+`QUEUE_PREFIX` namespaces the queue. Development and production currently
+share one Redis instance, so this variable is the only thing stopping a local
+worker from consuming production jobs — set it before running the worker.
+
+## Socket.IO
+
+Authenticated through `io.use`. Clients join a room with
+`auction:subscribe` (`{ auctionId }`) and receive `bid:placed`.
+
+## Local setup
+
+1. `cp .env.example .env` and fill it in.
+2. `npm install`
+3. Start PostgreSQL and Redis.
+4. `npm run prisma:generate`
+5. `npx prisma db push` — use this locally. Do **not** run `prisma migrate dev`
+   against Railway; it is interactive and fails there.
+6. `npm run prisma:seed` (optional)
+7. `npm run dev` — API on `http://localhost:4000`
+8. `npm run dev:worker` — lifecycle worker
+
+Production migrations apply on their own: `npm start` runs
+`prisma migrate deploy` before booting.
 
 ## Notes
 
-- OTP and reset codes are returned in API responses in non-production mode for local testing.
-- Prices are stored as integer PKR values.
-- Access + refresh token auth is implemented with refresh token rotation.
-- Socket.IO channels:
-  - Subscribe to room: `auction:subscribe` with `auctionId`
-  - Event emitted on new bid: `bid:placed`
-- n8n:
-  - Set `N8N_WEBHOOK_URL` to receive event payloads.
-  - Optional bearer token header via `N8N_WEBHOOK_TOKEN`.
+- Prices are integer PKR throughout.
+- OTP and reset codes come back in the API response outside production, for
+  local testing.
+- Access + refresh tokens with refresh rotation.
+- Seed accounts are defined in `prisma/seed.ts`. Their credentials are not
+  listed here on purpose — this repository is public.
