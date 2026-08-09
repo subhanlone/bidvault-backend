@@ -49,3 +49,9 @@ jobs:
           npm run api:contract
           git diff --exit-code -- openapi.json \
             || { echo "::error::openapi.json is stale — run 'npm run api:contract' and commit the result"; exit 1; }
+
+      # The client-type emitter throws on any schema construct it does not recognise. Without
+      # this, adding one would pass CI and only fail when someone regenerated locally. Writes
+      # to a scratch path because the frontend is not checked out here.
+      - name: client types still emit
+        run: API_TYPES_OUT="${RUNNER_TEMP}/openapi.d.ts" npm run api:types
