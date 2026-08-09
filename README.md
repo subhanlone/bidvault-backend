@@ -109,8 +109,13 @@ worker from consuming production jobs — set it before running the worker.
 
 ## Socket.IO
 
-Authenticated through `io.use`. Clients join a room with
-`auction:subscribe` (`{ auctionId }`) and receive `bid:placed`.
+Authenticated through `io.use`. Clients join a room by emitting
+`auction:subscribe` with the auction id **as a bare string**, not an object — the handler
+rejects anything else, and the server verifies the auction exists before joining. Leave with
+`auction:unsubscribe`.
+
+The broadcast is `bid:placed`, payload `{ auctionId, bid: { bidId, amount, buyerId,
+buyerName, timestamp } }` — the bid is nested, not at the top level.
 
 ## Local setup
 
