@@ -1,37 +1,40 @@
 // Generates the frontend's TypeScript types from openapi.json.
 //
-// This lives in the backend, not the frontend, and that is deliberate.
-// openapi-typescript declares `peerDependencies.typescript: ^5.x`. The frontend is on
-// TypeScript 6, so installing it there needs an npm `overrides` entry to force npm past a
-// constraint the package says it does not support — a workaround, even a tested one. The
-// backend is on TypeScript 5.9, which satisfies that range honestly, so the tool lives here
-// and neither repo carries an override.
+// This deliberately uses no third-party generator. openapi-typescript pulls in
+// @redocly/openapi-core, which pins a js-yaml with an unpatched CVE and cannot be moved
+// without an npm override; @hey-api/openapi-ts carries advisories of its own that only
+// `npm audit fix --force` clears. Both would mean shipping a known-vulnerable transitive
+// dependency or overriding around it. Neither is acceptable for a codegen step this small.
 //
-// The generated file is committed to the frontend, so nothing about a frontend install,
-// build or deploy depends on this script. It is a developer step, run after the contract
-// changes.
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+// The whole surface we emit is the JSON Schema that zod-openapi produces from
+// src/openapi/schemas.ts: objects, arrays, enums, consts, $refs, anyOf unions and
+// additionalProperties records. Validation keywords (min/max/pattern/format) carry no type
+// information and are ignored on purpose.
+//
+// The emitter throws on anything it does not recognise rather than guessing, so a new
+// construct fails the build instead of silently producing a wrong type.
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import openapiTS, { astToString } from 'openapi-typescript';
+
+type Schema = Record<string, unknown>;
 
 const here = dirname(fileURLToPath(import.meta.url));
-const spec = join(here, '..', 'openapi.json');
+const specPath = join(here, '..', 'openapi.json');
 
-// The frontend is expected as a sibling checkout. Override with API_TYPES_OUT if it is not.
+// The frontend is expected as a sibling checkout; override with API_TYPES_OUT.
 const defaultOut = resolve(here, '..', '..', 'frontend', 'src', 'types', 'openapi.d.ts');
 const out = process.env.API_TYPES_OUT ? resolve(process.env.API_TYPES_OUT) : defaultOut;
 
-if (!existsSync(spec)) {
-  console.error(`openapi.json not found at ${spec} — run "npm run api:contract" first.`);
+if (!existsSync(specPath)) {
+  console.error(`openapi.json not found at ${specPath} — run "npm run api:contract" first.`);
   process.exit(1);
 }
 
 const outDir = dirname(out);
 if (!existsSync(outDir)) {
-  if (process.env.API_TYPES_OUT) {
-    mkdirSync(outDir, { recursive: true });
-  } else {
+  if (process.env.API_TYPES_OUT) mkdirSync(outDir, { recursive: true });
+  else {
     console.error(
       `Frontend not found at ${outDir}.\n` +
         `Check out bidvault alongside this repo, or set API_TYPES_OUT to the target path.`,
@@ -40,25 +43,131 @@ if (!existsSync(outDir)) {
   }
 }
 
-// Library API rather than shelling out to the CLI: Node refuses to spawn a .cmd shim on
-// Windows without `shell: true`, and enabling that just to run a binary we already have
-// installed would be a workaround for a problem we do not need to have.
-const ast = await openapiTS(pathToFileURL(spec));
+const spec = JSON.parse(readFileSync(specPath, 'utf8')) as {
+  components: { schemas: Record<string, Schema> };
+};
+const schemas = spec.components.schemas;
 
-// The CLI writes its own banner; the library API does not. Ours names the command to run,
-// which the CLI's generic wording does not.
-const header = [
-  '/**',
-  ' * Generated from the backend contract. Do not edit.',
-  ' *',
-  ' * Source: backend/src/openapi/schemas.ts -> backend/openapi.json -> this file.',
-  ' * Regenerate: in the backend, `npm run api:contract && npm run api:types`.',
-  ' */',
-  '',
-  '',
-].join('\n');
+const refName = (ref: string): string => {
+  const prefix = '#/components/schemas/';
+  if (!ref.startsWith(prefix)) throw new Error(`unsupported $ref: ${ref}`);
+  const name = ref.slice(prefix.length);
+  if (!(name in schemas)) throw new Error(`$ref points at an unknown schema: ${name}`);
+  return name;
+};
 
-writeFileSync(out, header + astToString(ast), 'utf8');
+const quote = (v: unknown): string =>
+  typeof v === 'string' ? JSON.stringify(v) : v === null ? 'null' : String(v);
 
-console.log(`client types written to ${out}`);
+/** A TS identifier can be written bare; anything else needs quoting as a property key. */
+const propKey = (k: string): string => (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k));
+
+function toType(schema: Schema, indent: string, path: string): string {
+  if (typeof schema.$ref === 'string') return refName(schema.$ref);
+
+  if (Array.isArray(schema.anyOf)) {
+    const parts = (schema.anyOf as Schema[]).map((s, i) => toType(s, indent, `${path}.anyOf[${i}]`));
+    return [...new Set(parts)].join(' | ');
+  }
+  if (Array.isArray(schema.oneOf)) {
+    const parts = (schema.oneOf as Schema[]).map((s, i) => toType(s, indent, `${path}.oneOf[${i}]`));
+    return [...new Set(parts)].join(' | ');
+  }
+
+  if ('const' in schema) return quote(schema.const);
+
+  if (Array.isArray(schema.enum)) {
+    return (schema.enum as unknown[]).map(quote).join(' | ');
+  }
+
+  const type = schema.type;
+  if (Array.isArray(type)) {
+    // e.g. type: ["string","null"]
+    return [...new Set(type.map((t) => toType({ ...schema, type: t }, indent, path)))].join(' | ');
+  }
+
+  switch (type) {
+    case 'string':
+      return 'string';
+    case 'number':
+    case 'integer':
+      return 'number';
+    case 'boolean':
+      return 'boolean';
+    case 'null':
+      return 'null';
+    case 'array': {
+      if (!schema.items) throw new Error(`array without items at ${path}`);
+      const inner = toType(schema.items as Schema, indent, `${path}[]`);
+      // Parenthesise unions so `A | B[]` cannot be misread.
+      return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
+    }
+    case 'object': {
+      const props = (schema.properties ?? {}) as Record<string, Schema>;
+      const required = new Set((schema.required as string[] | undefined) ?? []);
+      const addl = schema.additionalProperties;
+
+      if (Object.keys(props).length === 0) {
+        // A record: additionalProperties carries the value type.
+        if (addl && typeof addl === 'object') {
+          return `Record<string, ${toType(addl as Schema, indent, `${path}{}`)}>`;
+        }
+        if (addl === false) return 'Record<string, never>';
+        return 'Record<string, unknown>';
+      }
+
+      const inner = indent + '  ';
+      const lines: string[] = ['{'];
+      for (const [key, value] of Object.entries(props)) {
+        const doc = typeof value.description === 'string' ? value.description : undefined;
+        if (doc) {
+          const wrapped = doc.trim().split('\n');
+          lines.push(`${inner}/**`);
+          for (const l of wrapped) lines.push(`${inner} * ${l.trim()}`);
+          lines.push(`${inner} */`);
+        }
+        const optional = required.has(key) ? '' : '?';
+        lines.push(`${inner}${propKey(key)}${optional}: ${toType(value, inner, `${path}.${key}`)};`);
+      }
+      lines.push(`${indent}}`);
+      return lines.join('\n');
+    }
+  }
+
+  // An empty schema — or one carrying only validation keywords — constrains nothing.
+  // JSON Schema says that means "any value"; zod-openapi emits it for z.unknown().
+  // Checked explicitly rather than used as a fallback, so a schema with a type we do not
+  // handle still throws instead of silently degrading to `unknown`.
+  const TYPE_BEARING = ['type', '$ref', 'enum', 'const', 'anyOf', 'oneOf', 'allOf', 'properties', 'items', 'additionalProperties'];
+  if (!TYPE_BEARING.some((k) => k in schema)) return 'unknown';
+
+  throw new Error(
+    `unsupported schema at ${path}: ${JSON.stringify(schema).slice(0, 200)}\n` +
+      `Extend scripts/generate-client-types.ts rather than letting this emit a wrong type.`,
+  );
+}
+
+const header = `/**
+ * Generated from the backend contract. Do not edit.
+ *
+ * Source: backend/src/openapi/schemas.ts -> backend/openapi.json -> this file.
+ * Regenerate: in the backend, \`npm run api:contract && npm run api:types\`.
+ *
+ * Emitted by backend/scripts/generate-client-types.ts, which has no dependencies —
+ * see that file for why no third-party generator is used.
+ */
+`;
+
+const blocks: string[] = [header];
+
+for (const name of Object.keys(schemas).sort()) {
+  const schema = schemas[name];
+  const doc = typeof schema.description === 'string' ? schema.description : undefined;
+  if (doc) blocks.push(`/** ${doc.trim()} */`);
+  blocks.push(`export type ${name} = ${toType(schema, '', name)};\n`);
+}
+
+writeFileSync(out, blocks.join('\n'), 'utf8');
+
+console.log(`client types written to ${out} (${Object.keys(schemas).length} schemas, 0 dependencies)`);
 console.log('Commit the generated file — the frontend build reads it, it does not produce it.');

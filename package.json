@@ -16,10 +16,6 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts"
   },
-  "//overrides": "CVE-2026-59870: js-yaml <4.3.1 has quadratic CPU consumption resolving !!omap. @redocly/openapi-core@1.34.18 pins js-yaml 4.3.0 exactly, and openapi-typescript's ^1.34.6 range cannot reach the 2.x line where it moved to js-yaml 5. This forces the patched patch-release — same major.minor, which is what npm overrides exist for. Drop it once openapi-typescript takes @redocly/openapi-core 2.x.",
-  "overrides": {
-    "js-yaml": "4.3.1"
-  },
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^2.4.3",
@@ -44,7 +40,6 @@
     "@types/jsonwebtoken": "^9.0.9",
     "@types/morgan": "^1.9.9",
     "@types/node": "^22.15.31",
-    "openapi-typescript": "^7.13.0",
     "prisma": "^6.19.3",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3"
