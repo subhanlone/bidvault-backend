@@ -353,7 +353,7 @@ export const document = createDocument({
       get: {
         tags: ['Watchlist'],
         security: [{ bearerAuth: [] }],
-        responses: { 200: okBody(z.array(S.WatchlistEntryDto), 'Watched auctions'), 401: unauthorized },
+        responses: { 200: okBody(z.array(S.AuctionDto), 'Watched auctions'), 401: unauthorized },
       },
     },
     '/watchlist/{auctionId}': {

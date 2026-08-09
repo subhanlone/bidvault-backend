@@ -165,15 +165,8 @@ export const BidWithAuctionDto = BidDto.extend({ auction: AuctionDto }).meta({
   id: 'BidWithAuction',
 });
 
-export const WatchlistEntryDto = z
-  .object({
-    auctionId: z.string(),
-    title: z.string(),
-    currentBid: z.number().int(),
-    status: AuctionStatus,
-    endTime: isoDateTime,
-  })
-  .meta({ id: 'WatchlistEntry' });
+// GET /watchlist returns full AuctionDto objects (see watchlist.routes.ts). It previously
+// had its own five-field shape, which is why WatchlistEntry no longer exists as a schema.
 
 export const NotificationDto = z
   .object({
