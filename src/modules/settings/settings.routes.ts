@@ -4,6 +4,7 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
+import { strictEmail } from '../../config/email.js';
 import { getPlatformSettings, updatePlatformSettings } from '../../services/settings.service.js';
 
 const router = Router();
@@ -14,9 +15,8 @@ const updateSchema = z.object({
   maxBidIncrement: z.coerce.number().int().positive().optional(),
   minListingPrice: z.coerce.number().int().positive().optional(),
   reviewTimeoutHours: z.coerce.number().int().positive().optional(),
-  // .pipe, not z.email().trim(): checks run in the order they are added, so
-  // trimming after the format check would reject a padded address.
-  supportEmail: z.string().trim().pipe(z.email()).optional(),
+  // Stores an address, so it gets the strict rule — same one register uses.
+  supportEmail: strictEmail.optional(),
 });
 
 // Public — needed by the frontend before auth (maintenance gate + footer contact), and by the

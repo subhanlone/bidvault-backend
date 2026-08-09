@@ -12,6 +12,7 @@ import { validateBody } from '../../middleware/validate.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { env } from '../../config/env.js';
 import { OTP_EXPIRY_MS } from '../../config/otp.js';
+import { strictEmail, lookupEmail } from '../../config/email.js';
 import { hashToken } from '../../utils/token-hash.js';
 import {
   dispatchEmail,
@@ -26,50 +27,41 @@ const router = Router();
 
 // Letters (incl. accented), spaces, hyphens, and apostrophes only — no digits or other symbols.
 const NAME_REGEX = /^[\p{L}\s'-]+$/u;
-// Stricter than zod's built-in .email(): requires a real TLD-shaped domain, rejects
-// consecutive/leading/trailing dots and hyphens in domain labels.
-const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
 // Pakistani CNIC: 5 digits - 7 digits - 1 digit
 const CNIC_REGEX = /^\d{5}-\d{7}-\d{1}$/;
 
-// Everything except register accepts an address in zod's format. Trim runs first
-// via .pipe — string checks fire in the order they are added, so z.email().trim()
-// would test the untrimmed value and reject a pasted address with a stray space.
-//
-// NOTE: this is deliberately NOT the same rule as EMAIL_REGEX above, which is what
-// register enforces. The two disagree, and have since before the zod 4 upgrade —
-// see NEW-10 in TEST-FINDINGS.md.
-const emailField = z.string().trim().pipe(z.email());
-
+// Register creates the stored address, so it gets the strict rule. Every other route here
+// only looks an existing address up, so it gets the permissive one — see config/email.ts
+// for why validating format at that end can only ever lock out a real user.
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(100).regex(NAME_REGEX, 'Name can only contain letters, spaces, hyphens, and apostrophes'),
-  email: z.string().trim().regex(EMAIL_REGEX, 'Enter a valid email address'),
+  email: strictEmail,
   cnic: z.string().trim().regex(CNIC_REGEX, 'CNIC must be in the format 12345-1234567-1'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
   role: z.enum(['BUYER', 'SELLER']),
 });
 
 const verifyEmailSchema = z.object({
-  email: emailField,
+  email: lookupEmail,
   otp: z.string().regex(/^\d{6}$/),
 });
 
 const loginSchema = z.object({
-  email: emailField,
+  email: lookupEmail,
   password: z.string().min(1),
 });
 
 const forgotSchema = z.object({
-  email: emailField,
+  email: lookupEmail,
 });
 
 const verifyResetSchema = z.object({
-  email: emailField,
+  email: lookupEmail,
   otp: z.string().regex(/^\d{6}$/),
 });
 
 const resetSchema = z.object({
-  email: emailField,
+  email: lookupEmail,
   otp: z.string().regex(/^\d{6}$/),
   password: z.string().min(8, 'Password must be at least 8 characters'),
 });
@@ -79,7 +71,7 @@ const refreshSchema = z.object({
 });
 
 const resendVerificationSchema = z.object({
-  email: emailField,
+  email: lookupEmail,
 });
 
 const changePasswordSchema = z.object({
