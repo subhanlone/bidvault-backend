@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes the in-flight run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Prisma resolves the datasource URL when it reads the schema, so the
+  # variable has to exist even though nothing here opens a connection.
+  # This is a throwaway value, not a credential.
+  DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+
+jobs:
+  check:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Matches @types/node in devDependencies, which is what tsc checks
+      # the source against.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Catches malformed schema changes before Railway runs
+      # `prisma migrate deploy` on boot.
+      - run: npx prisma validate
+
+      # The client has to exist before tsc can resolve @prisma/client's types.
+      - run: npx prisma generate
+
+      - run: npm run build
