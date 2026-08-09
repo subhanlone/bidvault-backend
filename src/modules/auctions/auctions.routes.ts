@@ -9,12 +9,10 @@ import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { getAuctionRuntimeState, setAuctionRuntimeState } from '../../services/auction-state.service.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
+import type { AuctionDtoType } from '../../openapi/schemas.js';
+import { placeBidSchema } from '../../openapi/requests.js';
 
 const router = Router();
-
-const placeBidSchema = z.object({
-  amount: z.coerce.number().int().positive(),
-});
 
 async function buildSellerStatsMap(sellerIds: string[]) {
   const uniqueIds = [...new Set(sellerIds)];
@@ -46,10 +44,13 @@ async function buildSellerStatsMap(sellerIds: string[]) {
   return map;
 }
 
+// Return type is the published contract, not inferred. If this mapper and
+// openapi/schemas.ts drift apart, the build breaks here rather than the frontend
+// silently receiving a shape its generated types say is impossible.
 function toAuctionDto(
   auction: Prisma.AuctionGetPayload<{ include: { seller: true } }>,
   statsMap?: Map<string, { rating: number | null; salesCount: number }>,
-) {
+): AuctionDtoType {
   const stats = statsMap?.get(auction.sellerId);
   return {
     auctionId: auction.id,
@@ -86,7 +87,7 @@ function toAuctionDto(
     status: auction.status,
     imageUrl: auction.imageUrl ?? '',
     images: auction.imageUrl ? [auction.imageUrl] : [],
-    attributes: (auction.attributes as Record<string, unknown> | null) ?? undefined,
+    attributes: (auction.attributes as Record<string, string | number> | null) ?? undefined,
   };
 }
 

@@ -9,6 +9,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "prisma migrate deploy && node dist/server.js",
     "worker": "node dist/workers/auction-lifecycle.worker.js",
+    "api:contract": "tsx scripts/generate-openapi.ts",
+    "api:verify": "tsx scripts/verify-contract.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts"
@@ -27,7 +29,8 @@
     "resend": "^6.12.4",
     "socket.io": "^4.8.1",
     "stripe": "^22.1.1",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "zod-openapi": "^6.0.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

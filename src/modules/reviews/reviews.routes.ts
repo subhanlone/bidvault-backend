@@ -5,14 +5,9 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
+import { createReviewSchema } from '../../openapi/requests.js';
 
 const router = Router();
-
-const createReviewSchema = z.object({
-  transactionId: z.string().min(1),
-  stars: z.coerce.number().int().min(1).max(5),
-  comment: z.string().max(500).optional(),
-});
 
 router.post(
   '/',

@@ -41,3 +41,11 @@ jobs:
       - run: npx prisma generate
 
       - run: npm run build
+
+      # openapi.json is committed and the frontend generates its types from it, so a stale
+      # copy silently ships wrong types to the client. Regenerate and fail on any diff.
+      - name: openapi.json is up to date
+        run: |
+          npm run api:contract
+          git diff --exit-code -- openapi.json \
+            || { echo "::error::openapi.json is stale — run 'npm run api:contract' and commit the result"; exit 1; }

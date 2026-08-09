@@ -4,20 +4,10 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
-import { strictEmail } from '../../config/email.js';
+import { updateSettingsSchema } from '../../openapi/requests.js';
 import { getPlatformSettings, updatePlatformSettings } from '../../services/settings.service.js';
 
 const router = Router();
-
-const updateSchema = z.object({
-  emailNotifsEnabled: z.boolean().optional(),
-  maintenanceMode: z.boolean().optional(),
-  maxBidIncrement: z.coerce.number().int().positive().optional(),
-  minListingPrice: z.coerce.number().int().positive().optional(),
-  reviewTimeoutHours: z.coerce.number().int().positive().optional(),
-  // Stores an address, so it gets the strict rule — same one register uses.
-  supportEmail: strictEmail.optional(),
-});
 
 // Public — needed by the frontend before auth (maintenance gate + footer contact), and by the
 // create-listing form so it can enforce the same limits POST /listings does.
@@ -51,7 +41,7 @@ router.get(
 router.put(
   '/',
   requireAuth(['ADMIN']),
-  validateBody(updateSchema),
+  validateBody(updateSettingsSchema),
   asyncHandler(async (req, res) => {
     ok(res, await updatePlatformSettings(req.body));
   }),

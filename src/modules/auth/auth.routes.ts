@@ -12,7 +12,19 @@ import { validateBody } from '../../middleware/validate.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { env } from '../../config/env.js';
 import { OTP_EXPIRY_MS } from '../../config/otp.js';
-import { strictEmail, lookupEmail } from '../../config/email.js';
+import type { UserDtoType } from '../../openapi/schemas.js';
+import {
+  registerSchema,
+  verifyEmailSchema,
+  loginSchema,
+  forgotSchema,
+  verifyResetSchema,
+  resetSchema,
+  refreshSchema,
+  resendVerificationSchema,
+  changePasswordSchema,
+  preferencesSchema,
+} from '../../openapi/requests.js';
 import { hashToken } from '../../utils/token-hash.js';
 import {
   dispatchEmail,
@@ -25,73 +37,14 @@ import {
 
 const router = Router();
 
-// Letters (incl. accented), spaces, hyphens, and apostrophes only — no digits or other symbols.
-const NAME_REGEX = /^[\p{L}\s'-]+$/u;
-// Pakistani CNIC: 5 digits - 7 digits - 1 digit
-const CNIC_REGEX = /^\d{5}-\d{7}-\d{1}$/;
-
-// Register creates the stored address, so it gets the strict rule. Every other route here
-// only looks an existing address up, so it gets the permissive one — see config/email.ts
-// for why validating format at that end can only ever lock out a real user.
-const registerSchema = z.object({
-  name: z.string().trim().min(2).max(100).regex(NAME_REGEX, 'Name can only contain letters, spaces, hyphens, and apostrophes'),
-  email: strictEmail,
-  cnic: z.string().trim().regex(CNIC_REGEX, 'CNIC must be in the format 12345-1234567-1'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
-  role: z.enum(['BUYER', 'SELLER']),
-});
-
-const verifyEmailSchema = z.object({
-  email: lookupEmail,
-  otp: z.string().regex(/^\d{6}$/),
-});
-
-const loginSchema = z.object({
-  email: lookupEmail,
-  password: z.string().min(1),
-});
-
-const forgotSchema = z.object({
-  email: lookupEmail,
-});
-
-const verifyResetSchema = z.object({
-  email: lookupEmail,
-  otp: z.string().regex(/^\d{6}$/),
-});
-
-const resetSchema = z.object({
-  email: lookupEmail,
-  otp: z.string().regex(/^\d{6}$/),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
-});
-
-const refreshSchema = z.object({
-  refreshToken: z.string().min(1),
-});
-
-const resendVerificationSchema = z.object({
-  email: lookupEmail,
-});
-
-const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1),
-  newPassword: z.string().min(8, 'Password must be at least 8 characters'),
-});
-
-const preferencesSchema = z.object({
-  notifyOutbid: z.boolean().optional(),
-  notifyWins: z.boolean().optional(),
-  notifyNews: z.boolean().optional(),
-});
-
 function generateOtp(): string {
   return String(crypto.randomInt(100000, 1000000));
 }
 
 // Window length and its rationale live in config/otp.ts, shared with the email templates.
 
-function sanitizeUser(user: { id: string; name: string; email: string; role: UserRole; isEmailVerified: boolean; createdAt: Date }) {
+// See toAuctionDto — the return type is the published contract, so drift is a build error.
+function sanitizeUser(user: { id: string; name: string; email: string; role: UserRole; isEmailVerified: boolean; createdAt: Date }): UserDtoType {
   return {
     userId: user.id,
     name: user.name,

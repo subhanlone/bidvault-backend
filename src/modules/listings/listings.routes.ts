@@ -19,32 +19,15 @@ import {
 import { env } from '../../config/env.js';
 import { getPlatformSettings } from '../../services/settings.service.js';
 import { validateCategoryAttributes } from './category-attributes.js';
+import type { ListingDtoType } from '../../openapi/schemas.js';
+import { submitListingSchema, rejectListingSchema } from '../../openapi/requests.js';
 
 const router = Router();
 
-const submitListingSchema = z.object({
-  title: z.string().trim().min(3).max(150),
-  category: z.string().trim().min(2),
-  condition: z.enum(['NEW', 'LIKE_NEW', 'USED']),
-  description: z.string().trim().min(10).max(5000),
-  startPrice: z.coerce.number().int().positive(),
-  reservePrice: z.coerce.number().int().positive().optional(),
-  minIncrement: z.coerce.number().int().positive(),
-  durationDays: z.coerce.number().int().positive().max(30),
-  imageUrl: z.url().optional(),
-  emoji: z.string().optional(),
-  // Zod 4 requires the key schema explicitly; single-argument z.record is gone.
-  // Shape is validated per category by validateCategoryAttributes below.
-  attributes: z.record(z.string(), z.unknown()).optional(),
-});
-
-const rejectListingSchema = z.object({
-  reason: z.string().trim().min(3),
-});
-
+// See toAuctionDto — the return type is the published contract, so drift is a build error.
 function toListingDto(
   listing: Prisma.ListingGetPayload<{ include: { seller: true } }>,
-) {
+): ListingDtoType {
   return {
     listingId: listing.id,
     listingCode: listing.listingCode,
@@ -64,7 +47,7 @@ function toListingDto(
     emoji: listing.emoji ?? '📦',
     imageUrl: listing.imageUrl ?? undefined,
     sellerEmail: listing.seller.email,
-    attributes: (listing.attributes as Record<string, unknown> | null) ?? undefined,
+    attributes: (listing.attributes as Record<string, string | number> | null) ?? undefined,
   };
 }
 
