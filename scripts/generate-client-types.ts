@@ -43,7 +43,12 @@ if (!existsSync(outDir)) {
   }
 }
 
+type Operation = {
+  responses: Record<string, { content?: Record<string, { schema?: Schema }> }>;
+};
+
 const spec = JSON.parse(readFileSync(specPath, 'utf8')) as {
+  paths: Record<string, Record<string, Operation>>;
   components: { schemas: Record<string, Schema> };
 };
 const schemas = spec.components.schemas;
@@ -167,7 +172,62 @@ for (const name of Object.keys(schemas).sort()) {
   blocks.push(`export type ${name} = ${toType(schema, '', name)};\n`);
 }
 
+// ---- endpoint maps ------------------------------------------------------------------
+//
+// Response types keyed by OpenAPI path, so the api client can infer what a URL returns
+// rather than taking the caller's word for it. What is emitted is the `data` inside the
+// envelope, because the client unwraps the envelope before returning.
+//
+// Every operation in this contract has exactly one 2xx response, always JSON, always
+// enveloped. That is asserted rather than assumed: a response breaking the pattern fails
+// the build here instead of quietly emitting a wrong type.
+const METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
+const rows: Record<(typeof METHODS)[number], string[]> = {
+  get: [], post: [], put: [], patch: [], delete: [],
+};
+
+let operationCount = 0;
+for (const path of Object.keys(spec.paths).sort()) {
+  const operations = spec.paths[path];
+  for (const method of METHODS) {
+    const op = operations[method];
+    if (!op) continue;
+
+    const where = `${method.toUpperCase()} ${path}`;
+    const success = Object.keys(op.responses ?? {}).filter((c) => c.startsWith('2'));
+    if (success.length !== 1) {
+      throw new Error(
+        `${where}: expected exactly one 2xx response, found ${success.length || 'none'}`,
+      );
+    }
+
+    const body = op.responses[success[0]].content?.['application/json']?.schema;
+    if (!body) throw new Error(`${where}: 2xx response has no application/json schema`);
+
+    const data = (body.properties as Record<string, Schema> | undefined)?.data;
+    if (!data) throw new Error(`${where}: 2xx response is not enveloped - no \`data\` property`);
+
+    rows[method].push(`  ${JSON.stringify(path)}: ${toType(data, '  ', where)};`);
+    operationCount++;
+  }
+}
+
+for (const method of METHODS) {
+  const name = `${method[0].toUpperCase()}${method.slice(1)}Endpoints`;
+  blocks.push(
+    `/** What each documented ${method.toUpperCase()} returns, unwrapped from the response envelope. */`,
+  );
+  blocks.push(
+    rows[method].length
+      ? `export interface ${name} {\n${rows[method].join('\n')}\n}\n`
+      : `export interface ${name} {}\n`,
+  );
+}
+
 writeFileSync(out, blocks.join('\n'), 'utf8');
 
-console.log(`client types written to ${out} (${Object.keys(schemas).length} schemas, 0 dependencies)`);
+console.log(
+  `client types written to ${out} ` +
+    `(${Object.keys(schemas).length} schemas, ${operationCount} operations, 0 dependencies)`,
+);
 console.log('Commit the generated file — the frontend build reads it, it does not produce it.');
