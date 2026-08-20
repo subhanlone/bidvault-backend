@@ -11,11 +11,26 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Every value here is a throwaway placeholder, not a credential. Nothing in this
+# workflow opens a connection or calls an external service — these exist only to get
+# past validation.
+#
+# Locally the backend has no dotenv dependency at all: `.env` reaches process.env as a
+# side effect of importing @prisma/client, which loads it. There is no such file on a
+# runner, so config/env.ts sees a bare process.env and every required variable has to be
+# supplied here. `npm run api:routes` boots the real Express app, so it needs all of them.
 env:
   # Prisma resolves the datasource URL when it reads the schema, so the
   # variable has to exist even though nothing here opens a connection.
-  # This is a throwaway value, not a credential.
   DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+  STRIPE_SECRET_KEY: sk_test_ci_placeholder_not_a_real_key
+  STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder_not_a_real_key
+  CLOUDINARY_CLOUD_NAME: ci-placeholder
+  CLOUDINARY_API_KEY: ci-placeholder
+  CLOUDINARY_API_SECRET: ci-placeholder
+  # config/env.ts requires at least 16 characters for both JWT secrets.
+  JWT_ACCESS_SECRET: ci-placeholder-not-a-real-secret
+  JWT_REFRESH_SECRET: ci-placeholder-not-a-real-secret
 
 defaults:
   run:
