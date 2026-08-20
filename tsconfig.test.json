@@ -1,0 +1,23 @@
+{
+  // Typechecks the test suite and the scripts, neither of which tsconfig.json covers.
+  //
+  // The build config includes only src/** — correctly, since tests and codegen scripts
+  // must not land in dist. The effect was that nothing typechecked them at all: vitest and
+  // tsx both transpile without checking, so a type error in a test or in the contract
+  // emitter surfaced only as a runtime failure, if at all.
+  //
+  // noEmit, so this never writes output. rootDir is widened for the same reason.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.ts",
+    "vitest.config.ts"
+  ]
+}

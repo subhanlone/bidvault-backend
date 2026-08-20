@@ -1,6 +1,7 @@
 node_modules
 dist
 .env
+.env.test
 prisma/dev.db
 prisma/dev.db-journal
 docs/superpowers/

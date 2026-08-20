@@ -32,7 +32,9 @@ export function createApp() {
   app.use(helmet());
   app.use('/api/v1/payments/webhook', express.raw({ type: 'application/json' }));
   app.use(express.json({ limit: '1mb' }));
-  app.use(morgan('dev'));
+  // Silent under test: the conformance suite makes a few hundred requests and the access
+  // log buries the actual assertion output, in CI especially.
+  if (env.NODE_ENV !== 'test') app.use(morgan('dev'));
   app.use(maintenanceGuard);
 
   app.get('/api/v1/health', (_req, res) => {

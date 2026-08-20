@@ -78,6 +78,11 @@ jobs:
 
       - run: npm run build
 
+      # `build` compiles src/** only, because tests and codegen scripts must not reach
+      # dist. This checks those too — vitest and tsx transpile without typechecking, so
+      # without it a type error in a test or in the contract emitter has nowhere to surface.
+      - run: npm run typecheck
+
       # openapi.json is committed and the frontend generates its types from it, so a stale
       # copy silently ships wrong types to the client. Regenerate and fail on any diff.
       - name: openapi.json is up to date
@@ -116,3 +121,72 @@ jobs:
       # served but undocumented, or documented but no longer served.
       - name: openapi.json matches the served routes
         run: npm run api:routes
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    # A real Postgres and a real Redis. The suite talks to both: routes read and write
+    # rows, and approving a listing enqueues a BullMQ job.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: bidvault
+          POSTGRES_PASSWORD: bidvault
+          POSTGRES_DB: bidvault_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U bidvault"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Overrides the workflow-level values. tests/setup.ts refuses to run unless the
+    # database name ends in _test, the Redis host is loopback and QUEUE_PREFIX is not
+    # production's 'bull' — so these are load-bearing, not decoration.
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://bidvault:bidvault@localhost:5432/bidvault_test
+      REDIS_URL: redis://127.0.0.1:6379
+      QUEUE_PREFIX: bull:test
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: backend
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+
+      - run: npx prisma generate
+
+      - run: npx prisma migrate deploy
+
+      # Nothing else compares the migration history to schema.prisma. A model edited
+      # without a matching migration builds, passes prisma validate, and then diverges
+      # from production the moment it deploys. A fresh database plus this check is the
+      # only place that shows up.
+      - name: migrations reproduce schema.prisma
+        run: |
+          npx prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code \
+            && echo "no drift" \
+            || { echo "::error::The migrations do not reproduce schema.prisma — a model was changed without a migration"; exit 1; }
+
+      - run: npm test
