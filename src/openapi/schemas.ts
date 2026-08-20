@@ -286,7 +286,13 @@ export const OtpIssuedDto = z
     message: z.string(),
     resetCode: z.string().optional(),
     verificationCode: z.string().optional(),
-    codeExpiresAt: isoDateTime,
+    // Optional because both routes that return this have a neutral early exit — an
+    // unknown address on forgot-password, an already-verified one on resend-verification.
+    // Those answer with a message and nothing else, deliberately: an expiry timestamp
+    // would confirm the account exists, which is the enumeration leak the neutral
+    // response is there to prevent. Declaring it required made the contract describe a
+    // response the server has never sent. Found by the response-contract middleware.
+    codeExpiresAt: isoDateTime.optional(),
   })
   .meta({ id: 'OtpIssued' });
 

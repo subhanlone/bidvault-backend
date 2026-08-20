@@ -13,7 +13,7 @@
  * not touch, so the two cannot drift apart silently.
  */
 import { readFileSync } from 'node:fs';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 
 // Stripe is the one dependency here that would otherwise make a network call. Only the
@@ -43,6 +43,7 @@ const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
 const { redisConnection } = await import('../src/infra/redis.js');
 const { seedWorld, PASSWORD } = await import('./helpers/world.js');
+const { takeViolations, contractSize } = await import('../src/middleware/response-contract.js');
 type World = Awaited<ReturnType<typeof seedWorld>>;
 
 const app = createApp();
@@ -63,6 +64,14 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   w = await seedWorld();
+});
+
+// The response-contract middleware records any response that does not match the schema
+// openapi.json publishes for it. Draining it here turns each of the requests below into a
+// schema assertion as well as a status assertion, with no per-test bookkeeping.
+afterEach(() => {
+  const violations = takeViolations();
+  expect(violations, 'the response did not match its published schema').toEqual([]);
 });
 
 afterAll(async () => {
@@ -189,10 +198,41 @@ describe('auth', () => {
 
   it('POST /auth/resend-verification', async () => {
     hit('post', '/auth/resend-verification');
+    // Must be an *unverified* account, or this takes the neutral exit and never produces
+    // the codeExpiresAt branch. The seeded buyer is verified, so register a fresh one.
+    await request(app).post(api('/auth/register')).send({
+      name: 'Unverified Person',
+      email: 'unverified@test.local',
+      cnic: '77777-1234567-1',
+      password: 'a-good-password',
+      role: 'BUYER',
+    });
+    const res = await request(app)
+      .post(api('/auth/resend-verification'))
+      .send({ email: 'unverified@test.local' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.codeExpiresAt).toEqual(expect.any(String));
+  });
+
+  // Both OTP routes have a neutral early exit that answers without an expiry, so that the
+  // response cannot be used to tell whether an account exists. Nothing covered those paths,
+  // and OtpIssuedDto declared codeExpiresAt required — so the contract described a response
+  // the server never sends. The response-contract middleware caught it; these keep it caught.
+  it('POST /auth/forgot-password — unknown address takes the neutral path', async () => {
+    const res = await request(app)
+      .post(api('/auth/forgot-password'))
+      .send({ email: 'nobody-here@test.local' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.codeExpiresAt).toBeUndefined();
+  });
+
+  it('POST /auth/resend-verification — verified account takes the neutral path', async () => {
+    // The seeded buyer is already verified, so this is the short-circuit.
     const res = await request(app)
       .post(api('/auth/resend-verification'))
       .send({ email: w.buyer.email });
     expect(res.status).toBe(200);
+    expect(res.body.data.codeExpiresAt).toBeUndefined();
   });
 
   it('POST /auth/change-password', async () => {
@@ -522,5 +562,9 @@ describe('coverage', () => {
         missing.map((m) => `  ${m}`).join('\n'),
     ).toEqual([]);
     expect(covered.size).toBe(documented.length);
+
+    // The middleware builds its own lookup from the same document. If that ever knows about
+    // fewer operations than the spec has, some route is being served unchecked.
+    expect(contractSize).toBe(documented.length);
   });
 });

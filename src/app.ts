@@ -14,6 +14,7 @@ import settingsRoutes from './modules/settings/settings.routes.js';
 import { env, clientOrigins } from './config/env.js';
 import { maintenanceGuard } from './middleware/maintenance.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
+import { responseContract } from './middleware/response-contract.js';
 import { ok } from './utils/response.js';
 import { prisma } from './db/prisma.js';
 
@@ -35,6 +36,9 @@ export function createApp() {
   // Silent under test: the conformance suite makes a few hundred requests and the access
   // log buries the actual assertion output, in CI especially.
   if (env.NODE_ENV !== 'test') app.use(morgan('dev'));
+  // Wraps res.json for everything below, so each response is checked against the schema
+  // openapi.json publishes for it. Must sit above the routes to intercept their handlers.
+  app.use(responseContract());
   app.use(maintenanceGuard);
 
   app.get('/api/v1/health', (_req, res) => {

@@ -58,7 +58,15 @@ const jsonRequest = (schema: ZodType) => ({
   content: { [JSON_CT]: { schema } },
 });
 
-export const document = createDocument({
+/**
+ * The document as authored, with the Zod schemas still in place.
+ *
+ * createDocument() converts every schema below to JSON Schema, so the converted output is
+ * no longer parseable. src/middleware/response-contract.ts validates real responses against
+ * these schemas, and reads them from here for that reason — the spec and the runtime check
+ * are then the same objects, and cannot describe different things.
+ */
+const documentInput = {
   openapi: '3.1.0',
   info: {
     title: 'BidVault API',
@@ -501,4 +509,8 @@ export const document = createDocument({
       },
     },
   },
-});
+} satisfies Parameters<typeof createDocument>[0];
+
+export { documentInput };
+
+export const document = createDocument(documentInput);

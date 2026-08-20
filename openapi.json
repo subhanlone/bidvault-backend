@@ -3063,8 +3063,7 @@
           }
         },
         "required": [
-          "message",
-          "codeExpiresAt"
+          "message"
         ],
         "additionalProperties": false
       },
