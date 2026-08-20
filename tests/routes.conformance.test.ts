@@ -426,6 +426,19 @@ describe('payments', () => {
     expect(res.body.data).toHaveProperty('clientSecret');
   });
 
+  // create-intent was the one route validating its body by hand, so its 400 was an
+  // ErrorResponse while the contract documented a ValidationError. Now it goes through
+  // validateBody like everything else; this covers the branch that was mis-described.
+  it('POST /payments/create-intent — rejects a missing body as a ValidationError', async () => {
+    const res = await request(app)
+      .post(api('/payments/create-intent'))
+      .set(auth(w.buyer.token))
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Validation error');
+    expect(res.body.details).toHaveProperty('transactionId');
+  });
+
   it('POST /payments/webhook', async () => {
     hit('post', '/payments/webhook');
     // Attach the intent id the handler looks the transaction up by.

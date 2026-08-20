@@ -47,6 +47,8 @@ type Operation = {
   responses: Record<string, { content?: Record<string, { schema?: Schema }> }>;
 };
 
+type RequestBody = { content?: Record<string, { schema?: Schema }> };
+
 const spec = JSON.parse(readFileSync(specPath, 'utf8')) as {
   paths: Record<string, Record<string, Operation>>;
   components: { schemas: Record<string, Schema> };
@@ -224,10 +226,50 @@ for (const method of METHODS) {
   );
 }
 
+// ---- request body maps ----------------------------------------------------------------
+//
+// The same idea applied to the other direction. Responses have been keyed by path since the
+// typed client landed; request bodies were still `unknown`, so the contract described
+// fourteen request shapes that nothing on the client side checked against.
+//
+// Only paths that actually document a JSON body appear here. The seven that do not —
+// approve, approve-all, read, read-all, the watchlist add, upload-signature and the Stripe
+// webhook — are absent on purpose, and api.ts turns that absence into "this call takes no
+// body" rather than "this call takes anything".
+const BODY_METHODS = ['post', 'put', 'patch'] as const;
+const requestRows: Record<(typeof BODY_METHODS)[number], string[]> = { post: [], put: [], patch: [] };
+
+let requestCount = 0;
+for (const path of Object.keys(spec.paths).sort()) {
+  for (const method of BODY_METHODS) {
+    const op = spec.paths[path][method] as (Operation & { requestBody?: RequestBody }) | undefined;
+    if (!op) continue;
+
+    const schema = op.requestBody?.content?.['application/json']?.schema;
+    if (!schema) continue;
+
+    requestRows[method].push(
+      `  ${JSON.stringify(path)}: ${toType(schema, '  ', `${method.toUpperCase()} ${path} body`)};`,
+    );
+    requestCount++;
+  }
+}
+
+for (const method of BODY_METHODS) {
+  const name = `${method[0].toUpperCase()}${method.slice(1)}Requests`;
+  blocks.push(`/** The body each documented ${method.toUpperCase()} expects. */`);
+  blocks.push(
+    requestRows[method].length
+      ? `export interface ${name} {\n${requestRows[method].join('\n')}\n}\n`
+      : `export interface ${name} {}\n`,
+  );
+}
+
 writeFileSync(out, blocks.join('\n'), 'utf8');
 
 console.log(
   `client types written to ${out} ` +
-    `(${Object.keys(schemas).length} schemas, ${operationCount} operations, 0 dependencies)`,
+    `(${Object.keys(schemas).length} schemas, ${operationCount} operations, ` +
+    `${requestCount} request bodies, 0 dependencies)`,
 );
 console.log('Commit the generated file — the frontend build reads it, it does not produce it.');

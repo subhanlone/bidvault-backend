@@ -15,6 +15,7 @@
  * test run cannot repeat it.
  */
 import { existsSync } from 'node:fs';
+import { connect } from 'node:net';
 import { resolve } from 'node:path';
 
 // Locally the values come from .env.test, which is gitignored. On CI there is no such
@@ -90,4 +91,34 @@ if (problems.length > 0) {
       `\n\nCopy .env.test.example to .env.test and fill it in. See that file for why each ` +
       `of these is checked.`,
   );
+}
+
+// --- redis reachability ------------------------------------------------------------------
+// Checked up front because the failure is otherwise unrecognisable. ioredis is constructed
+// with maxRetriesPerRequest: null, so when Redis is down commands queue forever instead of
+// erroring — and the symptom is four unrelated-looking route tests timing out (the two that
+// read the bid cache and the two that enqueue a close job) while everything else passes.
+// Diagnosed the slow way once already; one connect attempt here says it in a line.
+{
+  const { hostname, port } = new URL(process.env.REDIS_URL!);
+  const reachable = await new Promise<boolean>((resolve) => {
+    const socket = connect({ host: hostname, port: Number(port) || 6379 });
+    const done = (ok: boolean) => {
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(2000);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+  });
+
+  if (!reachable) {
+    throw new Error(
+      `Redis is not reachable at ${hostname}:${port}.\n` +
+        `  docker start bidvault-test-redis\n` +
+        `or, the first time:\n` +
+        `  docker run -d --name bidvault-test-redis -p ${port}:6379 redis:8-alpine`,
+    );
+  }
 }

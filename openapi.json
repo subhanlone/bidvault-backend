@@ -1892,15 +1892,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "transactionId": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "transactionId"
-                ]
+                "$ref": "#/components/schemas/CreateIntentRequest"
               }
             }
           }
@@ -2807,6 +2799,18 @@
         },
         "required": [
           "reason"
+        ]
+      },
+      "CreateIntentRequest": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "transactionId"
         ]
       },
       "CreateReviewRequest": {

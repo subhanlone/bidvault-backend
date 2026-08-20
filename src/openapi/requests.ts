@@ -115,6 +115,12 @@ export const placeBidSchema = z
   .object({ amount: z.coerce.number().int().positive() })
   .meta({ id: 'PlaceBidRequest' });
 
+// ---- payments ---------------------------------------------------------------------
+
+export const createIntentSchema = z
+  .object({ transactionId: z.string().min(1) })
+  .meta({ id: 'CreateIntentRequest' });
+
 // ---- reviews ----------------------------------------------------------------------
 
 export const createReviewSchema = z

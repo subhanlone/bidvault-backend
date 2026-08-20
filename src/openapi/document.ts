@@ -400,7 +400,7 @@ const documentInput = {
         tags: ['Payments'],
         security: [{ bearerAuth: [] }],
         summary: 'PKR is zero-decimal, so amounts are not multiplied by 100',
-        requestBody: jsonRequest(z.object({ transactionId: z.string() })),
+        requestBody: jsonRequest(R.createIntentSchema),
         responses: {
           200: okBody(S.PaymentIntentDto, 'Stripe client secret'),
           400: badRequest,

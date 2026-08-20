@@ -5,6 +5,8 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { env } from '../../config/env.js';
+import { validateBody } from '../../middleware/validate.js';
+import { createIntentSchema } from '../../openapi/requests.js';
 import { dispatchEmail, sendPaymentCompletedEmail } from '../../services/email.service.js';
 
 const router = Router();
@@ -60,14 +62,14 @@ router.get(
 router.post(
   '/create-intent',
   requireAuth(['BUYER']),
+  // The only route that used to validate its body by hand. Three problems with that: the
+  // contract's schema and the enforced rule were separate objects and free to drift, the
+  // check accepted any truthy value where the contract says string, and the 400 it sent was
+  // an ErrorResponse while the contract documents a ValidationError.
+  validateBody(createIntentSchema),
   asyncHandler(async (req, res) => {
     const winnerId = req.auth!.userId;
     const { transactionId } = req.body;
-
-    if (!transactionId) {
-      fail(res, 'transactionId is required.', 400);
-      return;
-    }
 
     const tx = await prisma.auctionTransaction.findUnique({
       where: { id: transactionId },
