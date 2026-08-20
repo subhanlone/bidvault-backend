@@ -17,12 +17,32 @@ env:
   # This is a throwaway value, not a credential.
   DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
 
+defaults:
+  run:
+    # Both repos are checked out side by side so the layout matches a developer's
+    # machine exactly — see the "frontend types are in sync" step for why that matters.
+    working-directory: backend
+
 jobs:
   check:
     name: Typecheck and build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          path: backend
+
+      # The client-type emitter writes into the frontend as a sibling directory. Bringing it
+      # in here is what lets CI compare the committed types against this contract rather
+      # than just proving the emitter runs.
+      #
+      # A plain anonymous clone rather than actions/checkout: that action injects the job's
+      # GITHUB_TOKEN, which is scoped to *this* repository, and its own README says a PAT is
+      # required to check out a different one. Both repos are public, so cloning without
+      # credentials sidesteps the question and keeps this workflow secret-free.
+      - name: clone the frontend alongside
+        working-directory: ${{ github.workspace }}
+        run: git clone --depth 1 --branch master https://github.com/subhanlone/bidvault.git frontend
 
       # Matches @types/node in devDependencies, which is what tsc checks
       # the source against.
@@ -30,6 +50,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+          cache-dependency-path: backend/package-lock.json
 
       - run: npm ci
 
@@ -50,11 +71,30 @@ jobs:
           git diff --exit-code -- openapi.json \
             || { echo "::error::openapi.json is stale — run 'npm run api:contract' and commit the result"; exit 1; }
 
-      # The client-type emitter throws on any schema construct it does not recognise. Without
-      # this, adding one would pass CI and only fail when someone regenerated locally. Writes
-      # to a scratch path because the frontend is not checked out here.
-      - name: client types still emit
-        run: API_TYPES_OUT="${RUNNER_TEMP}/openapi.d.ts" npm run api:types
+      # Regenerates the frontend's types into the sibling checkout and fails if they differ
+      # from what the frontend has committed.
+      #
+      # This replaces an earlier step that emitted to a scratch path and discarded the
+      # result. That only proved the emitter did not crash: a contract change with no
+      # matching regeneration left both repos' CI green while the frontend compiled against
+      # a contract that no longer existed.
+      #
+      # Running the emitter with its default output path also exercises the same resolution
+      # a developer gets locally, so a break in that path fails here too.
+      #
+      # Note the ordering consequence: if a contract change lands in this repo before the
+      # regenerated types land in the frontend, this step fails until the frontend catches
+      # up. That is the intended reading — the deployed pair really is inconsistent in that
+      # window.
+      - name: frontend types are in sync with this contract
+        run: |
+          npm run api:types
+          cd "${GITHUB_WORKSPACE}/frontend"
+          git diff --exit-code -- src/types/openapi.d.ts || {
+            echo "::error::frontend/src/types/openapi.d.ts does not match this contract."
+            echo "::error::In the backend run 'npm run api:contract && npm run api:types', then commit the frontend."
+            exit 1
+          }
 
       # document.ts lists paths and operations by hand — the one hand-maintained link in an
       # otherwise generated chain. This walks the live Express router and fails if a route is
