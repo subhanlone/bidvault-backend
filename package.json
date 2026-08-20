@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:db": "tsx scripts/test-db.ts",
+    "audit:gate": "node scripts/audit-gate.mjs",
     "api:contract": "tsx scripts/generate-openapi.ts",
     "api:types": "tsx scripts/generate-client-types.ts",
     "api:routes": "tsx scripts/verify-routes.ts",

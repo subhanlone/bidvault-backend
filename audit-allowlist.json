@@ -1,0 +1,14 @@
+{
+  "//": "Advisories accepted after analysis. scripts/audit-gate.mjs fails on anything not listed here, AND fails when a listed advisory no longer appears — so an entry cannot outlive its reason. Never add an entry to silence something reachable; fix that at the root.",
+  "accepted": [
+    {
+      "id": "GHSA-ggr8-5vv4-36mx",
+      "package": "deepmerge-ts",
+      "severity": "high",
+      "acceptedOn": "2026-08-20",
+      "reason": "Not reachable here. The only path is prisma -> @prisma/config -> deepmerge-ts, and @prisma/config calls deepmerge in exactly one place: loadConfigTsOrJs(), which merges prisma.config.ts layers through c12. This repo has no prisma.config.* file, and that input is a developer's own config rather than anything a request can influence. CVE-2026-40345 is a stack-exhaustion DoS whose CVSS 8.2 assumes an application feeding attacker-controlled JSON to deepmerge's public API; an attacker able to edit the Prisma config already has code execution.",
+      "whyNotFixed": "There is no Prisma release to upgrade to. Every stable version from 6.19.3 through 7.9.1, and the 7.10.0 dev prereleases, pin \"deepmerge-ts\": \"7.1.5\" exactly — no range. deepmerge-ts 8.0.0 only shipped 2026-08-16. `npm audit fix --force` proposes prisma 6.12.0, a major downgrade. An npm override would force past an exact pin across a major boundary, which this project does not do.",
+      "tracking": "https://github.com/prisma/prisma/pull/30054 (open, mergeable) — issue https://github.com/prisma/prisma/issues/30052. When that ships, upgrade prisma and delete this entry; the gate will fail until you do."
+    }
+  ]
+}

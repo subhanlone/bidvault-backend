@@ -78,6 +78,12 @@ jobs:
 
       - run: npm run build
 
+      # Nothing audited the dependency tree until now, which is how a high-severity
+      # advisory appeared on 2026-08-16 and sat unnoticed. This fails on anything not
+      # recorded in audit-allowlist.json, and equally on a recorded entry that no longer
+      # matches an advisory — so an accepted exception cannot outlive its reason.
+      - run: npm run audit:gate
+
       # `build` compiles src/** only, because tests and codegen scripts must not reach
       # dist. This checks those too — vitest and tsx transpile without typechecking, so
       # without it a type error in a test or in the contract emitter has nowhere to surface.
