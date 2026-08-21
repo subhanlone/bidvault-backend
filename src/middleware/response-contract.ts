@@ -48,6 +48,21 @@ for (const [path, operations] of Object.entries(documentInput.paths ?? {})) {
 }
 
 /**
+ * The schema published for one operation and status, or undefined if there is none.
+ *
+ * Exported so scripts/verify-contract.ts checks a live server against exactly the objects
+ * this middleware checks the test suite against. Two lookups built from the same document
+ * would still be two lookups, and could disagree.
+ */
+export function responseSchemaFor(
+  method: string,
+  path: string,
+  status: number | string = 200,
+): ZodType | undefined {
+  return contract.get(`${method.toUpperCase()} ${path}`)?.get(String(status));
+}
+
+/**
  * The OpenAPI key for the route Express actually matched, or null if it matched none.
  *
  * Resolved at response time rather than request time: `req.route` is only populated once
