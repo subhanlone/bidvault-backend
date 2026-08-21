@@ -46,6 +46,9 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: backend
+          # The compatibility gate compares against the commit this push started from, which
+          # a shallow clone does not contain.
+          fetch-depth: 0
 
       # The client-type emitter writes into the frontend as a sibling directory. Bringing it
       # in here is what lets CI compare the committed types against this contract rather
@@ -121,6 +124,22 @@ jobs:
             echo "::error::In the backend run 'npm run api:contract && npm run api:types', then commit the frontend."
             exit 1
           }
+
+      # Every other gate here asks whether the contract and the code agree. None of them can
+      # ask whether the contract was *meant* to change, because they all derive it from the
+      # code. This one does: oasdiff against the previous contract, and a breaking change is
+      # only allowed through if info.version moved with it. See COMPATIBILITY.md.
+      #
+      # The base is the commit the push started from, so a multi-commit push is judged whole
+      # rather than one commit at a time. On a pull request it is the branch being merged
+      # into; anything else falls back to the previous commit.
+      - name: no unacknowledged breaking contract change
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          case "$BASE" in
+            ''|0000000000000000000000000000000000000000) BASE="HEAD~1" ;;
+          esac
+          npm run api:compat -- "$BASE"
 
       # document.ts lists paths and operations by hand — the one hand-maintained link in an
       # otherwise generated chain. This walks the live Express router and fails if a route is

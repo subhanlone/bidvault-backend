@@ -70,7 +70,11 @@ const documentInput = {
   openapi: '3.1.0',
   info: {
     title: 'BidVault API',
-    version: '1.0.0',
+    // Bumped 2026-08-21. See COMPATIBILITY.md — a bump is how a change oasdiff calls
+    // breaking is declared deliberate. This one: create-intent's transactionId gained
+    // minLength 1 when its schema moved into requests.ts. The handler had always rejected
+    // an empty value, so no response changed; the document caught up with the server.
+    version: '1.1.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.',
