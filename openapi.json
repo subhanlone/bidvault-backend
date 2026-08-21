@@ -2874,11 +2874,74 @@
           },
           "service": {
             "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "dependencies": {
+            "type": "object",
+            "properties": {
+              "database": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "up",
+                      "down"
+                    ]
+                  },
+                  "latencyMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "state",
+                  "latencyMs"
+                ],
+                "additionalProperties": false
+              },
+              "redis": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "up",
+                      "down"
+                    ]
+                  },
+                  "latencyMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "state",
+                  "latencyMs"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "database",
+              "redis"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
           "status",
-          "service"
+          "service",
+          "version",
+          "commit",
+          "dependencies"
         ],
         "additionalProperties": false
       },

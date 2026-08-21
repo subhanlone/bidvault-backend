@@ -25,6 +25,10 @@ const schema = z.object({
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_SECRET: z.string().min(16),
   JWT_REFRESH_EXPIRES_IN_DAYS: z.coerce.number().int().positive().default(14),
+  // Injected by Railway on GitHub-triggered deploys. Reported by GET /health so the
+  // running build is identifiable from the outside — without it the only way to tell
+  // which commit is live is to read GitHub's deployment records.
+  RAILWAY_GIT_COMMIT_SHA: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

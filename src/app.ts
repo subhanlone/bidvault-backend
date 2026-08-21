@@ -17,6 +17,8 @@ import { errorHandler, notFound } from './middleware/error-handler.js';
 import { responseContract } from './middleware/response-contract.js';
 import { ok } from './utils/response.js';
 import { prisma } from './db/prisma.js';
+import { probeDatabase, probeRedis } from './services/health.service.js';
+import { document } from './openapi/document.js';
 
 export function createApp() {
   const app = express();
@@ -41,8 +43,30 @@ export function createApp() {
   app.use(responseContract());
   app.use(maintenanceGuard);
 
-  app.get('/api/v1/health', (_req, res) => {
-    ok(res, { status: 'ok', service: 'bidvault-backend' });
+  // Liveness, with dependency state reported rather than enforced.
+  //
+  // This deliberately still answers 200 when Postgres or Redis is down. Railway uses this
+  // path to decide whether to restart the service, and Redis is a shared instance that has
+  // been observed flapping (repeated ETIMEDOUT/ECONNRESET from some networks). Returning 503
+  // on a Redis blip would cycle a backend that is otherwise serving fine — and the system
+  // already tolerates brief Redis loss by design: listing approval swallows scheduling
+  // errors and reconcileOverdueAuctions catches up afterwards.
+  //
+  // So: the status code answers "is this process alive", the body answers "and how are its
+  // dependencies". A caller that needs readiness reads `dependencies`.
+  app.get('/api/v1/health', async (_req, res, next) => {
+    try {
+      const [database, redis] = await Promise.all([probeDatabase(), probeRedis()]);
+      ok(res, {
+        status: 'ok',
+        service: 'bidvault-backend',
+        version: document.info.version,
+        commit: env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local',
+        dependencies: { database, redis },
+      });
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.get('/api/v1/stats', async (_req, res, next) => {

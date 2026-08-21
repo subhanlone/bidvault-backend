@@ -156,8 +156,23 @@ export const PublicSettingsDto = z
   })
   .meta({ id: 'PublicSettings' });
 
+const ProbeDto = z.object({
+  state: z.enum(['up', 'down']),
+  latencyMs: z.number().int().nonnegative(),
+});
+
 export const HealthDto = z
-  .object({ status: z.literal('ok'), service: z.string() })
+  .object({
+    // Always 'ok' when the process is answering at all. Dependency trouble is reported in
+    // `dependencies`, not by this field or the status code — see the handler for why.
+    status: z.literal('ok'),
+    service: z.string(),
+    /** The contract version from openapi.json — what this build believes it serves. */
+    version: z.string(),
+    /** Short commit SHA on Railway, 'local' elsewhere. */
+    commit: z.string(),
+    dependencies: z.object({ database: ProbeDto, redis: ProbeDto }),
+  })
   .meta({ id: 'Health' });
 
 /** GET /auctions/mine/bids — a bid with the auction it was placed on. */
