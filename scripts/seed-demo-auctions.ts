@@ -9,6 +9,11 @@ import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { auctionLifecycleQueue, scheduleAuctionLifecycle } from '../src/queues/auction-lifecycle.queue.js';
 import { redisConnection } from '../src/infra/redis.js';
+import { assertSeedTarget, requiredPassword } from './seed-guard.js';
+
+// This script is designed to be pointed at production (see the header above), so the guard
+// permits that — it just has to be asked for by name via ALLOW_PRODUCTION_SEED=1.
+assertSeedTarget('seed-demo-auctions');
 
 const prisma = new PrismaClient();
 
@@ -28,7 +33,7 @@ function hoursFromNow(h: number): Date {
 async function upsertUser(params: {
   email: string; name: string; role: 'BUYER' | 'SELLER'; cnic: string;
 }) {
-  const passwordHash = await bcrypt.hash('Demo@1234', 10);
+  const passwordHash = await bcrypt.hash(requiredPassword('SEED_DEMO_PASSWORD'), 10);
   return prisma.user.upsert({
     where: { email: params.email },
     update: {},

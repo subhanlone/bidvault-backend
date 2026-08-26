@@ -1,5 +1,8 @@
 import { PrismaClient, AuctionStatus, ListingStatus, UserRole, ItemCondition } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { assertSeedTarget, requiredPassword } from '../scripts/seed-guard.js';
+
+assertSeedTarget('prisma:seed');
 
 const prisma = new PrismaClient();
 
@@ -17,12 +20,11 @@ async function upsertUser(params: {
   const passwordHash = await bcrypt.hash(params.password, 10);
   return prisma.user.upsert({
     where: { email: params.email },
-    update: {
-      name: params.name,
-      role: params.role,
-      passwordHash,
-      isEmailVerified: params.isEmailVerified ?? true,
-    },
+    // Deliberately empty. This branch used to rewrite `passwordHash`, so re-running the seed
+    // against a database where the address already existed silently reset that account's
+    // password to the seeded value. Seeding must be able to run twice without changing a
+    // credential it did not create.
+    update: {},
     create: {
       name: params.name,
       email: params.email,
@@ -34,25 +36,30 @@ async function upsertUser(params: {
 }
 
 async function main() {
+  // Passwords come from the environment, with no defaults — see scripts/seed-guard.ts.
+  const buyerPassword = requiredPassword('SEED_BUYER_PASSWORD');
+  const sellerPassword = requiredPassword('SEED_SELLER_PASSWORD');
+  const adminPassword = requiredPassword('SEED_ADMIN_PASSWORD');
+
   const buyer = await upsertUser({
     name: 'Sawera Noor',
     email: 'sawera@gmail.com',
     role: UserRole.BUYER,
-    password: 'password123',
+    password: buyerPassword,
   });
 
   const seller = await upsertUser({
     name: 'Ahmed Raza',
     email: 'ahmed@gmail.com',
     role: UserRole.SELLER,
-    password: 'password123',
+    password: sellerPassword,
   });
 
   await upsertUser({
     name: 'Admin BidVault',
     email: 'admin@bidvault.com',
     role: UserRole.ADMIN,
-    password: 'admin123',
+    password: adminPassword,
   });
 
   const listing = await prisma.listing.upsert({
