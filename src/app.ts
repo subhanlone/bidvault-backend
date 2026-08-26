@@ -16,6 +16,7 @@ import { maintenanceGuard } from './middleware/maintenance.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
 import { responseContract } from './middleware/response-contract.js';
 import { ok } from './utils/response.js';
+import { asyncHandler } from './utils/async-handler.js';
 import { prisma } from './db/prisma.js';
 import { probeDatabase, probeRedis } from './services/health.service.js';
 import { document } from './openapi/document.js';
@@ -51,7 +52,7 @@ export function createApp() {
   // Wraps res.json for everything below, so each response is checked against the schema
   // openapi.json publishes for it. Must sit above the routes to intercept their handlers.
   app.use(responseContract());
-  app.use(maintenanceGuard);
+  app.use(asyncHandler(maintenanceGuard));
 
   // Liveness, with dependency state reported rather than enforced.
   //
@@ -64,50 +65,42 @@ export function createApp() {
   //
   // So: the status code answers "is this process alive", the body answers "and how are its
   // dependencies". A caller that needs readiness reads `dependencies`.
-  app.get('/api/v1/health', async (_req, res, next) => {
-    try {
-      const [database, redis] = await Promise.all([probeDatabase(), probeRedis()]);
-      ok(res, {
-        status: 'ok',
-        service: 'bidvault-backend',
-        version: document.info.version,
-        commit: env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local',
-        dependencies: { database, redis },
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
+  app.get('/api/v1/health', asyncHandler(async (_req, res) => {
+    const [database, redis] = await Promise.all([probeDatabase(), probeRedis()]);
+    ok(res, {
+      status: 'ok',
+      service: 'bidvault-backend',
+      version: document.info.version,
+      commit: env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local',
+      dependencies: { database, redis },
+    });
+  }));
 
-  app.get('/api/v1/stats', async (_req, res, next) => {
-    try {
-      const [userCount, activeAuctionCount, txSum, listingCount, completedSalesCount] =
-        await Promise.all([
-          prisma.user.count(),
-          prisma.auction.count({ where: { status: 'ACTIVE' } }),
-          // COMPLETED only — a transaction row exists from the moment an auction closes,
-          // long before (and whether or not) the winner actually pays.
-          prisma.auctionTransaction.aggregate({
-            where: { status: 'COMPLETED' },
-            _sum: { finalAmount: true },
-          }),
-          // Feeds the public stat panels. They previously padded themselves out with
-          // invented figures ("4.9/5 satisfaction", "99% satisfaction", "99.9% uptime")
-          // that nothing measured; these are real counts so every tile traces to a query.
-          prisma.listing.count({ where: { status: 'APPROVED' } }),
-          prisma.auctionTransaction.count({ where: { status: 'COMPLETED' } }),
-        ]);
-      ok(res, {
-        userCount,
-        activeAuctionCount,
-        transactionTotal: txSum._sum.finalAmount ?? 0,
-        listingCount,
-        completedSalesCount,
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
+  app.get('/api/v1/stats', asyncHandler(async (_req, res) => {
+    const [userCount, activeAuctionCount, txSum, listingCount, completedSalesCount] =
+      await Promise.all([
+        prisma.user.count(),
+        prisma.auction.count({ where: { status: 'ACTIVE' } }),
+        // COMPLETED only — a transaction row exists from the moment an auction closes,
+        // long before (and whether or not) the winner actually pays.
+        prisma.auctionTransaction.aggregate({
+          where: { status: 'COMPLETED' },
+          _sum: { finalAmount: true },
+        }),
+        // Feeds the public stat panels. They previously padded themselves out with
+        // invented figures ("4.9/5 satisfaction", "99% satisfaction", "99.9% uptime")
+        // that nothing measured; these are real counts so every tile traces to a query.
+        prisma.listing.count({ where: { status: 'APPROVED' } }),
+        prisma.auctionTransaction.count({ where: { status: 'COMPLETED' } }),
+      ]);
+    ok(res, {
+      userCount,
+      activeAuctionCount,
+      transactionTotal: txSum._sum.finalAmount ?? 0,
+      listingCount,
+      completedSalesCount,
+    });
+  }));
 
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/auctions', auctionRoutes);

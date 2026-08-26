@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
-import { z } from 'zod';
 import type { Request } from 'express';
 import type { UserRole } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';

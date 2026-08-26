@@ -132,20 +132,7 @@ function p(text: string): string {
   return `<p style="margin:0 0 16px;color:#475569;font-size:14px;line-height:1.6;">${text}</p>`;
 }
 
-function badge(text: string, color = '#2563eb'): string {
-  return `<span style="display:inline-block;background-color:${color};color:#ffffff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:4px;letter-spacing:0.3px;">${text}</span>`;
-}
 
-function ctaButton(label: string, href: string): string {
-  return `
-    <table width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0 8px;">
-      <tr>
-        <td>
-          <a href="${href}" style="display:inline-block;background-color:#2563eb;color:#ffffff;font-size:13px;font-weight:700;padding:12px 24px;border-radius:6px;text-decoration:none;">${label}</a>
-        </td>
-      </tr>
-    </table>`;
-}
 
 function divider(): string {
   return `<hr style="border:none;border-top:1px solid #f1f5f9;margin:20px 0;">`;

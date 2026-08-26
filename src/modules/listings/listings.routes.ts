@@ -3,7 +3,6 @@ import { Router } from 'express';
 import { ItemCondition, Prisma } from '@prisma/client';
 import type { Server } from 'socket.io';
 import { v2 as cloudinary } from 'cloudinary';
-import { z } from 'zod';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
@@ -96,7 +95,7 @@ async function approveOneListing(
           reservePrice: listing.reservePrice,
           minIncrement: listing.minIncrement,
           currentBid: listing.startPrice,
-          attributes: (listing.attributes ?? undefined) as Prisma.InputJsonValue | undefined,
+          attributes: listing.attributes ?? undefined,
           startTime,
           endTime,
           status: auctionStatus,

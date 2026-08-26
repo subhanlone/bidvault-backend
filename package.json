@@ -21,7 +21,8 @@
     "api:verify": "tsx scripts/verify-contract.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:seed": "tsx prisma/seed.ts",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -41,6 +42,7 @@
     "zod-openapi": "^6.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
@@ -48,10 +50,13 @@
     "@types/morgan": "^1.9.9",
     "@types/node": "^22.15.31",
     "@types/supertest": "^7.2.1",
+    "eslint": "^10.9.1",
+    "globals": "^17.11.0",
     "prisma": "^6.19.3",
     "supertest": "^7.2.2",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
+    "typescript-eslint": "^8.68.0",
     "vitest": "^4.1.11"
   }
 }

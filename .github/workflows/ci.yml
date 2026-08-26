@@ -81,6 +81,12 @@ jobs:
 
       - run: npm run build
 
+      # Type-aware linting. `tsc` does not catch a floating promise, and that class of defect
+      # is what this repo has actually been bitten by — an async socket listener whose
+      # rejection took the process down, audit writes dropped by `.catch(() => {})`. The
+      # config's `no-floating-promises` and `no-misused-promises` are the reason it exists.
+      - run: npm run lint
+
       # Nothing audited the dependency tree until now, which is how a high-severity
       # advisory appeared on 2026-08-16 and sat unnoticed. This fails on anything not
       # recorded in audit-allowlist.json, and equally on a recorded entry that no longer
