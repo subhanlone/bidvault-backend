@@ -23,6 +23,16 @@ import { document } from './openapi/document.js';
 export function createApp() {
   const app = express();
 
+  // Railway terminates TLS at its edge and forwards over an internal hop, so without this
+  // `req.ip` is the proxy's address and X-Forwarded-For is ignored. Everything that records
+  // or keys off a client address is then wrong: RefreshToken.ipAddress stores the same few
+  // infrastructure IPs for every session, and any IP-based rate limit would bucket the whole
+  // world under one key — express-rate-limit v7 refuses to start when it detects that.
+  //
+  // A hop count rather than `true`: trusting the header outright lets a client spoof its own
+  // address by sending X-Forwarded-For. 1 = trust exactly the Railway edge.
+  app.set('trust proxy', 1);
+
   app.use(
     cors({
       origin: (origin, callback) => {
