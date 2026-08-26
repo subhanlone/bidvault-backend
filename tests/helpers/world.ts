@@ -21,6 +21,23 @@ export interface World {
   buyer: { id: string; email: string; token: string; refreshToken: string };
   seller: { id: string; email: string; token: string };
   admin: { id: string; email: string; token: string };
+  /**
+   * A second buyer and seller, each owning their own rows.
+   *
+   * Without them "can this user reach another user's data" is not expressible: with one user
+   * per role, every owner-scoped route trivially passes because the only row belongs to the
+   * caller. tests/authz.test.ts uses these for the cross-tenant half of its table.
+   */
+  otherBuyer: { id: string; email: string; token: string };
+  otherSeller: { id: string; email: string; token: string };
+  /** Owned by otherBuyer — reading or mutating it as `buyer` must fail. */
+  otherBuyerNotificationId: string;
+  /** otherBuyer won this; create-intent and reviews on it as `buyer` must be refused. */
+  otherBuyerTransactionId: string;
+  /** Owned by otherSeller — must not appear in `seller`'s own listings. */
+  otherSellerListingId: string;
+  /** Watched by otherBuyer only. */
+  otherBuyerWatchedAuctionId: string;
   /** PENDING, awaiting moderation — the subject of approve/reject. */
   pendingListingId: string;
   /** APPROVED, with a live auction attached. */
@@ -33,13 +50,17 @@ export interface World {
   notificationId: string;
 }
 
+let cnicCounter = 0;
+
 async function makeUser(name: string, email: string, role: 'BUYER' | 'SELLER' | 'ADMIN') {
+  // Unique per *user*, not per role: there are now two buyers and two sellers, and cnic is
+  // a unique column. Format-valid; register's own test supplies its own.
+  const serial = String(++cnicCounter).padStart(5, '0');
   return prisma.user.create({
     data: {
       name,
       email,
-      // Unique per role and format-valid; register's own test supplies its own.
-      cnic: `${role === 'BUYER' ? '11111' : role === 'SELLER' ? '22222' : '33333'}-1234567-1`,
+      cnic: `${serial}-1234567-1`,
       passwordHash: await bcrypt.hash(PASSWORD, 10),
       role,
       isEmailVerified: true,
@@ -56,10 +77,13 @@ export async function seedWorld(): Promise<World> {
   // read minListingPrice gets a figure that is no longer stored anywhere.
   invalidateSettingsCache();
 
-  const [buyer, seller, admin] = await Promise.all([
+  cnicCounter = 0;
+  const [buyer, seller, admin, otherBuyer, otherSeller] = await Promise.all([
     makeUser('Test Buyer', 'buyer@test.local', 'BUYER'),
     makeUser('Test Seller', 'seller@test.local', 'SELLER'),
     makeUser('Test Admin', 'admin@test.local', 'ADMIN'),
+    makeUser('Other Buyer', 'other-buyer@test.local', 'BUYER'),
+    makeUser('Other Seller', 'other-seller@test.local', 'SELLER'),
   ]);
 
   const pending = await prisma.listing.create({
@@ -179,6 +203,83 @@ export async function seedWorld(): Promise<World> {
 
   await prisma.watchlist.create({ data: { userId: buyer.id, auctionId: live.id } });
 
+  // ---- rows owned by the second buyer/seller, for the cross-tenant tests ----------------
+
+  const otherSellerListing = await prisma.listing.create({
+    data: {
+      listingCode: 'TEST-OTHER-1',
+      sellerId: otherSeller.id,
+      title: 'Another Seller Listing',
+      category: 'Books & Education',
+      condition: 'USED',
+      description: 'Owned by a different seller; must not appear in the first seller list.',
+      startPrice: 3_000,
+      minIncrement: 100,
+      durationDays: 2,
+      status: 'PENDING',
+    },
+  });
+
+  const otherClosedListing = await prisma.listing.create({
+    data: {
+      listingCode: 'TEST-OTHER-2',
+      sellerId: otherSeller.id,
+      title: 'Another Closed Auction',
+      category: 'Sports & Fitness',
+      condition: 'NEW',
+      description: 'Closed and won by the second buyer.',
+      startPrice: 4_000,
+      minIncrement: 200,
+      durationDays: 1,
+      status: 'APPROVED',
+    },
+  });
+
+  const otherClosed = await prisma.auction.create({
+    data: {
+      listingId: otherClosedListing.id,
+      sellerId: otherSeller.id,
+      title: otherClosedListing.title,
+      category: otherClosedListing.category,
+      condition: otherClosedListing.condition,
+      description: otherClosedListing.description,
+      startPrice: otherClosedListing.startPrice,
+      minIncrement: otherClosedListing.minIncrement,
+      currentBid: 9_000,
+      bidCount: 1,
+      status: 'CLOSED',
+      startTime: new Date(now - 48 * 60 * 60 * 1000),
+      endTime: new Date(now - 30 * 60 * 1000),
+    },
+  });
+
+  await prisma.bid.create({
+    data: { auctionId: otherClosed.id, buyerId: otherBuyer.id, amount: 9_000 },
+  });
+
+  // COMPLETED so that a review attempt on it reaches the ownership check rather than
+  // stopping at "complete payment first".
+  const otherTransaction = await prisma.auctionTransaction.create({
+    data: {
+      auctionId: otherClosed.id,
+      winnerId: otherBuyer.id,
+      sellerId: otherSeller.id,
+      finalAmount: 9_000,
+      status: 'COMPLETED',
+    },
+  });
+
+  const otherNotification = await prisma.notification.create({
+    data: {
+      userId: otherBuyer.id,
+      type: 'AUCTION_WON',
+      title: 'You won an auction',
+      message: 'Belongs to the second buyer.',
+    },
+  });
+
+  await prisma.watchlist.create({ data: { userId: otherBuyer.id, auctionId: otherClosed.id } });
+
   const token = (u: { id: string; role: string }) =>
     signAccessToken({ sub: u.id, role: u.role as 'BUYER' | 'SELLER' | 'ADMIN' });
 
@@ -191,6 +292,12 @@ export async function seedWorld(): Promise<World> {
     },
     seller: { id: seller.id, email: seller.email, token: token(seller) },
     admin: { id: admin.id, email: admin.email, token: token(admin) },
+    otherBuyer: { id: otherBuyer.id, email: otherBuyer.email, token: token(otherBuyer) },
+    otherSeller: { id: otherSeller.id, email: otherSeller.email, token: token(otherSeller) },
+    otherBuyerNotificationId: otherNotification.id,
+    otherBuyerTransactionId: otherTransaction.id,
+    otherSellerListingId: otherSellerListing.id,
+    otherBuyerWatchedAuctionId: otherClosed.id,
     pendingListingId: pending.id,
     liveAuctionId: live.id,
     bidId: bid.id,
