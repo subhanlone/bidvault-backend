@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { AuctionStatus, Prisma } from '@prisma/client';
-import { z } from 'zod';
 import type { Server } from 'socket.io';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';

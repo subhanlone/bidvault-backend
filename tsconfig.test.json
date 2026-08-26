@@ -18,6 +18,7 @@
     "src/**/*.d.ts",
     "tests/**/*.ts",
     "scripts/**/*.ts",
+    "prisma/*.ts",
     "vitest.config.ts"
   ]
 }

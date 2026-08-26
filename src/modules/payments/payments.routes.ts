@@ -127,7 +127,7 @@ router.post(
     }
 
     if (event.type === 'payment_intent.succeeded') {
-      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      const paymentIntent = event.data.object;
 
       const tx = await prisma.auctionTransaction.findUnique({
         where: { stripePaymentIntentId: paymentIntent.id },
@@ -155,7 +155,7 @@ router.post(
     }
 
     if (event.type === 'payment_intent.payment_failed') {
-      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      const paymentIntent = event.data.object;
 
       await prisma.auctionTransaction.updateMany({
         where: { stripePaymentIntentId: paymentIntent.id },

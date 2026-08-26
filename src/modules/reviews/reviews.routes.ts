@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { z } from 'zod';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';

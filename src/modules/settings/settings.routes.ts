@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';

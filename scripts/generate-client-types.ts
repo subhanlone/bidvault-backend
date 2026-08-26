@@ -63,8 +63,15 @@ const refName = (ref: string): string => {
   return name;
 };
 
-const quote = (v: unknown): string =>
-  typeof v === 'string' ? JSON.stringify(v) : v === null ? 'null' : String(v);
+const quote = (v: unknown): string => {
+  if (typeof v === 'string') return JSON.stringify(v);
+  if (v === null || v === undefined) return 'null';
+  // Only primitives have a meaningful bare rendering. Anything else -- an object, an array,
+  // a symbol -- would come out of String() as "[object Object]" or throw, emitting a literal
+  // that compiles but describes nothing. JSON is the honest rendering for those.
+  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint') return String(v);
+  return JSON.stringify(v) ?? 'null';
+};
 
 /** A TS identifier can be written bare; anything else needs quoting as a property key. */
 const propKey = (k: string): string => (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k));
