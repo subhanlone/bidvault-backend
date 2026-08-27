@@ -10,11 +10,18 @@
  * The CLI is invoked through its JavaScript entry point rather than the `prisma` shim in
  * .bin: on Windows that shim is a .cmd, which Node refuses to spawn without a shell, and
  * reaching for `shell: true` would put the connection string through a command line.
+ *
+ * That entry point is located through the package's `main` field rather than by resolving
+ * the package name. `require.resolve('prisma')` goes through the `exports` map, and in
+ * prisma 6.19.3 that map points `.` at `./build/types.js` — a file the published package
+ * does not contain. The result was `Cannot find module …/prisma/build/types.js`, so this
+ * script failed outright and the documented way to migrate the test database did not work.
+ * `main` points at `./build/index.js`, which does exist.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const envFile = resolve(import.meta.dirname, '..', '.env.test');
 if (!existsSync(envFile)) {
@@ -45,7 +52,18 @@ if (!name.endsWith('_test')) {
   process.exit(1);
 }
 
-const prismaCli = createRequire(import.meta.url).resolve('prisma');
+const require_ = createRequire(import.meta.url);
+const prismaPkgPath = require_.resolve('prisma/package.json');
+const prismaPkg = JSON.parse(readFileSync(prismaPkgPath, 'utf8')) as { main?: string };
+if (!prismaPkg.main) {
+  console.error('The prisma package has no "main" field — cannot locate its CLI entry point.');
+  process.exit(1);
+}
+const prismaCli = join(dirname(prismaPkgPath), prismaPkg.main);
+if (!existsSync(prismaCli)) {
+  console.error(`Prisma's CLI entry point is not where its package.json says: ${prismaCli}`);
+  process.exit(1);
+}
 const result = spawnSync(process.execPath, [prismaCli, 'migrate', 'deploy'], {
   stdio: 'inherit',
   env: process.env,
