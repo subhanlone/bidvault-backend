@@ -231,6 +231,15 @@ export const WonTransactionDto = z
     sellerName: z.string(),
     finalAmount: z.number().int(),
     status: TransactionStatus,
+    /**
+     * Why the most recent payment attempt failed, absent when none has.
+     *
+     * A declined card no longer moves `status` to FAILED — that made one decline permanent,
+     * since create-intent refused anything that was not PENDING. The transaction stays
+     * PENDING and retryable, and this carries the explanation the buyer needs to act on.
+     * Cleared when a fresh attempt starts.
+     */
+    lastPaymentError: z.string().optional(),
     createdAt: isoDateTime,
     reviewed: z.boolean(),
   })
