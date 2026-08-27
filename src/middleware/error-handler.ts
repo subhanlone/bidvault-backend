@@ -1,11 +1,41 @@
 import type { NextFunction, Request, Response } from 'express';
+import crypto from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { z, ZodError } from 'zod';
+import { AppError } from '../errors/app-error.js';
 
 export function notFound(_req: Request, res: Response): void {
   res.status(404).json({ success: false, error: 'Route not found' });
 }
 
-export function errorHandler(error: unknown, _req: Request, res: Response, _next: NextFunction): void {
+function stripeType(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object' || !('type' in error)) return undefined;
+  return typeof error.type === 'string' ? error.type : undefined;
+}
+
+function redact(text: string): string {
+  return text
+    .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer [REDACTED]')
+    .replace(/\b(?:sk|rk|pk|whsec)_(?:test|live)?_?[A-Za-z0-9]+\b/g, '[REDACTED_SECRET]')
+    .replace(/\bpi_[A-Za-z0-9]+_secret_[A-Za-z0-9]+\b/g, '[REDACTED_CLIENT_SECRET]')
+    .replace(/\b\d{5}-\d{7}-\d\b/g, '[REDACTED_CNIC]');
+}
+
+function safeLogError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    const withCode = error as Error & { code?: unknown; type?: unknown };
+    return {
+      name: error.name,
+      message: redact(error.message),
+      ...(typeof withCode.code === 'string' && { code: withCode.code }),
+      ...(typeof withCode.type === 'string' && { type: withCode.type }),
+      ...(error.stack && { stack: redact(error.stack) }),
+    };
+  }
+  return { value: redact(String(error)) };
+}
+
+export function errorHandler(error: unknown, req: Request, res: Response, _next: NextFunction): void {
   if (error instanceof ZodError) {
     res.status(400).json({
       success: false,
@@ -16,10 +46,38 @@ export function errorHandler(error: unknown, _req: Request, res: Response, _next
     return;
   }
 
-  if (error instanceof Error) {
-    res.status(500).json({ success: false, error: error.message });
+  if (error instanceof AppError) {
+    res.status(error.status).json({ success: false, error: error.message, code: error.code });
     return;
   }
 
-  res.status(500).json({ success: false, error: 'Internal server error' });
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === 'P2002') {
+      res.status(409).json({ success: false, error: 'A record with these details already exists.' });
+      return;
+    }
+    if (error.code === 'P2025') {
+      res.status(404).json({ success: false, error: 'Resource not found.' });
+      return;
+    }
+  }
+
+  const type = stripeType(error);
+  if (type === 'StripeCardError') {
+    res.status(402).json({ success: false, error: 'Payment was declined.' });
+    return;
+  }
+  if (type === 'StripeConnectionError' || type === 'StripeRateLimitError') {
+    res.status(503).json({ success: false, error: 'Payment service temporarily unavailable.' });
+    return;
+  }
+
+  const requestId = crypto.randomUUID();
+  res.setHeader('X-Request-Id', requestId);
+  console.error(`[error] ${requestId}`, {
+    method: req.method,
+    route: req.originalUrl,
+    error: safeLogError(error),
+  });
+  res.status(500).json({ success: false, error: 'Internal server error', requestId });
 }
