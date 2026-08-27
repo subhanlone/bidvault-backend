@@ -253,19 +253,44 @@ router.post(
     if (event.type === 'payment_intent.succeeded') {
       const paymentIntent = event.data.object;
 
-      const tx = await prisma.auctionTransaction.findUnique({
+      const include = { winner: true, seller: true, auction: true } as const;
+
+      let tx = await prisma.auctionTransaction.findUnique({
         where: { stripePaymentIntentId: paymentIntent.id },
-        include: {
-          winner: true,
-          seller: true,
-          auction: true,
-        },
+        include,
       });
 
+      // Second way in, when the stored id does not match.
+      //
+      // `metadata.transactionId` is set on every intent this service creates but was only
+      // ever logged. It matters because the stored id is not a reliable key on its own: it
+      // is overwritten whenever a superseded intent is replaced — which now happens
+      // deliberately, when a stale intent carries the pre-BV-001 amount. A payment confirmed
+      // against the older intent would otherwise arrive here, match nothing, and be
+      // acknowledged with a 200. Money taken, transaction still PENDING, nothing but a log
+      // line. That is the exact shape of the money-loss path BV-005 describes, reached from
+      // the other end.
+      //
+      // The amount check below still runs, so resolving by metadata cannot short-circuit
+      // verification — it only ensures the right row is the one being verified.
       if (!tx) {
-        // An intent nobody is waiting on. Worth a line either way: before the row lock on
-        // create-intent this was the shape of a real money-loss bug — two intents created for
-        // one transaction, the buyer paying the one the row no longer points at.
+        const fromMetadata = paymentIntent.metadata?.transactionId;
+        if (fromMetadata) {
+          tx = await prisma.auctionTransaction.findUnique({ where: { id: fromMetadata }, include });
+          if (tx) {
+            console.warn('[payments] intent resolved by metadata, not by stored id', {
+              paymentIntent: paymentIntent.id,
+              transactionId: tx.id,
+              storedIntent: tx.stripePaymentIntentId,
+            });
+          }
+        }
+      }
+
+      if (!tx) {
+        // Genuinely nobody's: an intent from another environment sharing the webhook secret,
+        // or one whose transaction has since been deleted. Logged rather than swallowed —
+        // this is the last place a lost payment could still be noticed.
         console.error('[payments] succeeded event matched no transaction', {
           paymentIntent: paymentIntent.id,
           metadataTransactionId: paymentIntent.metadata?.transactionId,

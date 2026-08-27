@@ -348,6 +348,45 @@ describe('the webhook checks what actually arrived', () => {
     expect(email.sendPaymentCompletedEmail).toHaveBeenCalledTimes(1);
   });
 
+  it('resolves the transaction by metadata when the stored id has moved on', async () => {
+    // The stored id is not a reliable key on its own — it is overwritten whenever a
+    // superseded intent is replaced, which now happens deliberately when a stale one carries
+    // the pre-BV-001 amount. A payment confirmed against the older intent arrives here and
+    // matches nothing. Without the metadata fallback it would be acknowledged with a 200:
+    // money taken, transaction still PENDING, nothing but a log line.
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: { stripePaymentIntentId: 'pi_the_newer_one' },
+    });
+
+    const res = await postWebhook('payment_intent.succeeded', {
+      id: 'pi_the_older_one',              // no row points at this any more
+      amount_received: 800_000,
+      currency: 'pkr',
+      metadata: { transactionId: w.transactionId },
+    });
+
+    expect(res.status).toBe(200);
+    expect((await reload(w.transactionId)).status).toBe('COMPLETED');
+  });
+
+  it('still verifies the amount when it resolved by metadata', async () => {
+    // The fallback must not become a way around the check it exists alongside.
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: { stripePaymentIntentId: 'pi_the_newer_one' },
+    });
+
+    await postWebhook('payment_intent.succeeded', {
+      id: 'pi_the_older_one',
+      amount_received: 8_000,               // rupees, not paisa
+      currency: 'pkr',
+      metadata: { transactionId: w.transactionId },
+    });
+
+    expect((await reload(w.transactionId)).status).toBe('PENDING');
+  });
+
   it('rejects an unsigned or wrongly-signed payload', async () => {
     const res = await request(app)
       .post(api('/payments/webhook'))
