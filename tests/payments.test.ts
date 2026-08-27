@@ -23,8 +23,20 @@ import request from 'supertest';
  * `webhooks` keeps the real implementation, so signature verification is genuinely
  * exercised rather than waved through — a webhook test that skipped it would prove nothing.
  */
+interface FakeIntent {
+  id: string;
+  client_secret: string;
+  status: string;
+  amount: number;
+  currency: string;
+}
+
 const created: Array<{ params: Record<string, unknown>; options?: Record<string, unknown> }> = [];
-let retrieveStatus = 'requires_payment_method';
+/** Intents this double has minted, so `retrieve` answers with the real one, as Stripe does. */
+const intents = new Map<string, FakeIntent>();
+const canceled: string[] = [];
+/** Applied to the *next* retrieve, for exercising a stale or terminal prior intent. */
+let retrieveOverride: Partial<FakeIntent> | null = null;
 let createBarrier: Promise<void> | null = null;
 let createShouldThrow: Error | null = null;
 
@@ -50,13 +62,34 @@ vi.mock('stripe', async () => {
         if (createBarrier) await createBarrier;
         if (createShouldThrow) throw createShouldThrow;
         const id = `pi_test_${++seq}`;
-        return { id, client_secret: `${id}_secret`, status: 'requires_payment_method' };
+        const intent: FakeIntent = {
+          id,
+          client_secret: `${id}_secret`,
+          status: 'requires_payment_method',
+          amount: params.amount as number,
+          currency: params.currency as string,
+        };
+        intents.set(id, intent);
+        return intent;
       }),
-      retrieve: vi.fn(async (id: string) => ({
-        id,
-        client_secret: `${id}_secret`,
-        status: retrieveStatus,
-      })),
+      // Answers with the intent that was actually minted, so a reuse test exercises the real
+      // comparison rather than a hand-written stub that always agrees.
+      retrieve: vi.fn(async (id: string) => {
+        const base: FakeIntent = intents.get(id) ?? {
+          id,
+          client_secret: `${id}_secret`,
+          status: 'requires_payment_method',
+          amount: 800_000,
+          currency: 'pkr',
+        };
+        return { ...base, ...(retrieveOverride ?? {}) };
+      }),
+      cancel: vi.fn(async (id: string) => {
+        canceled.push(id);
+        const existing = intents.get(id);
+        if (existing) existing.status = 'canceled';
+        return { ...(existing ?? { id }), status: 'canceled' };
+      }),
     };
   }
   return { ...actual, default: MockStripe };
@@ -109,7 +142,9 @@ beforeAll(async () => {
 beforeEach(async () => {
   w = await seedWorld();
   created.length = 0;
-  retrieveStatus = 'requires_payment_method';
+  intents.clear();
+  canceled.length = 0;
+  retrieveOverride = null;
   createBarrier = null;
   createShouldThrow = null;
   vi.clearAllMocks();
@@ -198,13 +233,53 @@ describe('concurrent create-intent calls', () => {
     expect(created).toHaveLength(1);
   });
 
+  it('refuses to reuse an intent created for the wrong amount', async () => {
+    // The case a consistency pass over Phase 1 caught, and the reason it matters: every
+    // PaymentIntent created before BV-001 was fixed carries the *unconverted* rupee figure.
+    // Reusing one would charge 1/100th of the debt with the corrected code in place — so the
+    // Critical bug would survive exactly for the transactions that already had an intent,
+    // which is the likeliest population to exist in production.
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: { stripePaymentIntentId: 'pi_legacy_wrong_amount' },
+    });
+    retrieveOverride = { amount: 8_000 }; // rupees, as the old code sent them
+
+    const res = await request(app)
+      .post(api('/payments/create-intent'))
+      .set(bearer(w.buyer.token))
+      .send({ transactionId: w.transactionId });
+
+    expect(res.status).toBe(200);
+    // A fresh intent, for the right amount.
+    expect(created).toHaveLength(1);
+    expect(created[0].params.amount).toBe(800_000);
+    // And the stale one is cancelled, so a client secret still sitting in a browser cannot
+    // be confirmed for the wrong figure afterwards.
+    expect(canceled).toContain('pi_legacy_wrong_amount');
+  });
+
+  it('refuses to reuse an intent in the wrong currency', async () => {
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: { stripePaymentIntentId: 'pi_wrong_currency' },
+    });
+    retrieveOverride = { amount: 800_000, currency: 'usd' };
+
+    await request(app).post(api('/payments/create-intent')).set(bearer(w.buyer.token))
+      .send({ transactionId: w.transactionId }).expect(200);
+
+    expect(created).toHaveLength(1);
+    expect(canceled).toContain('pi_wrong_currency');
+  });
+
   it('mints a fresh intent when the stored one was canceled', async () => {
     await request(app).post(api('/payments/create-intent')).set(bearer(w.buyer.token))
       .send({ transactionId: w.transactionId }).expect(200);
 
     // A canceled intent cannot be confirmed again; returning its client_secret would fail
     // inside Stripe.js with a message meaning nothing to the buyer.
-    retrieveStatus = 'canceled';
+    retrieveOverride = { status: 'canceled' };
 
     await request(app).post(api('/payments/create-intent')).set(bearer(w.buyer.token))
       .send({ transactionId: w.transactionId }).expect(200);
@@ -314,7 +389,7 @@ describe('a declined card', () => {
     });
     expect((await reload(w.transactionId)).lastPaymentError).toBe('Your card was declined.');
 
-    retrieveStatus = 'canceled'; // the declined intent is not reusable
+    retrieveOverride = { status: 'canceled' }; // the declined intent is not reusable
     const retry = await request(app)
       .post(api('/payments/create-intent'))
       .set(bearer(w.buyer.token))

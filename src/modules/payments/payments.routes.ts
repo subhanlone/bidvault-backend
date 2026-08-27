@@ -142,12 +142,41 @@ router.post(
 
         if (row.stripePaymentIntentId) {
           const existing = await stripe.paymentIntents.retrieve(row.stripePaymentIntentId);
-          // A previous intent is only reusable while it is still awaiting payment. One that
-          // was canceled, or that already succeeded, cannot be confirmed again — returning
-          // its client_secret would fail inside Stripe.js with a message meaning nothing to
-          // the buyer. Fall through and mint a fresh one instead.
-          if (existing.status !== 'canceled' && existing.status !== 'succeeded') {
+
+          // Reusable only if all three hold.
+          //
+          // The amount check is not defensive padding: every PaymentIntent created before
+          // BV-001 was fixed carries the *unconverted* rupee figure. Returning one of those
+          // client secrets would charge 1/100th of the debt with the corrected code in place
+          // — so the Critical bug would survive precisely for the transactions that already
+          // had an intent, which is the likeliest population to exist in production.
+          //
+          // A canceled or already-succeeded intent cannot be confirmed again either;
+          // returning its secret fails inside Stripe.js with a message meaning nothing to
+          // the buyer.
+          const reusable =
+            existing.status !== 'canceled' &&
+            existing.status !== 'succeeded' &&
+            existing.amount === toMinorUnits(row.finalAmount) &&
+            existing.currency === CURRENCY;
+
+          if (reusable) {
             return { kind: 'ok' as const, clientSecret: existing.client_secret };
+          }
+
+          // Not reusable, and it must not be left confirmable: the buyer's browser may still
+          // hold its client secret, and a stale intent for the wrong amount is exactly what
+          // this route exists to stop being paid. Cancelling is best-effort — an intent
+          // already in a terminal state cannot be cancelled, and that is fine.
+          if (existing.status !== 'canceled' && existing.status !== 'succeeded') {
+            try {
+              await stripe.paymentIntents.cancel(existing.id);
+            } catch (err) {
+              console.warn('[payments] could not cancel superseded intent', {
+                paymentIntent: existing.id,
+                error: err instanceof Error ? err.message : err,
+              });
+            }
           }
         }
 
