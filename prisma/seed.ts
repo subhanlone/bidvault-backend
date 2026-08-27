@@ -1,5 +1,5 @@
 import { PrismaClient, AuctionStatus, ListingStatus, UserRole, ItemCondition } from '@prisma/client';
-import bcrypt from 'bcryptjs';
+import { hash } from '@node-rs/bcrypt';
 import { assertSeedTarget, requiredPassword } from '../scripts/seed-guard.js';
 
 assertSeedTarget('prisma:seed');
@@ -17,7 +17,7 @@ async function upsertUser(params: {
   password: string;
   isEmailVerified?: boolean;
 }) {
-  const passwordHash = await bcrypt.hash(params.password, 10);
+  const passwordHash = await hash(params.password, 12);
   return prisma.user.upsert({
     where: { email: params.email },
     // Deliberately empty. This branch used to rewrite `passwordHash`, so re-running the seed
