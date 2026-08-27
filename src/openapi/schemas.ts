@@ -330,6 +330,8 @@ export const UploadSignatureDto = z
     cloudName: z.string(),
     folder: z.string(),
     format: z.string(),
+    publicId: z.string(),
+    allowedFormats: z.string(),
   })
   .meta({ id: 'UploadSignature' });
 

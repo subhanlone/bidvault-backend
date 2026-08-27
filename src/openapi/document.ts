@@ -54,6 +54,15 @@ const unauthorized = errBody('Missing, invalid or expired access token');
 const forbidden = errBody('Authenticated but the wrong role for this route');
 const notFound = errBody('Not found');
 
+/**
+ * Declared only on the routes carrying their own limit, not on all forty-odd operations.
+ *
+ * A global 300/minute per address applies to everything and is described in `info.description`
+ * instead — repeating it on every operation would bury the limits that are specific enough to
+ * be worth designing a client around.
+ */
+const tooManyRequests = errBody('Rate limit exceeded; retry after the window resets');
+
 const jsonRequest = (schema: ZodType) => ({
   content: { [JSON_CT]: { schema } },
 });
@@ -70,14 +79,34 @@ const documentInput = {
   openapi: '3.1.0',
   info: {
     title: 'BidVault API',
-    // Bumped 2026-08-21. See COMPATIBILITY.md — a bump is how a change oasdiff calls
-    // breaking is declared deliberate. This one: create-intent's transactionId gained
-    // minLength 1 when its schema moved into requests.ts. The handler had always rejected
-    // an empty value, so no response changed; the document caught up with the server.
-    version: '1.1.0',
+    // Bumped 2026-08-27, major. See COMPATIBILITY.md — a bump is how a change oasdiff calls
+    // breaking is declared deliberate, and the level is a judgment the tool cannot make.
+    //
+    // This one: every money field gained a ceiling of 2,000,000,000 — bid `amount`, and
+    // `startPrice`, `reservePrice` and `minIncrement` on a listing. Previously they were
+    // bounded only by JavaScript's safe-integer range, while the columns behind them are
+    // int32; a value above 2,147,483,647 reached Postgres and failed there as a 500 instead
+    // of a validation error.
+    //
+    // Major rather than minor, deliberately. The band between 2,000,000,001 and 2,147,483,647
+    // did fit in the column and did succeed, so this is not the document catching up with the
+    // server — it is the server accepting strictly less than it used to. No real listing is
+    // priced at two billion rupees and the practical risk is nil, but "no caller would do
+    // that" is not the same claim as "no caller could", and COMPATIBILITY.md is explicit that
+    // the second is what minor asserts.
+    //
+    // Also in this version, all additive: 429 declared on the four rate-limited operations,
+    // 403 on login (EMAIL_NOT_VERIFIED, previously served but undocumented), the dead 404 on
+    // verify-email removed now that an unknown address answers the same neutral 400 as a
+    // wrong code, maxLength on password/token/text fields, and UploadSignature gaining
+    // publicId and allowedFormats.
+    version: '2.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
-      'and serves — see backend/src/openapi. Do not hand-edit openapi.json.',
+      'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
+      'Every route is rate limited to 300 requests per minute per client address and answers ' +
+      '429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that ' +
+      'carry a tighter limit of their own declare 429 individually.',
   },
   servers: [
     { url: 'https://bidvault-backend-production.up.railway.app/api/v1', description: 'Production' },
@@ -122,9 +151,10 @@ const documentInput = {
         tags: ['Auth'],
         requestBody: jsonRequest(R.verifyEmailSchema),
         responses: {
+          // No 404: an unknown address answers the same neutral 400 as a wrong code, so that
+          // the response cannot be used to test whether an account exists.
           200: okBody(S.MessageDto, 'Email verified'),
           400: badRequest,
-          404: notFound,
         },
       },
     },
@@ -132,18 +162,27 @@ const documentInput = {
       post: {
         tags: ['Auth'],
         summary: 'Neutral response — does not reveal whether the address exists',
+        description: 'Limited to 3 per hour per address and 10 per hour per client address, ' +
+          'shared with /auth/forgot-password.',
         requestBody: jsonRequest(R.resendVerificationSchema),
-        responses: { 200: okBody(S.OtpIssuedDto, 'Code resent if applicable'), 400: badRequest },
+        responses: {
+          200: okBody(S.OtpIssuedDto, 'Code resent if applicable'),
+          400: badRequest,
+          429: tooManyRequests,
+        },
       },
     },
     '/auth/login': {
       post: {
         tags: ['Auth'],
+        description: 'Limited to 10 attempts per 15 minutes, per client address and per address.',
         requestBody: jsonRequest(R.loginSchema),
         responses: {
           200: okBody(S.SessionDto, 'Signed in'),
           400: badRequest,
           401: errBody('Incorrect email or password'),
+          403: errBody('Email not verified (code EMAIL_NOT_VERIFIED)'),
+          429: tooManyRequests,
         },
       },
     },
@@ -166,8 +205,14 @@ const documentInput = {
       post: {
         tags: ['Auth'],
         summary: 'Neutral response — does not reveal whether the address exists',
+        description: 'Limited to 3 per hour per address and 10 per hour per client address, ' +
+          'shared with /auth/resend-verification.',
         requestBody: jsonRequest(R.forgotSchema),
-        responses: { 200: okBody(S.OtpIssuedDto, 'Reset code sent if applicable'), 400: badRequest },
+        responses: {
+          200: okBody(S.OtpIssuedDto, 'Reset code sent if applicable'),
+          400: badRequest,
+          429: tooManyRequests,
+        },
       },
     },
     '/auth/verify-reset-otp': {
@@ -296,7 +341,17 @@ const documentInput = {
         tags: ['Listings'],
         security: [{ bearerAuth: [] }],
         summary: 'Signed Cloudinary upload params; forces JPEG so HEIC uploads stay viewable',
-        responses: { 200: okBody(S.UploadSignatureDto, 'Upload params'), 401: unauthorized },
+        description:
+          'Limited to 10 per hour per seller. Post exactly the returned `signature`, ' +
+          '`timestamp`, `apiKey`, `folder`, `format`, `publicId` and `allowedFormats` to ' +
+          'Cloudinary — any additional parameter changes the string Cloudinary signs and the ' +
+          'upload is refused with 401.',
+        responses: {
+          200: okBody(S.UploadSignatureDto, 'Upload params'),
+          401: unauthorized,
+          403: forbidden,
+          429: tooManyRequests,
+        },
       },
     },
     '/listings/mine': {
