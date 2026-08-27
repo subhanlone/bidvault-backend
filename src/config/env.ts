@@ -5,6 +5,7 @@ const schema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   CLIENT_ORIGIN: z.string().default('http://localhost:5173'),
   DATABASE_URL: z.string().min(1),
+  DATABASE_CONNECTION_LIMIT: z.coerce.number().int().min(1).max(100).default(10),
   REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
   // Namespaces the BullMQ keyspace. Dev and production have historically shared one
   // Redis instance while pointing at different databases, which let a locally-run
@@ -51,6 +52,28 @@ const parsed = schema.safeParse(process.env);
 
 if (!parsed.success) {
   console.error('Invalid environment variables:', z.flattenError(parsed.error).fieldErrors);
+  process.exit(1);
+}
+
+// The 0 default is right for local development and catastrophic in a deployment.
+//
+// Behind a proxy with `trust proxy` set to 0, `req.ip` is the proxy's address rather than the
+// client's — the same value for everybody. The IP rate limiters (middleware/rate-limit.ts) then
+// share one counter across the entire user base, so the global 300/minute becomes the whole
+// platform's ceiling and the first burst of legitimate traffic locks everyone out. Nothing
+// about that looks like a misconfiguration from the outside; it looks like the API is down.
+//
+// Defaulting silently is what makes it dangerous, so in production the value must be stated.
+// Refusing to boot is the lesser failure: it is immediate, it names its own fix, and it happens
+// before any traffic is served.
+if (parsed.data.NODE_ENV === 'production' && process.env.TRUST_PROXY_HOPS === undefined) {
+  console.error(
+    'TRUST_PROXY_HOPS must be set explicitly when NODE_ENV=production.\n' +
+      '  It is the number of reverse proxies between the client and this process.\n' +
+      '  Railway terminates TLS at its edge and forwards over one internal hop, so 1 is the\n' +
+      '  expected value there. Confirm it after deploying by logging req.ip alongside the\n' +
+      "  x-forwarded-for header: req.ip must be the caller's address, not the edge's.",
+  );
   process.exit(1);
 }
 
