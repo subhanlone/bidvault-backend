@@ -1,7 +1,8 @@
-import bcrypt from 'bcryptjs';
+import { hash } from '@node-rs/bcrypt';
 import { prisma } from '../../src/db/prisma.js';
 import { signAccessToken, signRefreshToken } from '../../src/utils/jwt.js';
 import { invalidateSettingsCache } from '../../src/services/settings.service.js';
+import { resetRateLimits } from '../../src/middleware/rate-limit.js';
 import { resetDatabase } from './db.js';
 
 /**
@@ -61,7 +62,10 @@ async function makeUser(name: string, email: string, role: 'BUYER' | 'SELLER' | 
       name,
       email,
       cnic: `${serial}-1234567-1`,
-      passwordHash: await bcrypt.hash(PASSWORD, 10),
+      // Cost 4 keeps fixture creation fast; production hashing is exercised separately at
+      // cost 12 in phase2-security.test.ts. bcrypt hashes carry their own cost, so login
+      // verifies both without changing application behaviour.
+      passwordHash: await hash(PASSWORD, 4),
       role,
       isEmailVerified: true,
     },
@@ -70,6 +74,13 @@ async function makeUser(name: string, email: string, role: 'BUYER' | 'SELLER' | 
 
 export async function seedWorld(): Promise<World> {
   await resetDatabase();
+
+  // Rate-limit counters are process-global and survive a truncate, so without this a test's
+  // result depends on how many requests ran before it. That is not hypothetical: three
+  // forgot-password calls earlier in the conformance file spent the per-address hourly budget,
+  // and the resend-verification case after them failed with 429 while asserting 200 — a real
+  // failure with a cause several tests away from the assertion that reported it.
+  await resetRateLimits();
 
   // settings.service caches the singleton row in module scope for 10 seconds, and the
   // suite runs longer than that. Without this, a test that writes settings leaves values

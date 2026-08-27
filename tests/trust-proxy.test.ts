@@ -21,6 +21,8 @@
  * entry, not two. Express then counts hops from the app outward across
  * `[socket, ...reversed(X-Forwarded-For)]`. Hence: one proxy -> 1, two proxies -> 2.
  */
+import { spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import express from 'express';
@@ -124,5 +126,52 @@ describe('the app reads the hop count from the environment', () => {
     const app = createApp();
     // The wiring, not the value: whatever env produced is what Express was given.
     expect(app.get('trust proxy')).toBe(env.TRUST_PROXY_HOPS);
+  });
+});
+
+/**
+ * The 0 default is right locally and catastrophic deployed, so production must state the value.
+ *
+ * Behind a proxy with a count of 0, `req.ip` is the proxy for every caller — so the IP rate
+ * limiters share one counter across the whole user base and the global 300/minute becomes the
+ * platform's ceiling. From outside that is indistinguishable from an outage, and nothing in the
+ * logs names the cause. Refusing to boot converts a silent platform-wide failure into an
+ * immediate one that says what to fix.
+ *
+ * Run in a child process because the guard calls process.exit, which would end the test run.
+ */
+describe('production refuses to boot without an explicit hop count', () => {
+  function loadEnvIn(overrides: Record<string, string | undefined>) {
+    const child = { ...process.env, ...overrides };
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) delete child[key];
+    }
+    return spawnSync(
+      process.execPath,
+      ['--import', 'tsx', '-e', "void import('./src/config/env.ts');"],
+      { env: child, cwd: resolve(import.meta.dirname, '..'), encoding: 'utf8' },
+    );
+  }
+
+  it('exits with an actionable message when TRUST_PROXY_HOPS is unset', () => {
+    const res = loadEnvIn({ NODE_ENV: 'production', TRUST_PROXY_HOPS: undefined });
+
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain('TRUST_PROXY_HOPS must be set explicitly');
+    // The message has to be enough to act on without reading the source.
+    expect(res.stderr).toContain('reverse proxies');
+  });
+
+  it('boots when the value is stated', () => {
+    const res = loadEnvIn({ NODE_ENV: 'production', TRUST_PROXY_HOPS: '1' });
+
+    expect(res.stderr).not.toContain('TRUST_PROXY_HOPS must be set');
+    expect(res.status).toBe(0);
+  });
+
+  it('does not impose the requirement outside production', () => {
+    const res = loadEnvIn({ NODE_ENV: 'development', TRUST_PROXY_HOPS: undefined });
+
+    expect(res.status).toBe(0);
   });
 });
