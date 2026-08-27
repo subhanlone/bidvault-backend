@@ -202,6 +202,17 @@ model AuctionTransaction {
   finalAmount          Int
   status               TransactionStatus @default(PENDING)
   stripePaymentIntentId String?          @unique
+  // Why the last payment attempt failed, in the buyer's language.
+  //
+  // The failure used to live in `status` alone: payment_intent.payment_failed wrote FAILED,
+  // and create-intent refused anything that was not PENDING — so one declined card ended the
+  // sale permanently, with no route back and nothing explaining why. A declined card is an
+  // ordinary event, not a terminal state, so the reason belongs in its own column and the
+  // status returns to PENDING for a retry.
+  //
+  // Cleared whenever a fresh intent is created, so it always describes the most recent
+  // attempt rather than accumulating history.
+  lastPaymentError     String?
   createdAt            DateTime          @default(now())
   auction              Auction           @relation(fields: [auctionId], references: [id], onDelete: Cascade)
   winner               User              @relation("WinnerTransactions", fields: [winnerId], references: [id], onDelete: Cascade)
