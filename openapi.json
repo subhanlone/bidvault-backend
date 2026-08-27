@@ -3694,6 +3694,9 @@
           "status": {
             "$ref": "#/components/schemas/TransactionStatus"
           },
+          "lastPaymentError": {
+            "type": "string"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",

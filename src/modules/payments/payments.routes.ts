@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import Stripe from 'stripe';
+import type { TransactionStatus } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
@@ -10,7 +11,36 @@ import { createIntentSchema } from '../../openapi/requests.js';
 import { dispatchEmail, sendPaymentCompletedEmail } from '../../services/email.service.js';
 
 const router = Router();
-const stripe = new Stripe(env.STRIPE_SECRET_KEY);
+
+// The API version is pinned rather than left to whatever the installed SDK defaults to.
+// `stripe` is declared as ^22.1.1, so a routine `npm install` could otherwise move the
+// version this payment path talks to with no code change — and the webhook handler reads
+// `event.data.object`, whose shape is exactly what an API version governs.
+// Pinned to the version the installed SDK's own types describe, so the runtime API and the
+// compile-time shapes cannot disagree. Changing it is a deliberate act: bump both together.
+const stripe = new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2026-07-29.dahlia' });
+
+/**
+ * Money, at the Stripe boundary.
+ *
+ * The domain stores whole rupees everywhere -- Bid.amount, Auction.currentBid,
+ * AuctionTransaction.finalAmount are all integer PKR, which is the right choice. Stripe
+ * expects the smallest unit of the currency, and PKR is two-decimal, so the two disagree by
+ * a factor of 100.
+ *
+ * That disagreement was the audit's one Critical finding: `amount: tx.finalAmount` charged
+ * PKR 50 for a PKR 5,000 sale while the books recorded the full 5,000. Stripe's own error
+ * settled it, formatting the unconverted integer back as "₨50.00".
+ *
+ * Named, and used on both sides of the round trip -- the webhook checks what actually
+ * arrived against the same conversion -- so the two can never drift apart again.
+ */
+const CURRENCY = 'pkr';
+const MINOR_UNITS_PER_RUPEE = 100;
+
+function toMinorUnits(wholeRupees: number): number {
+  return wholeRupees * MINOR_UNITS_PER_RUPEE;
+}
 
 router.get(
   '/my-wins',
@@ -37,6 +67,10 @@ router.get(
       sellerName: tx.seller.name,
       finalAmount: tx.finalAmount,
       status: tx.status,
+      // Why the last attempt failed, if one did. Published rather than left in the database:
+      // a buyer whose card was declined needs to know it was declined and can be retried,
+      // which is the whole point of not writing FAILED into `status` any more.
+      lastPaymentError: tx.lastPaymentError ?? undefined,
       createdAt: tx.createdAt.toISOString(),
       reviewed: tx.review !== null,
     })));
@@ -71,45 +105,106 @@ router.post(
     const winnerId = req.auth!.userId;
     const { transactionId } = req.body;
 
-    const tx = await prisma.auctionTransaction.findUnique({
-      where: { id: transactionId },
-      include: { auction: true, winner: true },
-    });
+    let outcome: { kind: 'ok'; clientSecret: string | null } | { kind: 'fail'; message: string; status: number };
 
-    if (!tx) {
-      fail(res, 'Transaction not found.', 404);
+    // The whole read-decide-write runs under a row lock. Without it the read at the top and
+    // the write at the bottom are separated by a network call to Stripe, and two concurrent
+    // calls — a double-clicked Pay button is enough — both see stripePaymentIntentId as null,
+    // both create an intent, and the second overwrites the first. If the buyer then pays the
+    // *first* one, the webhook looks it up by the stored id, finds nothing, and answers 200.
+    // Money taken, transaction still PENDING, nothing logged. Same FOR UPDATE pattern the bid
+    // path has used since NEW-09.
+    try {
+      outcome = await prisma.$transaction(async (dbTx) => {
+        const [row] = await dbTx.$queryRaw<Array<{
+          id: string;
+          winnerId: string;
+          auctionId: string;
+          finalAmount: number;
+          status: TransactionStatus;
+          stripePaymentIntentId: string | null;
+        }>>`
+          SELECT id, "winnerId", "auctionId", "finalAmount", status, "stripePaymentIntentId"
+          FROM "AuctionTransaction"
+          WHERE id = ${transactionId}
+          FOR UPDATE
+        `;
+
+        if (!row) return { kind: 'fail' as const, message: 'Transaction not found.', status: 404 };
+        if (row.winnerId !== winnerId) return { kind: 'fail' as const, message: 'Forbidden.', status: 403 };
+
+        // FAILED is retryable. A declined card is an ordinary event, and refusing it here was
+        // what made one decline permanent — see BV-006 and the lastPaymentError column.
+        // COMPLETED is genuinely terminal.
+        if (row.status === 'COMPLETED') {
+          return { kind: 'fail' as const, message: 'This purchase has already been paid for.', status: 400 };
+        }
+
+        if (row.stripePaymentIntentId) {
+          const existing = await stripe.paymentIntents.retrieve(row.stripePaymentIntentId);
+          // A previous intent is only reusable while it is still awaiting payment. One that
+          // was canceled, or that already succeeded, cannot be confirmed again — returning
+          // its client_secret would fail inside Stripe.js with a message meaning nothing to
+          // the buyer. Fall through and mint a fresh one instead.
+          if (existing.status !== 'canceled' && existing.status !== 'succeeded') {
+            return { kind: 'ok' as const, clientSecret: existing.client_secret };
+          }
+        }
+
+        const auction = await dbTx.auction.findUnique({
+          where: { id: row.auctionId },
+          select: { title: true },
+        });
+
+        const paymentIntent = await stripe.paymentIntents.create(
+          {
+            // PKR is a two-decimal currency, so Stripe expects the amount in paisa. The
+            // domain stores whole rupees, and this used to pass them through unconverted —
+            // charging 1/100th of what the buyer was shown while recording the full amount as
+            // revenue. Confirmed against Stripe's own error, which formatted the unconverted
+            // integer back as "₨50.00" for a PKR 5,000 sale. See BV-001.
+            amount: toMinorUnits(row.finalAmount),
+            currency: CURRENCY,
+            metadata: { transactionId: row.id, auctionId: row.auctionId, winnerId },
+            description: `BidVault - ${auction?.title ?? 'auction'}`,
+          },
+          // Makes a retried or duplicated request return the *same* intent rather than a
+          // second one. Belt and braces with the row lock above: the lock stops concurrent
+          // callers, this stops a client retrying after a timeout.
+          { idempotencyKey: `bidvault-intent-${row.id}` },
+        );
+
+        await dbTx.auctionTransaction.update({
+          where: { id: row.id },
+          data: {
+            stripePaymentIntentId: paymentIntent.id,
+            // Back to PENDING if this is a retry after a decline, and clear the stale reason
+            // so it always describes the most recent attempt.
+            status: 'PENDING',
+            lastPaymentError: null,
+          },
+        });
+
+        return { kind: 'ok' as const, clientSecret: paymentIntent.client_secret };
+      });
+    } catch (err) {
+      // Stripe rejects an amount that converts below its minimum, which is exactly what the
+      // unconverted-rupees bug produced for any sale under roughly PKR 15,000 — those never
+      // got an intent at all. Surfacing the raw SDK message here would leak API internals
+      // (BV-007); the transaction is left untouched and retryable.
+      console.error('[payments] create-intent failed', {
+        transactionId,
+        error: err instanceof Error ? err.message : err,
+      });
+      fail(res, 'Could not start the payment. Please try again in a moment.', 502);
       return;
     }
 
-    if (tx.winnerId !== winnerId) {
-      fail(res, 'Forbidden.', 403);
+    if (outcome.kind === 'fail') {
+      fail(res, outcome.message, outcome.status);
       return;
     }
-
-    if (tx.status !== 'PENDING') {
-      fail(res, 'Transaction is already completed or failed.', 400);
-      return;
-    }
-
-    if (tx.stripePaymentIntentId) {
-      const existing = await stripe.paymentIntents.retrieve(tx.stripePaymentIntentId);
-      ok(res, { clientSecret: existing.client_secret });
-      return;
-    }
-
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: tx.finalAmount,
-      currency: 'pkr',
-      metadata: { transactionId: tx.id, auctionId: tx.auctionId, winnerId },
-      description: `BidVault - ${tx.auction.title}`,
-    });
-
-    await prisma.auctionTransaction.update({
-      where: { id: tx.id },
-      data: { stripePaymentIntentId: paymentIntent.id },
-    });
-
-    ok(res, { clientSecret: paymentIntent.client_secret });
+    ok(res, { clientSecret: outcome.clientSecret });
   }),
 );
 
@@ -138,28 +233,72 @@ router.post(
         },
       });
 
-      if (tx && tx.status === 'PENDING') {
-        await prisma.auctionTransaction.update({
-          where: { id: tx.id },
-          data: { status: 'COMPLETED' },
+      if (!tx) {
+        // An intent nobody is waiting on. Worth a line either way: before the row lock on
+        // create-intent this was the shape of a real money-loss bug — two intents created for
+        // one transaction, the buyer paying the one the row no longer points at.
+        console.error('[payments] succeeded event matched no transaction', {
+          paymentIntent: paymentIntent.id,
+          metadataTransactionId: paymentIntent.metadata?.transactionId,
+        });
+      } else if (tx.status === 'PENDING') {
+        // What actually arrived, against what is owed. Without this the handler took the
+        // event type as proof of settlement: Stripe reported success for the PKR 50 it had
+        // been asked to collect, and this marked a PKR 5,000 debt paid. That is why BV-001
+        // produced no error anywhere and had to be found by reading.
+        const expected = toMinorUnits(tx.finalAmount);
+        const received = paymentIntent.amount_received;
+
+        if (received !== expected || paymentIntent.currency !== CURRENCY) {
+          console.error('[payments] amount mismatch — NOT marking completed', {
+            transactionId: tx.id,
+            expected,
+            received,
+            currency: paymentIntent.currency,
+          });
+          // Acknowledged so Stripe stops retrying a delivery that is not the problem, but
+          // deliberately left PENDING: an underpayment is not a settled debt.
+          ok(res, { received: true });
+          return;
+        }
+
+        // Conditional, so two concurrent deliveries of the same event cannot both pass the
+        // status check and both send the emails. Only the update that actually moved the row
+        // proceeds.
+        const { count } = await prisma.auctionTransaction.updateMany({
+          where: { id: tx.id, status: 'PENDING' },
+          data: { status: 'COMPLETED', lastPaymentError: null },
         });
 
-        // Not awaited: this runs inside the Stripe webhook, and a slow send could push the
-        // handler past Stripe's timeout, causing it to retry an already-processed payment.
-        dispatchEmail(sendPaymentCompletedEmail(
-          { email: tx.winner.email, name: tx.winner.name },
-          { email: tx.seller.email, name: tx.seller.name },
-          { auctionTitle: tx.auction.title, finalAmount: Number(tx.finalAmount) },
-        ), 'payment completed');
+        if (count === 1) {
+          // Not awaited: this runs inside the Stripe webhook, and a slow send could push the
+          // handler past Stripe's timeout, causing it to retry an already-processed payment.
+          dispatchEmail(sendPaymentCompletedEmail(
+            { email: tx.winner.email, name: tx.winner.name },
+            { email: tx.seller.email, name: tx.seller.name },
+            { auctionTitle: tx.auction.title, finalAmount: Number(tx.finalAmount) },
+          ), 'payment completed');
+        }
       }
     }
 
     if (event.type === 'payment_intent.payment_failed') {
       const paymentIntent = event.data.object;
 
+      // Stays PENDING. Writing FAILED here is what made a single declined card permanent:
+      // create-intent refused anything that was not PENDING, so there was no route back for
+      // the winner and no admin action that could reopen it. The reason goes in its own
+      // column instead, is shown to the buyer, and is cleared on the next attempt.
+      //
+      // Scoped to PENDING so a late-arriving failure for a superseded intent cannot disturb a
+      // transaction that has since been paid.
+      const reason =
+        paymentIntent.last_payment_error?.message ??
+        'The payment could not be completed. Please try a different card.';
+
       await prisma.auctionTransaction.updateMany({
-        where: { stripePaymentIntentId: paymentIntent.id },
-        data: { status: 'FAILED' },
+        where: { stripePaymentIntentId: paymentIntent.id, status: 'PENDING' },
+        data: { lastPaymentError: reason.slice(0, 500) },
       });
     }
 
