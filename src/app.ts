@@ -30,9 +30,10 @@ export function createApp() {
   // infrastructure IPs for every session, and any IP-based rate limit would bucket the whole
   // world under one key — express-rate-limit v7 refuses to start when it detects that.
   //
-  // A hop count rather than `true`: trusting the header outright lets a client spoof its own
-  // address by sending X-Forwarded-For. 1 = trust exactly the Railway edge.
-  app.set('trust proxy', 1);
+  // The hop count comes from the environment (see config/env.ts): 0 locally, and whatever the
+  // deployed topology actually is in production. It is deliberately not hardcoded, because
+  // the correct number can only be measured against a running deployment.
+  app.set('trust proxy', env.TRUST_PROXY_HOPS);
 
   app.use(
     cors({

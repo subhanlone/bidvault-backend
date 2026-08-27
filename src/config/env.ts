@@ -25,6 +25,22 @@ const schema = z.object({
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_SECRET: z.string().min(16),
   JWT_REFRESH_EXPIRES_IN_DAYS: z.coerce.number().int().positive().default(14),
+  // How many reverse proxies sit between the client and this process, for Express's
+  // `trust proxy`. Railway terminates TLS at its edge and forwards over an internal hop, so
+  // the deployed value is at least 1; locally there is no proxy at all, hence the 0 default.
+  //
+  // A hop *count* rather than `true`: trusting X-Forwarded-For outright lets a client spoof
+  // its own address by sending the header. Too high is equally wrong in the other direction —
+  // it reads an attacker-supplied entry as the client.
+  //
+  // Configurable rather than hardcoded because the correct number cannot be established from
+  // the repository: it depends on the deployed topology, and the deploy pipeline is currently
+  // paused. Setting it in the environment means the number can be corrected from the Railway
+  // dashboard the moment it can be measured, without a code change and a redeploy.
+  //
+  // Verify after any deploy: log `req.ip` and `x-forwarded-for` and confirm req.ip is the
+  // real client address. express-rate-limit (BV-002) also validates this at startup.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
   // Injected by Railway on GitHub-triggered deploys. Reported by GET /health so the
   // running build is identifiable from the outside — without it the only way to tell
   // which commit is live is to read GitHub's deployment records.
