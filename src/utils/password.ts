@@ -3,11 +3,24 @@ import { compare, hash } from '@node-rs/bcrypt';
 /**
  * bcrypt work factor.
  *
- * Raised from 10, and the reason the implementation moved off pure-JS bcryptjs at the same
- * time: each step costs twice as much, and bcryptjs at cost 12 spends roughly a second of
- * single-threaded CPU per hash. On a login route that is a denial-of-service primitive rather
- * than a hardening measure — the native implementation does the same work in a few
- * milliseconds.
+ * Raised from 10. Each step doubles the work, so this is deliberately expensive: measured on
+ * this machine a cost-12 comparison takes ~250ms, against ~63ms at cost 10. That cost is the
+ * entire point on an offline-cracking timeline, and it is also a real serving cost, so both
+ * halves are written down here rather than guessed at later.
+ *
+ * The native binding is NOT the reason this is affordable, and an earlier version of this
+ * comment claimed it was — asserting bcryptjs cost roughly a second per hash while the native
+ * implementation finished "in a few milliseconds". Measured back to back, cost 12 is ~250ms
+ * native and ~296ms in pure JS: about 1.2x, not the orders of magnitude implied. @node-rs/bcrypt
+ * is still worth keeping (it is faster, and it releases the thread to libuv rather than blocking
+ * the event loop, which bcryptjs's sync path does not), but the honest margin is small enough
+ * that it would not on its own justify a native dependency.
+ *
+ * The serving cost is what to watch. bcrypt runs on the libuv threadpool, four threads by
+ * default, so this process tops out near 16 logins/second no matter how many cores it has, and
+ * a burst of logins competes with every other threadpool user. The IP and per-address login
+ * limiters in middleware/rate-limit.ts are what keep that from being reachable on purpose;
+ * raising the cost again without raising UV_THREADPOOL_SIZE would lower that ceiling further.
  */
 export const PASSWORD_COST = 12;
 
