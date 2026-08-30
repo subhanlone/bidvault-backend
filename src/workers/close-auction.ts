@@ -43,11 +43,21 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
       return { alreadyClosed: true, winningBid: null, notifyWinner: false, reserveMet: null };
     }
 
-    const winBid = await tx.bid.findFirst({
-      where: { auctionId: auction.id },
+    // BV-018: buyerId is nullable now (a deleted buyer's bid is anonymised in place, not
+    // cascaded away, so bidCount/currentBid stay accurate). A bid with no buyer left can't be
+    // awarded a transaction -- there is no winnerId to write -- so it is excluded here rather
+    // than filtered out after the fact, and the next real bidder wins instead.
+    const rawWinBid = await tx.bid.findFirst({
+      where: { auctionId: auction.id, buyerId: { not: null } },
       orderBy: { amount: 'desc' },
       include: { buyer: true },
     });
+    // The where-filter above guarantees buyerId/buyer are non-null whenever a row comes back;
+    // Prisma's generated type doesn't encode that, so narrow once here instead of asserting at
+    // every later use of winBid.buyerId / winBid.buyer.
+    const winBid = rawWinBid && rawWinBid.buyerId !== null && rawWinBid.buyer !== null
+      ? { ...rawWinBid, buyerId: rawWinBid.buyerId, buyer: rawWinBid.buyer }
+      : null;
 
     // The reserve is the seller's floor — the create-listing form promises "Auction won't close
     // below this amount". An auction that ends under it closes UNSOLD: no winner is declared and

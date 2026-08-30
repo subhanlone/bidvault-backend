@@ -38,6 +38,12 @@ enum TransactionStatus {
   FAILED
 }
 
+// BV-018: no route deletes a User today. When one is added it can only be anonymise-in-place
+// (clear name/email/cnic, revoke refresh tokens) rather than a real DELETE -- Listing/Auction
+// already RESTRICT a seller's removal, AuctionTransaction RESTRICTs winner/seller too, and CNIC
+// clearing depends on how BV-042 decides to store it. Bid.buyerId SetNull already handles a
+// buyer's own bids safely; this comment is the placeholder the audit asked for until the rest
+// of that route exists.
 model User {
   id                 String                   @id @default(cuid())
   name               String
@@ -132,11 +138,17 @@ model Auction {
 model Bid {
   id        String   @id @default(cuid())
   auctionId String
-  buyerId   String
+  // BV-018: nullable, SetNull instead of Cascade. Deleting a buyer used to delete their bids
+  // outright, leaving Auction.bidCount/currentBid pointing at rows that no longer existed --
+  // closeAuction would then silently re-award to a lower bidder with no record of why. Keeping
+  // the row and anonymising the owner instead means those columns stay accurate regardless of
+  // what happens to the account; close-auction.ts excludes a null-buyer bid when picking a
+  // winner, since there is no one left to write into AuctionTransaction.winnerId.
+  buyerId   String?
   amount    Int
   createdAt DateTime @default(now())
   auction   Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
-  buyer     User     @relation("BuyerBids", fields: [buyerId], references: [id], onDelete: Cascade)
+  buyer     User?    @relation("BuyerBids", fields: [buyerId], references: [id], onDelete: SetNull)
 
   @@index([auctionId, createdAt])
   @@index([buyerId, createdAt])
