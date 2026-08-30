@@ -137,7 +137,10 @@ const documentInput = {
     // 2.3.0, 2026-08-30, minor: GET /health gained contractViolations, a live count of
     // (operation, status) pairs currently answering a shape their own schema forbids. Purely
     // additive — every existing field is unchanged. See BV-016.
-    version: '2.3.0',
+    //
+    // 2.4.0, 2026-08-30, minor: GET /health documents 503 during graceful shutdown, so a load
+    // balancer stops routing new traffic to an instance that is draining. See BV-052.
+    version: '2.4.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -160,7 +163,10 @@ const documentInput = {
       get: {
         tags: ['Platform'],
         summary: 'Liveness only — does not check the database or Redis',
-        responses: { 200: okBody(S.HealthDto, 'Service is up') },
+        responses: {
+          200: okBody(S.HealthDto, 'Service is up'),
+          503: errBody('Shutting down — stop routing new traffic here (BV-052)'),
+        },
       },
     },
     '/stats': {
