@@ -6,7 +6,6 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
-import { getAuctionRuntimeState, setAuctionRuntimeState } from '../../services/auction-state.service.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 import { placeBidSchema } from '../../openapi/requests.js';
 import { buildSellerStatsMap, toAuctionDto } from './auction-dto.js';
@@ -87,14 +86,9 @@ router.get(
       return;
     }
 
-    const runtime = await getAuctionRuntimeState(auction.id);
     const statsMap = await buildSellerStatsMap([auction.sellerId]);
     const dto = toAuctionDto(auction, statsMap);
-    ok(res, {
-      ...dto,
-      currentBid: runtime.currentBid ?? dto.currentBid,
-      bidCount: runtime.bidCount ?? dto.bidCount,
-    });
+    ok(res, dto);
   }),
 );
 
@@ -139,7 +133,6 @@ router.post(
 
     let result: {
       bid: Prisma.BidGetPayload<{ include: { buyer: true } }>;
-      updatedAuction: { currentBid: number; bidCount: number };
       auctionTitle: string;
     };
 
@@ -197,10 +190,10 @@ router.post(
           include: { buyer: true },
         });
 
-        const nextAuction = await tx.auction.update({
+        await tx.auction.update({
           where: { id: row.id },
           data: { currentBid: amount, bidCount: { increment: 1 } },
-          select: { currentBid: true, bidCount: true },
+          select: { id: true },
         });
 
         if (prevHighest && prevHighest.buyerId !== buyerId) {
@@ -220,7 +213,7 @@ router.post(
           }
         }
 
-        return { bid: createdBid, updatedAuction: nextAuction, auctionTitle: row.title };
+        return { bid: createdBid, auctionTitle: row.title };
       });
     } catch (err) {
       if (err instanceof BidError) {
@@ -230,21 +223,11 @@ router.post(
       throw err;
     }
 
-    const { bid, updatedAuction, auctionTitle } = result;
+    const { bid, auctionTitle } = result;
 
-    // Not awaited (BV-010): the bid already committed in Postgres above, which is the source
-    // of truth this overlay only caches. getAuctionStateRedis() now bounds how long a command
-    // can take when Redis is unreachable (infra/redis.ts) -- but this used to run on
-    // redisConnection, the BullMQ client, which queues a command forever rather than
-    // rejecting, so a Redis outage hung every bid placement indefinitely. Not awaiting also
-    // means a caller no longer pays even the bounded timeout for a write nothing in this
-    // response depends on.
-    void setAuctionRuntimeState({
-      auctionId,
-      currentBid: updatedAuction.currentBid,
-      bidCount: updatedAuction.bidCount,
-    }).catch((err: unknown) => console.error('[auctions] runtime state overlay update failed', { auctionId, err }));
-
+    // The database is the only source of truth for currentBid/bidCount (BV-010 removed the
+    // Redis overlay that used to shadow it here) -- live viewers get the update below via the
+    // socket broadcast, not by re-reading the row.
     const io = req.app.get('io') as Server | undefined;
     io?.to(`auction:${auctionId}`).emit('bid:placed', {
       auctionId,

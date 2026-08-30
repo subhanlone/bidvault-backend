@@ -73,31 +73,6 @@ export function getRateLimitRedis(): Redis {
   return rateLimitClient;
 }
 
-/**
- * The auction-state overlay's connection (BV-010) — same reasoning as the rate limiter's
- * above, and the same mistake it was written to avoid: the overlay used to share
- * `redisConnection`, so a command issued from a bid request during a Redis outage queued
- * forever instead of rejecting, and the caller awaited it. Nobody should be sharing the
- * BullMQ connection for anything on the request path; this is the second thing that was.
- */
-let auctionStateClient: Redis | undefined;
-
-export function getAuctionStateRedis(): Redis {
-  auctionStateClient ??= (() => {
-    const client = new Redis(env.REDIS_URL, {
-      maxRetriesPerRequest: 1,
-      commandTimeout: 2_000,
-      enableReadyCheck: false,
-    });
-    // The overlay is a best-effort cache, not a control something else depends on being up —
-    // an outage here must not become an unhandled 'error' event and take the process down.
-    client.on('error', (err) =>
-      console.error('[redis:auction-state] Connection error:', err.message),
-    );
-    return client;
-  })();
-  return auctionStateClient;
-}
 
 /**
  * Settings cache invalidation (BV-025) — each process (API server, worker) caches

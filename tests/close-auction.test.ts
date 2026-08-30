@@ -30,7 +30,6 @@ const { prisma } = await import('../src/db/prisma.js');
 const { redisConnection } = await import('../src/infra/redis.js');
 const { seedWorld } = await import('./helpers/world.js');
 const email = await import('../src/services/email.service.js');
-const { setAuctionRuntimeState, getAuctionRuntimeState } = await import('../src/services/auction-state.service.js');
 
 type World = Awaited<ReturnType<typeof seedWorld>>;
 let w: World;
@@ -210,18 +209,4 @@ describe('closeAuction', () => {
     expect(result).toMatchObject({ alreadyClosed: false, sold: false });
   });
 
-  // BV-010: nothing can bid on a CLOSED auction again, so a live-state key left behind is
-  // pure dead weight in Redis until its own TTL expires days later. deleteAuctionRuntimeState
-  // is fire-and-forget from closeAuction, hence waitFor rather than an immediate assertion.
-  it('clears the runtime-state overlay once the auction closes', async () => {
-    const id = await endingAuction({ reservePrice: null, topBid: 2_500 });
-    await setAuctionRuntimeState({ auctionId: id, currentBid: 2_500, bidCount: 1 });
-    expect(await getAuctionRuntimeState(id)).toMatchObject({ currentBid: 2_500 });
-
-    await closeAuction(id);
-
-    await vi.waitFor(async () => {
-      expect(await getAuctionRuntimeState(id)).toEqual({});
-    });
-  });
 });
