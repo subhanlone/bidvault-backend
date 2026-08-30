@@ -210,6 +210,21 @@ export async function sendPasswordResetCompletedEmail(to: { email: string; name:
   ));
 }
 
+// BV-031: a revoked refresh token being presented again means two holders came from the same
+// token family -- the signature the rotation machinery exists to catch. Revoking every
+// session is the containment step; this is the notification, so the account owner learns
+// about it instead of the incident going silent the way a bare 401 would leave it.
+export async function sendSessionsRevokedSecurityAlertEmail(to: { email: string; name: string }): Promise<void> {
+  await send(to.email, 'Security alert: all BidVault sessions were signed out', base(
+    'Security alert',
+    `
+    ${h1('All sessions signed out')}
+    ${p(`Hi ${to.name}, BidVault detected a sign-in token being used a second time after it had already been replaced. As a precaution, every session on your account has been signed out.`)}
+    ${p('If this was you on another device, just sign in again. If it was not, change your password immediately and review your account activity.')}
+    `,
+  ));
+}
+
 export async function sendVerificationResentEmail(to: { email: string; name: string }, code: string): Promise<void> {
   await send(to.email, 'New verification code for BidVault', base(
     'New verification code',

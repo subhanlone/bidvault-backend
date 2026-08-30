@@ -352,6 +352,14 @@ describe('enumeration resistance and session recovery', () => {
     expect(res.body.error).toBe('Session invalidated. Please sign in again.');
     const active = await prisma.refreshToken.findUniqueOrThrow({ where: { id: activeId } });
     expect(active.revokedAt).toBeInstanceOf(Date);
+
+    // BV-031: reuse of a revoked token is the signature the rotation machinery exists to
+    // catch, so the account owner must be told -- not just have the family revoked silently.
+    await vi.waitFor(() => {
+      expect(mail.send).toHaveBeenCalledWith(
+        expect.objectContaining({ subject: 'Security alert: all BidVault sessions were signed out' }),
+      );
+    });
   });
 });
 

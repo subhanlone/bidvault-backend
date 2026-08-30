@@ -36,6 +36,7 @@ import {
   sendEmailVerifiedEmail,
   sendPasswordResetEmail,
   sendPasswordResetCompletedEmail,
+  sendSessionsRevokedSecurityAlertEmail,
   sendVerificationResentEmail,
 } from '../../services/email.service.js';
 import {
@@ -304,6 +305,10 @@ router.post(
       console.warn('[auth] refresh token reuse detected; revoked token family', {
         userId: tokenRecord.userId,
       });
+      dispatchEmail(
+        sendSessionsRevokedSecurityAlertEmail({ email: tokenRecord.user.email, name: tokenRecord.user.name }),
+        'refresh token reuse detected',
+      );
       fail(res, 'Session invalidated. Please sign in again.', 401);
       return;
     }
