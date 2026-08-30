@@ -50,6 +50,22 @@ const badRequest = {
   content: { [JSON_CT]: { schema: ValidationErrorBody } },
 };
 
+/**
+ * The request was well-formed — `validateBody` already let it through — but a business rule
+ * the handler checks itself rejects it: an expired OTP, a bid under the floor, a listing not
+ * in the right state. See BV-065: nine operations answered these with 400 alongside
+ * validateBody's ValidationErrorBody, so a single status code carried two undiscoverable
+ * shapes and the response-contract middleware could only ever be right about one of them.
+ * 422 is unused elsewhere in this document, so giving it exclusively to this kind of failure
+ * keeps every status meaning exactly one thing: 400 malformed, 401 bad credentials, 404 no
+ * such resource, 409 the resource already exists, 422 a business rule rejected an otherwise
+ * valid request.
+ */
+const unprocessable = (description: string) => ({
+  description,
+  content: { [JSON_CT]: { schema: ErrorBody } },
+});
+
 const unauthorized = errBody('Missing, invalid or expired access token');
 const forbidden = errBody('Authenticated but the wrong role for this route');
 const notFound = errBody('Not found');
@@ -107,7 +123,17 @@ const documentInput = {
     // is what COMPATIBILITY.md asks for. A caller that ignores the new fields behaves exactly
     // as before, including being signed out when its access token expires; that is the bug
     // the fields exist to let a caller fix, not a promise the document had made.
-    version: '2.1.0',
+    //
+    // 2.2.0, 2026-08-30, minor: nine operations gained a 409 or 422 for a business-rule
+    // rejection their handler always made and this document never declared — an expired OTP,
+    // a bid below the floor, a listing not pending, and six more. Every one of those requests
+    // used to arrive at a caller as an undeclared 400 whose body (ErrorResponse) did not match
+    // the only 400 shape published (ValidationErrorBody). Purely additive: no status a caller
+    // already handled changed meaning or disappeared, this only names ones it was silently
+    // receiving. See BV-065. Also removed a 409 on POST /auctions/{auctionId}/bids that had
+    // been declared but was never reachable — SELECT ... FOR UPDATE serialises concurrent
+    // bids rather than racing them, so nothing in the handler could ever produce it.
+    version: '2.2.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -162,6 +188,7 @@ const documentInput = {
           // the response cannot be used to test whether an account exists.
           200: okBody(S.MessageDto, 'Email verified'),
           400: badRequest,
+          422: unprocessable('The code is invalid or expired'),
         },
       },
     },
@@ -226,14 +253,22 @@ const documentInput = {
       post: {
         tags: ['Auth'],
         requestBody: jsonRequest(R.verifyResetSchema),
-        responses: { 200: okBody(S.MessageDto, 'Code accepted'), 400: badRequest },
+        responses: {
+          200: okBody(S.MessageDto, 'Code accepted'),
+          400: badRequest,
+          422: unprocessable('The code is invalid or expired'),
+        },
       },
     },
     '/auth/reset-password': {
       post: {
         tags: ['Auth'],
         requestBody: jsonRequest(R.resetSchema),
-        responses: { 200: okBody(S.MessageDto, 'Password reset'), 400: badRequest },
+        responses: {
+          200: okBody(S.MessageDto, 'Password reset'),
+          400: badRequest,
+          422: unprocessable('The code is invalid or expired'),
+        },
       },
     },
     '/auth/change-password': {
@@ -245,6 +280,7 @@ const documentInput = {
           200: okBody(S.PasswordChangedDto, 'Password changed; a replacement session is issued'),
           400: badRequest,
           401: unauthorized,
+          422: unprocessable('The current password is incorrect'),
         },
       },
     },
@@ -324,7 +360,15 @@ const documentInput = {
           401: unauthorized,
           403: forbidden,
           404: notFound,
-          409: errBody('Auction closed, or outbid between read and write'),
+          // No 409: the row is locked with SELECT ... FOR UPDATE before any of these checks
+          // run, so a concurrent bid is serialised behind the lock and re-evaluated against
+          // the state that won, not raced against it. A prior version of this document
+          // declared 409 here for that race — it never fired; nothing in this handler has
+          // ever returned it.
+          422: unprocessable(
+            'The bid violates an auction rule: closed, ended, below the floor, or above the ' +
+            'ceiling',
+          ),
         },
       },
     },
@@ -340,6 +384,10 @@ const documentInput = {
           400: badRequest,
           401: unauthorized,
           403: forbidden,
+          422: unprocessable(
+            'A business rule was violated: price floor, increment ceiling, image ownership, ' +
+            'or category attributes',
+          ),
         },
       },
     },
@@ -418,6 +466,7 @@ const documentInput = {
           401: unauthorized,
           403: forbidden,
           404: notFound,
+          409: errBody('The listing is not pending'),
         },
       },
     },
@@ -472,6 +521,7 @@ const documentInput = {
           400: badRequest,
           401: unauthorized,
           404: notFound,
+          409: errBody('The transaction is already paid'),
         },
       },
     },
@@ -520,6 +570,7 @@ const documentInput = {
           401: unauthorized,
           404: notFound,
           409: errBody('This transaction has already been reviewed'),
+          422: unprocessable('Payment has not completed yet'),
         },
       },
     },

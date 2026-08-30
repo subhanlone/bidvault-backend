@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "2.1.0",
+    "version": "2.2.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually."
   },
   "servers": [
@@ -191,6 +191,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The code is invalid or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -552,6 +562,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "The code is invalid or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -601,6 +621,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The code is invalid or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -664,6 +694,16 @@
           },
           "401": {
             "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The current password is incorrect",
             "content": {
               "application/json": {
                 "schema": {
@@ -1149,8 +1189,8 @@
               }
             }
           },
-          "409": {
-            "description": "Auction closed, or outbid between read and write",
+          "422": {
+            "description": "The bid violates an auction rule: closed, ended, below the floor, or above the ceiling",
             "content": {
               "application/json": {
                 "schema": {
@@ -1228,6 +1268,16 @@
           },
           "403": {
             "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A business rule was violated: price floor, increment ceiling, image ownership, or category attributes",
             "content": {
               "application/json": {
                 "schema": {
@@ -1662,6 +1712,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The listing is not pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2005,6 +2065,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The transaction is already paid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2287,6 +2357,16 @@
           },
           "409": {
             "description": "This transaction has already been reviewed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Payment has not completed yet",
             "content": {
               "application/json": {
                 "schema": {

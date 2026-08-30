@@ -231,21 +231,21 @@ router.post(
   asyncHandler(async (req, res) => {
     const settings = await getPlatformSettings();
     if (req.body.startPrice < settings.minListingPrice) {
-      fail(res, `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`, 400);
+      fail(res, `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`, 422);
       return;
     }
     if (req.body.imageUrl && !isOwnedCloudinaryImage(req.body.imageUrl, req.auth!.userId)) {
-      fail(res, 'Image must be an upload issued for this seller by BidVault.', 400);
+      fail(res, 'Image must be an upload issued for this seller by BidVault.', 422);
       return;
     }
     if (req.body.minIncrement > settings.maxBidIncrement) {
-      fail(res, `Minimum bid increment cannot exceed PKR ${settings.maxBidIncrement.toLocaleString()}.`, 400);
+      fail(res, `Minimum bid increment cannot exceed PKR ${settings.maxBidIncrement.toLocaleString()}.`, 422);
       return;
     }
 
     const attributesResult = validateCategoryAttributes(req.body.category, req.body.attributes);
     if (!attributesResult.success) {
-      fail(res, attributesResult.error, 400);
+      fail(res, attributesResult.error, 422);
       return;
     }
 
@@ -388,7 +388,7 @@ router.post(
     }
 
     if (listing.status !== 'PENDING') {
-      fail(res, 'Only pending listings can be rejected.', 400);
+      fail(res, 'Only pending listings can be rejected.', 409);
       return;
     }
 
