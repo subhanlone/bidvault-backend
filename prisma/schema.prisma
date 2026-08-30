@@ -228,8 +228,13 @@ model AuctionTransaction {
   lastPaymentError     String?
   createdAt            DateTime          @default(now())
   auction              Auction           @relation(fields: [auctionId], references: [id], onDelete: Cascade)
-  winner               User              @relation("WinnerTransactions", fields: [winnerId], references: [id], onDelete: Cascade)
-  seller               User              @relation("SellerTransactions", fields: [sellerId], references: [id], onDelete: Cascade)
+  // Restrict, not Cascade (BV-018): a financial record must not disappear because the row it
+  // references did. There is no account-deletion route yet, so nothing currently exercises
+  // this, but the moment one exists it can only be anonymise-in-place — clear the PII fields,
+  // keep the row — because this constraint refuses to let the User row itself be removed
+  // while it still has transaction history.
+  winner               User              @relation("WinnerTransactions", fields: [winnerId], references: [id], onDelete: Restrict)
+  seller               User              @relation("SellerTransactions", fields: [sellerId], references: [id], onDelete: Restrict)
   review               SellerReview?
 
   @@unique([auctionId])
