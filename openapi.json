@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "2.2.0",
+    "version": "2.3.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually."
   },
   "servers": [
@@ -3083,6 +3083,11 @@
               "redis"
             ],
             "additionalProperties": false
+          },
+          "contractViolations": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [
@@ -3090,7 +3095,8 @@
           "service",
           "version",
           "commit",
-          "dependencies"
+          "dependencies",
+          "contractViolations"
         ],
         "additionalProperties": false
       },

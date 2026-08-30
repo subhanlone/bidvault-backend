@@ -133,7 +133,11 @@ const documentInput = {
     // receiving. See BV-065. Also removed a 409 on POST /auctions/{auctionId}/bids that had
     // been declared but was never reachable — SELECT ... FOR UPDATE serialises concurrent
     // bids rather than racing them, so nothing in the handler could ever produce it.
-    version: '2.2.0',
+    //
+    // 2.3.0, 2026-08-30, minor: GET /health gained contractViolations, a live count of
+    // (operation, status) pairs currently answering a shape their own schema forbids. Purely
+    // additive — every existing field is unchanged. See BV-016.
+    version: '2.3.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +

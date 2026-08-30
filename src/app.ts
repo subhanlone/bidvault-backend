@@ -14,7 +14,7 @@ import settingsRoutes from './modules/settings/settings.routes.js';
 import { env, clientOrigins } from './config/env.js';
 import { maintenanceGuard } from './middleware/maintenance.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
-import { responseContract } from './middleware/response-contract.js';
+import { responseContract, violationCount } from './middleware/response-contract.js';
 import { ok } from './utils/response.js';
 import { asyncHandler } from './utils/async-handler.js';
 import { prisma } from './db/prisma.js';
@@ -77,6 +77,7 @@ export function createApp() {
       version: document.info.version,
       commit: env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local',
       dependencies: { database, redis },
+      contractViolations: violationCount(),
     });
   }));
 

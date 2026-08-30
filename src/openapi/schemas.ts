@@ -172,6 +172,13 @@ export const HealthDto = z
     /** Short commit SHA on Railway, 'local' elsewhere. */
     commit: z.string(),
     dependencies: z.object({ database: ProbeDto, redis: ProbeDto }),
+    /**
+     * Distinct (operation, status) pairs currently serving a response that does not match
+     * their published schema — see middleware/response-contract.ts. Zero in a healthy
+     * deployment; anything else is drift nothing else surfaces outside this process's own
+     * logs. See BV-016.
+     */
+    contractViolations: z.number().int().nonnegative(),
   })
   .meta({ id: 'Health' });
 
