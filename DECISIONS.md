@@ -150,3 +150,42 @@ upstream ships the fix, the build breaks and says to delete the entry. The one c
 `GITHUB_TOKEN` is scoped to the current repository and a PAT is needed for another one. Both
 repos are public, so an unauthenticated clone sidesteps the question entirely and keeps both
 workflows free of secrets.
+
+## 10. Stripe API version is pinned, not left to the SDK default
+
+**Decision.** `new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2026-07-29.dahlia' })`
+(`src/modules/payments/payments.routes.ts:21`), matching the version the installed `stripe`
+SDK's own types describe.
+
+**Why.** `stripe` is declared as `^22.1.1`, so a routine `npm install` resolving a newer minor
+could otherwise move the API version the payment path talks to with no code change. Stripe API
+versions change response shapes and webhook event payloads, and the webhook handler reads
+`event.data.object` typed as `Stripe.PaymentIntent` — a compile-time shape that a version bump
+would not fail to type-check against, it would just be silently wrong. Pinning makes changing
+it a deliberate, reviewable act instead of an `npm install` side effect.
+
+**Revisit when** the SDK is upgraded on purpose — bump the pinned version and the dependency in
+the same change, verified against the Stripe dashboard's current default first (BV-054).
+
+## 11. The Stripe account settles in AED, not PKR
+
+**Decision.** Recorded here rather than left implicit: the Stripe account backing this
+platform settles in UAE dirhams. Every PKR charge is therefore a cross-currency transaction
+carrying Stripe's conversion spread, and the merchant entity is UAE-registered rather than
+Pakistani.
+
+**How this was found.** Not configuration — a live test-mode API call. `paymentIntents.create`
+with `{ amount: 5000, currency: 'pkr' }` was rejected with `Amount must convert to at least 200
+fils. ₨50.00 converts to approximately د.إ0.66.` "Fils" and "د.إ" are dirham units; nothing in
+the code or prior documentation named the settlement currency before this (BV-001).
+
+**Why it matters.** Stripe enforces its minimum charge on the *converted* value, not the
+submitted one — so a low-value PKR sale can be rejected outright regardless of the currency
+bug that motivated finding this. The conversion rate implied by the error (₨50.00 → د.إ0.66,
+roughly 75.8 PKR/AED) puts Stripe's floor at approximately PKR 152 of submitted value; treat
+that as directional, not exact, since Stripe's minimum and the exchange rate both move.
+
+**Revisit when** the merchant account or its settlement currency changes, or if a
+Pakistan-domiciled Stripe account (or a local payment processor) becomes available — at which
+point this note and the AED-specific minimum-charge math above should be re-derived, not
+assumed to still hold.
