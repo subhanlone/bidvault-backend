@@ -1,8 +1,11 @@
 import { Router } from 'express';
+import type { TransactionStatus } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
-import { ok } from '../../utils/response.js';
+import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { validateBody } from '../../middleware/validate.js';
+import { voidTransactionSchema } from '../../openapi/requests.js';
 
 const router = Router();
 
@@ -163,6 +166,90 @@ router.get(
       categoryBreakdown,
       topSellers,
     });
+  }),
+);
+
+// BV-004 / BV-006: neither an uncapped-bid winner who vanishes nor a buyer who never returns
+// after a decline had any way out before this — the transaction just sat PENDING forever,
+// with the listing permanently consumed (Auction.listingId is @unique) and no admin surface
+// to do anything about it. This is that surface: list the stuck ones, then void the ones that
+// are never going to be paid.
+router.get(
+  '/transactions',
+  requireAuth(['ADMIN']),
+  asyncHandler(async (_req, res) => {
+    const transactions = await prisma.auctionTransaction.findMany({
+      where: { status: 'PENDING' },
+      include: {
+        auction: { select: { title: true } },
+        winner: { select: { id: true, name: true } },
+        seller: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    ok(res, transactions.map((tx) => ({
+      transactionId: tx.id,
+      auctionId: tx.auctionId,
+      auctionTitle: tx.auction.title,
+      buyerId: tx.winner.id,
+      buyerName: tx.winner.name,
+      sellerId: tx.seller.id,
+      sellerName: tx.seller.name,
+      finalAmount: tx.finalAmount,
+      status: tx.status,
+      lastPaymentError: tx.lastPaymentError ?? undefined,
+      createdAt: tx.createdAt.toISOString(),
+    })));
+  }),
+);
+
+router.post(
+  '/transactions/:transactionId/void',
+  requireAuth(['ADMIN']),
+  validateBody(voidTransactionSchema),
+  asyncHandler(async (req, res) => {
+    const { transactionId } = req.params;
+    const { reason } = req.body;
+    const adminUserId = req.auth!.userId;
+
+    // Locked so a webhook delivery completing this exact transaction and an admin voiding it
+    // cannot both win -- the same FOR UPDATE pattern payments.routes.ts uses for create-intent.
+    const outcome = await prisma.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<Array<{ id: string; status: TransactionStatus }>>`
+        SELECT id, status FROM "AuctionTransaction" WHERE id = ${transactionId} FOR UPDATE
+      `;
+
+      if (!row) return { kind: 'not-found' as const };
+      if (row.status !== 'PENDING') return { kind: 'not-pending' as const };
+
+      await tx.auctionTransaction.update({
+        where: { id: row.id },
+        data: { status: 'VOIDED', lastPaymentError: null },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorUserId: adminUserId,
+          action: 'TRANSACTION_VOIDED',
+          entityType: 'AuctionTransaction',
+          entityId: row.id,
+          metadata: { reason },
+        },
+      });
+
+      return { kind: 'ok' as const };
+    });
+
+    if (outcome.kind === 'not-found') {
+      fail(res, 'Transaction not found.', 404);
+      return;
+    }
+    if (outcome.kind === 'not-pending') {
+      fail(res, 'Only a pending transaction can be voided.', 409);
+      return;
+    }
+    ok(res, { transactionId, status: 'VOIDED' });
   }),
 );
 

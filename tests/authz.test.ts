@@ -121,6 +121,10 @@ const OPERATIONS: Op[] = [
 
   // ---- admin ----------------------------------------------------------------------------
   { method: 'get', contractPath: '/admin/analytics', url: () => '/admin/analytics', allow: ['ADMIN'] },
+  { method: 'get', contractPath: '/admin/transactions', url: () => '/admin/transactions', allow: ['ADMIN'] },
+  { method: 'post', contractPath: '/admin/transactions/{transactionId}/void',
+    url: (w) => `/admin/transactions/${w.transactionId}/void`, allow: ['ADMIN'],
+    body: () => ({ reason: 'Buyer unreachable after repeated attempts.' }) },
 
   // ---- notifications --------------------------------------------------------------------
   { method: 'get', contractPath: '/notifications', url: () => '/notifications', allow: ['BUYER', 'SELLER', 'ADMIN'] },

@@ -40,6 +40,12 @@ enum TransactionStatus {
   PENDING
   COMPLETED
   FAILED
+  // BV-004 / BV-006: an admin's only way to give up on a transaction that will never be paid
+  // (an uncapped-bid winner who vanishes, a buyer who never returns after a decline). Reachable
+  // only from PENDING -- a COMPLETED sale needs a refund (BV-047), not a void. Excluded from
+  // every revenue aggregate by construction: those all filter FOR status = 'COMPLETED' rather
+  // than excluding specific statuses, so a new one needs no separate exclusion list to stay out.
+  VOIDED
 }
 
 // BV-018: no route deletes a User today. When one is added it can only be anonymise-in-place

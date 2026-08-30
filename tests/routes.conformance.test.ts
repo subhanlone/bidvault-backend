@@ -623,6 +623,29 @@ describe('admin', () => {
     expect(bucket.value).toBeGreaterThanOrEqual(77_000);
     expect(bucket.bids).toBeGreaterThanOrEqual(1);
   });
+
+  it('GET /admin/transactions', async () => {
+    hit('get', '/admin/transactions');
+    const res = await request(app).get(api('/admin/transactions')).set(auth(w.admin.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.some((tx: { transactionId: string }) => tx.transactionId === w.transactionId)).toBe(true);
+  });
+
+  it('POST /admin/transactions/{transactionId}/void', async () => {
+    hit('post', '/admin/transactions/{transactionId}/void');
+    const res = await request(app)
+      .post(api(`/admin/transactions/${w.transactionId}/void`))
+      .set(auth(w.admin.token))
+      .send({ reason: 'Buyer unreachable after repeated attempts.' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('VOIDED');
+
+    const row = await prisma.auctionTransaction.findUniqueOrThrow({ where: { id: w.transactionId } });
+    expect(row.status).toBe('VOIDED');
+
+    // Restore PENDING so later tests in this file that depend on w.transactionId are unaffected.
+    await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'PENDING' } });
+  });
 });
 
 // ---- the guard --------------------------------------------------------------------

@@ -143,7 +143,7 @@ const documentInput = {
     //
     // 2.5.0, 2026-08-30, minor: GET /health gained workerHeartbeatAgeSeconds, so a dead
     // lifecycle worker is externally observable instead of silent. See BV-012.
-    version: '2.5.0',
+    version: '2.6.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -635,6 +635,35 @@ const documentInput = {
           200: okBody(S.AnalyticsDto, 'Platform analytics'),
           401: unauthorized,
           403: forbidden,
+        },
+      },
+    },
+    '/admin/transactions': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'Every PENDING transaction, oldest first — the ones a void might apply to',
+        responses: {
+          200: okBody(z.array(S.AdminTransactionDto), 'Pending transactions'),
+          401: unauthorized,
+          403: forbidden,
+        },
+      },
+    },
+    '/admin/transactions/{transactionId}/void': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'PENDING transactions only — a COMPLETED sale needs a refund, not a void',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        requestBody: jsonRequest(R.voidTransactionSchema),
+        responses: {
+          200: okBody(z.object({ transactionId: z.string(), status: z.literal('VOIDED') }), 'Voided'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The transaction is not pending'),
         },
       },
     },

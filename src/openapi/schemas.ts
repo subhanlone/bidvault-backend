@@ -25,7 +25,7 @@ export const AuctionStatus = z
   .enum(['SCHEDULED', 'ACTIVE', 'CLOSED'])
   .meta({ id: 'AuctionStatus' });
 export const TransactionStatus = z
-  .enum(['PENDING', 'COMPLETED', 'FAILED'])
+  .enum(['PENDING', 'COMPLETED', 'FAILED', 'VOIDED'])
   .meta({ id: 'TransactionStatus' });
 export const NotificationType = z
   .enum([
@@ -263,6 +263,23 @@ export const WonTransactionDto = z
 export const SellerStatsDto = z
   .object({ totalRevenue: z.number().int(), itemsSold: z.number().int() })
   .meta({ id: 'SellerStats' });
+
+/** A PENDING transaction an admin can void — see POST /admin/transactions/{transactionId}/void. */
+export const AdminTransactionDto = z
+  .object({
+    transactionId: z.string(),
+    auctionId: z.string(),
+    auctionTitle: z.string(),
+    buyerId: z.string(),
+    buyerName: z.string(),
+    sellerId: z.string(),
+    sellerName: z.string(),
+    finalAmount: z.number().int(),
+    status: TransactionStatus,
+    lastPaymentError: z.string().optional(),
+    createdAt: isoDateTime,
+  })
+  .meta({ id: 'AdminTransaction' });
 
 export const AnalyticsDto = z
   .object({

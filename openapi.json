@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "2.5.0",
+    "version": "2.6.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually."
   },
   "servers": [
@@ -2655,6 +2655,190 @@
           }
         }
       }
+    },
+    "/admin/transactions": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Every PENDING transaction, oldest first — the ones a void might apply to",
+        "responses": {
+          "200": {
+            "description": "Pending transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdminTransaction"
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/transactions/{transactionId}/void": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "PENDING transactions only — a COMPLETED sale needs a refund, not a void",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoidTransactionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Voided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "transactionId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "const": "VOIDED"
+                        }
+                      },
+                      "required": [
+                        "transactionId",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The transaction is not pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3023,6 +3207,19 @@
             "maxLength": 254
           }
         }
+      },
+      "VoidTransactionRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "reason"
+        ]
       },
       "Health": {
         "type": "object",
@@ -3931,7 +4128,8 @@
         "enum": [
           "PENDING",
           "COMPLETED",
-          "FAILED"
+          "FAILED",
+          "VOIDED"
         ]
       },
       "SellerStats": {
@@ -4338,6 +4536,61 @@
           "monthlyRevenue",
           "categoryBreakdown",
           "topSellers"
+        ],
+        "additionalProperties": false
+      },
+      "AdminTransaction": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "type": "string"
+          },
+          "auctionId": {
+            "type": "string"
+          },
+          "auctionTitle": {
+            "type": "string"
+          },
+          "buyerId": {
+            "type": "string"
+          },
+          "buyerName": {
+            "type": "string"
+          },
+          "sellerId": {
+            "type": "string"
+          },
+          "sellerName": {
+            "type": "string"
+          },
+          "finalAmount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "status": {
+            "$ref": "#/components/schemas/TransactionStatus"
+          },
+          "lastPaymentError": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          }
+        },
+        "required": [
+          "transactionId",
+          "auctionId",
+          "auctionTitle",
+          "buyerId",
+          "buyerName",
+          "sellerId",
+          "sellerName",
+          "finalAmount",
+          "status",
+          "createdAt"
         ],
         "additionalProperties": false
       }

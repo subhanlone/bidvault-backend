@@ -178,3 +178,9 @@ export const updateSettingsSchema = z
     supportEmail: strictEmail.optional(),
   })
   .meta({ id: 'UpdateSettingsRequest' });
+
+// ---- admin ------------------------------------------------------------------------
+
+export const voidTransactionSchema = z
+  .object({ reason: z.string().trim().min(3).max(500) })
+  .meta({ id: 'VoidTransactionRequest' });
