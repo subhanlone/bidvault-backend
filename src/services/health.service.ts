@@ -27,16 +27,25 @@ export interface Probe {
  */
 export async function probe(run: () => Promise<unknown>): Promise<Probe> {
   const started = Date.now();
+  // BV-051: the race's loser doesn't stop running. On the common path -- the dependency
+  // answers well inside the timeout -- run() settles first and this timer was never
+  // cancelled, left to fire up to PROBE_TIMEOUT_MS later for a race Promise.race had already
+  // decided. Harmless in isolation, but /health is polled continuously, so every fast check
+  // held a live timer open behind it. server.ts's graceful shutdown waits for exactly this
+  // kind of handle to close on its own before Node can exit.
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       run(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('probe timed out')), PROBE_TIMEOUT_MS),
-      ),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('probe timed out')), PROBE_TIMEOUT_MS);
+      }),
     ]);
     return { state: 'up', latencyMs: Date.now() - started };
   } catch {
     return { state: 'down', latencyMs: Date.now() - started };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
