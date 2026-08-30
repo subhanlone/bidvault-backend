@@ -296,28 +296,6 @@ export async function sendListingRejectedEmail(
 // Auction emails
 // ---------------------------------------------------------------------------
 
-export async function sendAuctionStartedEmail(
-  to: { email: string; name: string },
-  auction: { title: string; auctionId: string },
-): Promise<void> {
-  if (!(await alertsEnabled())) return;
-  await send(to.email, `Your auction is now live — "${auction.title}"`, base(
-    'Auction live',
-    `
-    ${h1('Your auction is live!')}
-    ${p(`Hi ${to.name}, your auction has started and is now accepting bids.`)}
-    ${divider()}
-    <table width="100%" cellpadding="0" cellspacing="0">
-      ${infoRow('Item', auction.title)}
-      ${infoRow('Status', 'Live')}
-      ${infoRow('Auction ID', auction.auctionId.slice(0, 8).toUpperCase())}
-    </table>
-    ${divider()}
-    ${p('Log in to your seller dashboard to monitor bids in real time.')}
-    `,
-  ));
-}
-
 export async function sendAuctionEndedEmail(
   seller: { email: string; name: string },
   auction: { title: string; finalBid: number; bidCount: number },
