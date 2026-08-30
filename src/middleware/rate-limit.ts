@@ -67,6 +67,7 @@ function makeLimiter(params: {
   keyGenerator?: (req: Request) => string;
   message: string;
   skip?: (req: Request) => boolean;
+  skipSuccessfulRequests?: boolean;
 }) {
   const store = storeFor(params.name);
   stores.push(store);
@@ -79,6 +80,7 @@ function makeLimiter(params: {
     keyGenerator: params.keyGenerator,
     handler: (_req, res) => tooMany(res, params.message),
     ...(params.skip && { skip: params.skip }),
+    ...(params.skipSuccessfulRequests && { skipSuccessfulRequests: true }),
     // A Redis outage must not turn the limiter into a platform outage. This is only true
     // because getRateLimitRedis() rejects on an outage rather than queueing — see the note
     // in infra/redis.ts. The global and route-specific controls fail open; the OTP attempt
@@ -102,12 +104,27 @@ export const globalRateLimit = makeLimiter({
   skip: (req) => req.path === '/api/v1/payments/webhook',
 });
 
+// Both login limiters count only FAILED attempts.
+//
+// What they exist to bound is guessing, and a successful sign-in is not a guess. Counting
+// successes made the IP limiter an availability bug waiting for a busy network: everyone behind
+// one office NAT or a mobile carrier's CGNAT shares a key, so the eleventh person to sign in
+// correctly within fifteen minutes was locked out along with everyone after them, with nothing
+// in the logs naming the cause. Pakistan's mobile networks are heavily CGNAT'd, so that is the
+// normal case here, not the edge one. The per-address limiter is skipped for the same reason at
+// smaller scale -- a person with several devices should not lock their own account by using it.
+//
+// This is deliberately NOT applied to the auth-email limiters below. Those endpoints answer 200
+// whether or not the address exists, because telling the difference is the enumeration leak they
+// were built to close, so "successful" there means every request and skipping them would leave
+// no limit at all.
 export const loginIpRateLimit = makeLimiter({
   name: 'login-ip',
   windowMs: 15 * MINUTE,
   limit: 10,
   keyGenerator: keyByIp,
   message: 'Too many login attempts. Please try again later.',
+  skipSuccessfulRequests: true,
 });
 
 export const loginEmailRateLimit = makeLimiter({
@@ -116,6 +133,7 @@ export const loginEmailRateLimit = makeLimiter({
   limit: 10,
   keyGenerator: keyByEmail,
   message: 'Too many login attempts. Please try again later.',
+  skipSuccessfulRequests: true,
 });
 
 // Shared by forgot-password and resend-verification, so alternating endpoints does not
