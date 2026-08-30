@@ -83,10 +83,12 @@ describe('cross-process invalidation', () => {
     });
     await getSettingsPublishRedis().publish(SETTINGS_INVALIDATE_CHANNEL, '1');
 
+    // 5s rather than the 1s default: a real Redis pub/sub round trip plus a DB read can
+    // outrun vi.waitFor's default under a loaded CI runner.
     await vi.waitFor(async () => {
       const settings = await getPlatformSettings();
       expect(settings.minListingPrice).toBe(42_000);
-    });
+    }, 5000);
   });
 });
 
