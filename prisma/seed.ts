@@ -121,6 +121,14 @@ async function main() {
     });
   }
 
+  // BV-025: created once here rather than lazily by the first settings read, so a read never
+  // has to be a write. update: {} makes this safe to re-run.
+  await prisma.platformSetting.upsert({
+    where: { id: 'singleton' },
+    update: {},
+    create: { id: 'singleton' },
+  });
+
   console.log('Seed complete.');
 }
 

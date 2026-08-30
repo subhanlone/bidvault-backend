@@ -6,6 +6,9 @@ import { prisma } from './db/prisma.js';
 import { redisConnection } from './infra/redis.js';
 import { verifyAccessToken } from './utils/jwt.js';
 import { registerAuctionSubscriptions } from './socket/auction-subscriptions.js';
+import { subscribeToSettingsInvalidation } from './services/settings.service.js';
+
+void subscribeToSettingsInvalidation();
 
 const app = createApp();
 const httpServer = createServer(app);

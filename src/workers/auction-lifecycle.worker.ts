@@ -9,6 +9,13 @@ import {
 } from '../queues/auction-lifecycle.queue.js';
 import { closeAuction } from './close-auction.js';
 import { WORKER_HEARTBEAT_KEY, WORKER_HEARTBEAT_INTERVAL_MS } from '../infra/worker-heartbeat.js';
+import { subscribeToSettingsInvalidation } from '../services/settings.service.js';
+
+// BV-025: close-auction.ts sends email through email.service.ts, which reads
+// emailNotifsEnabled via getPlatformSettings() -- this process needs the same cross-process
+// invalidation the API server gets, or a settings PUT there leaves this one serving a stale
+// value for up to the 10s TTL.
+void subscribeToSettingsInvalidation();
 
 // The close logic itself lives in ./close-auction.ts, which imports no BullMQ and opens no
 // connection — so it can be tested without joining the queue. This file is only the plumbing.
