@@ -1,10 +1,14 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  // BV-017: needed to declare the trigram GIN indexes below in the schema itself, so `db push`/
+  // `migrate diff` stay aware of them instead of treating hand-written SQL as drift.
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pg_trgm]
 }
 
 enum UserRole {
@@ -133,6 +137,12 @@ model Auction {
 
   @@index([status, endTime])
   @@index([sellerId])
+  // BV-017: the search box's `contains ... mode: 'insensitive'` on title/description
+  // (auctions.routes.ts) is an unanchored ILIKE '%…%', which no B-tree index can serve --
+  // confirmed with EXPLAIN even with sequential scans forcibly disabled, the planner still had
+  // no alternative. These are the only indexes in the schema that answer it.
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([description(ops: raw("gin_trgm_ops"))], type: Gin)
 }
 
 model Bid {
