@@ -119,6 +119,22 @@ async function approveOneListing(
       });
     }
 
+    // Same transaction as the state change it records, not a best-effort write after it
+    // (BV-050): an audit log created afterward can be lost to a crash between the commit and
+    // this call, leaving an approval with no trail of who made it. schedulingFailed isn't
+    // known yet at this point -- scheduling calls an external queue and cannot itself run
+    // inside a DB transaction -- so it stays out of this record; a failure there gets its own
+    // console.error below, not a silent gap in this one.
+    await tx.auditLog.create({
+      data: {
+        actorUserId: adminUserId,
+        action: 'LISTING_APPROVED',
+        entityType: 'Listing',
+        entityId: listing.id,
+        metadata: { auctionId: auction.id },
+      },
+    });
+
     return { updatedListing, auction, isNewAuction: !existingAuction };
   });
 
@@ -141,16 +157,6 @@ async function approveOneListing(
     { title: listing.title, listingCode: listing.listingCode },
   ), 'listing approved');
 
-  await prisma.auditLog.create({
-    data: {
-      actorUserId: adminUserId,
-      action: 'LISTING_APPROVED',
-      entityType: 'Listing',
-      entityId: listing.id,
-      metadata: { auctionId: result.auction?.id, schedulingFailed },
-    },
-  }).catch(() => {});
-
   await prisma.notification.create({
     data: {
       userId: listing.sellerId,
@@ -163,7 +169,10 @@ async function approveOneListing(
       // reasonably wait for a start that had already happened.
       message: `Your listing "${listing.title}" has been approved and your auction is now live.`,
     },
-  }).catch(() => {});
+    // Best-effort and logged rather than silent (BV-050): a lost in-app notification is
+    // recoverable (the seller still gets the email above, and sees the listing live either
+    // way) but a swallowed failure here previously left no trace it happened at all.
+  }).catch((err: unknown) => console.error('[listings] approval notification failed', { listingId: listing.id, err }));
 
   return {
     listingId: result.updatedListing.id,
@@ -231,21 +240,21 @@ router.post(
   asyncHandler(async (req, res) => {
     const settings = await getPlatformSettings();
     if (req.body.startPrice < settings.minListingPrice) {
-      fail(res, `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`, 400);
+      fail(res, `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`, 422);
       return;
     }
     if (req.body.imageUrl && !isOwnedCloudinaryImage(req.body.imageUrl, req.auth!.userId)) {
-      fail(res, 'Image must be an upload issued for this seller by BidVault.', 400);
+      fail(res, 'Image must be an upload issued for this seller by BidVault.', 422);
       return;
     }
     if (req.body.minIncrement > settings.maxBidIncrement) {
-      fail(res, `Minimum bid increment cannot exceed PKR ${settings.maxBidIncrement.toLocaleString()}.`, 400);
+      fail(res, `Minimum bid increment cannot exceed PKR ${settings.maxBidIncrement.toLocaleString()}.`, 422);
       return;
     }
 
     const attributesResult = validateCategoryAttributes(req.body.category, req.body.attributes);
     if (!attributesResult.success) {
-      fail(res, attributesResult.error, 400);
+      fail(res, attributesResult.error, 422);
       return;
     }
 
@@ -388,7 +397,7 @@ router.post(
     }
 
     if (listing.status !== 'PENDING') {
-      fail(res, 'Only pending listings can be rejected.', 400);
+      fail(res, 'Only pending listings can be rejected.', 409);
       return;
     }
 
@@ -415,7 +424,7 @@ router.post(
         entityId: listing.id,
         metadata: { reason: req.body.reason },
       },
-    }).catch(() => {});
+    }).catch((err: unknown) => console.error('[listings] rejection audit log failed', { listingId: listing.id, err }));
 
     await prisma.notification.create({
       data: {
@@ -424,7 +433,7 @@ router.post(
         title: 'Listing rejected',
         message: `Your listing "${listing.title}" was not approved. Reason: ${req.body.reason}`,
       },
-    }).catch(() => {});
+    }).catch((err: unknown) => console.error('[listings] rejection notification failed', { listingId: listing.id, err }));
 
     ok(res, {
       listingId: updated.id,

@@ -61,6 +61,20 @@ describe('GET /health', () => {
   }, 20_000);
 });
 
+describe('graceful shutdown (BV-052)', () => {
+  it('answers 503 once shuttingDown is set, without probing either dependency', async () => {
+    // server.ts sets this on the same app instance from its SIGTERM/SIGINT handler; a fresh
+    // app here stands in for it rather than sending a real signal to this test process.
+    const shuttingDownApp = createApp();
+    shuttingDownApp.set('shuttingDown', true);
+
+    const res = await request(shuttingDownApp).get('/api/v1/health');
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ success: false, error: 'Shutting down.' });
+  });
+});
+
 describe('probe timeout', () => {
   it('gives up on a dependency that never answers', async () => {
     // The real hazard: ioredis with maxRetriesPerRequest: null does not reject against an

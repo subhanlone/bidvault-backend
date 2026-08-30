@@ -487,7 +487,7 @@ describe('a completed purchase', () => {
       .set(bearer(w.buyer.token))
       .send({ transactionId: w.transactionId });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(409);
     expect(created).toHaveLength(0);
   });
 });

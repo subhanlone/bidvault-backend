@@ -304,6 +304,20 @@ describe('auctions', () => {
     const res = await request(app).get(api('/auctions/mine/bids')).set(auth(w.buyer.token));
     expect(res.status).toBe(200);
   });
+
+  // BV-065: this operation's 400 is validateBody's ValidationErrorBody; the bid-floor
+  // rejection below is a business rule the handler checks itself, on the same auction the
+  // happy-path test above already bid on (currentBid 21,000, minIncrement 1,000 — 22,000 is
+  // the floor). It used to leave the same 400 slot with a body that shape did not describe.
+  // The afterEach above turns "no violation recorded" into an assertion for free.
+  it('POST /auctions/{auctionId}/bids — below the floor answers 422, not the 400 ValidationError shape', async () => {
+    const res = await request(app)
+      .post(api(`/auctions/${w.liveAuctionId}/bids`))
+      .set(auth(w.buyer.token))
+      .send({ amount: 21_500 });
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({ success: false, error: expect.stringContaining('at least PKR') });
+  });
 });
 
 // ---- listings ---------------------------------------------------------------------
@@ -355,6 +369,15 @@ describe('listings', () => {
       .post(api(`/listings/${w.pendingListingId}/approve`))
       .set(auth(w.admin.token));
     expect(res.status).toBe(200);
+
+    // BV-050: written in the same transaction as the approval itself now, not a best-effort
+    // call afterward -- so it exists exactly when the approval that produced it does.
+    const entry = await prisma.auditLog.findFirst({
+      where: { entityId: w.pendingListingId, action: 'LISTING_APPROVED' },
+    });
+    expect(entry).not.toBeNull();
+    expect(entry?.actorUserId).toBe(w.admin.id);
+    expect((entry?.metadata as { auctionId?: string } | null)?.auctionId).toBe(res.body.data.auctionId);
   });
 
   it('POST /listings/{listingId}/reject', async () => {
@@ -437,6 +460,23 @@ describe('payments', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Validation error');
     expect(res.body.details).toHaveProperty('transactionId');
+  });
+
+  // BV-065: the outcome.status branch in the handler can answer 409 for a transaction that
+  // is already COMPLETED — a business rule, not a validateBody failure — on the same 400
+  // slot ValidationErrorBody had claimed. The afterEach above turns "no violation recorded"
+  // into an assertion for free.
+  it('POST /payments/create-intent — an already-paid transaction answers 409, not 400', async () => {
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: { status: 'COMPLETED' },
+    });
+    const res = await request(app)
+      .post(api('/payments/create-intent'))
+      .set(auth(w.buyer.token))
+      .send({ transactionId: w.transactionId });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ success: false, error: expect.stringContaining('already') });
   });
 
   it('POST /payments/webhook', async () => {

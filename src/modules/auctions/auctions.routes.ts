@@ -164,12 +164,12 @@ router.post(
 
         if (!row) throw new BidError(404, 'Auction not found.');
         if (row.sellerId === buyerId) throw new BidError(403, 'You cannot bid on your own auction.');
-        if (row.status !== 'ACTIVE') throw new BidError(400, 'Bidding is closed for this auction.');
-        if (new Date(row.endTime).getTime() <= Date.now()) throw new BidError(400, 'Auction has already ended.');
+        if (row.status !== 'ACTIVE') throw new BidError(422, 'Bidding is closed for this auction.');
+        if (new Date(row.endTime).getTime() <= Date.now()) throw new BidError(422, 'Auction has already ended.');
 
         const minAllowed = row.currentBid + row.minIncrement;
         if (amount < minAllowed) {
-          throw new BidError(400, `Bid must be at least PKR ${minAllowed.toLocaleString()}.`);
+          throw new BidError(422, `Bid must be at least PKR ${minAllowed.toLocaleString()}.`);
         }
 
         // The int32 schema ceiling prevents a database overflow, but by itself still lets a
@@ -180,7 +180,7 @@ router.post(
           Math.max(minAllowed, row.currentBid * 10, row.startPrice * 100),
         );
         if (amount > maxAllowed) {
-          throw new BidError(400, `Bid cannot exceed PKR ${maxAllowed.toLocaleString()} for this auction.`);
+          throw new BidError(422, `Bid cannot exceed PKR ${maxAllowed.toLocaleString()} for this auction.`);
         }
 
         // NEW-05: outbid notification — find previous highest bidder before updating

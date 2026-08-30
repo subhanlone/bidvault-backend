@@ -96,12 +96,22 @@ function operationKey(req: Request): string | null {
  * So: the response is always served as the handler wrote it. Every environment logs. Tests
  * drain the list after each request and fail on anything in it, which is where enforcement
  * belongs — the message is exact, and the response under test is the real one.
+ *
+ * Keyed by operation + status rather than pushed onto a plain array (BV-016): a single
+ * flapping operation serving one wrong shape on every request used to grow this without
+ * bound in a long-running process — nothing but a test's afterEach ever drained it, and
+ * production never calls that. A map re-records the same key in place, so the process holds
+ * at most one entry per distinct (operation, status) drift, capped at MAX_RECORDED as a
+ * backstop — the API has 43 operations and a handful of statuses each, so reaching it
+ * organically would itself be its own incident.
  */
-const recorded: string[] = [];
+const MAX_RECORDED = 100;
+const recorded = new Map<string, string>();
 
-function violation(message: string): void {
-  recorded.push(message);
+function violation(dedupeKey: string, message: string): void {
   console.error(`[contract] ${message}`);
+  if (!recorded.has(dedupeKey) && recorded.size >= MAX_RECORDED) return;
+  recorded.set(dedupeKey, message);
 }
 
 /**
@@ -109,7 +119,14 @@ function violation(message: string): void {
  * Used by the conformance suite's afterEach; not part of the request path.
  */
 export function takeViolations(): string[] {
-  return recorded.splice(0, recorded.length);
+  const values = [...recorded.values()];
+  recorded.clear();
+  return values;
+}
+
+/** Distinct (operation, status) violations currently outstanding — read by GET /health. */
+export function violationCount(): number {
+  return recorded.size;
 }
 
 function check(req: Request, res: Response, body: unknown): void {
@@ -119,7 +136,7 @@ function check(req: Request, res: Response, body: unknown): void {
 
   const byStatus = contract.get(key);
   if (!byStatus) {
-    violation(`${key} is served but openapi.json does not document it`);
+    violation(key, `${key} is served but openapi.json does not document it`);
     return;
   }
 
@@ -131,7 +148,7 @@ function check(req: Request, res: Response, body: unknown): void {
     // errorHandler's 500 is deliberately not in the contract, and neither is every
     // possible 4xx on every route.
     if (res.statusCode < 300) {
-      violation(`${key} answered ${status}, which the contract does not document`);
+      violation(`${key} ${status}`, `${key} answered ${status}, which the contract does not document`);
     }
     return;
   }
@@ -143,7 +160,7 @@ function check(req: Request, res: Response, body: unknown): void {
     .slice(0, 5)
     .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
     .join('; ');
-  violation(`${key} ${status} does not match its schema — ${issues}`);
+  violation(`${key} ${status}`, `${key} ${status} does not match its schema — ${issues}`);
 }
 
 export function responseContract() {

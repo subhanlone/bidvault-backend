@@ -178,7 +178,7 @@ describe('rate limits and OTP attempt budgets', () => {
       const res = await request(app)
         .post(api('/auth/verify-reset-otp'))
         .send({ email: w.buyer.email, otp: '654321' });
-      expect(res.status, `attempt ${attempt}`).toBe(400);
+      expect(res.status, `attempt ${attempt}`).toBe(422);
       expect(res.body.error).toBe('Invalid or expired code.');
     }
 
@@ -196,7 +196,7 @@ describe('rate limits and OTP attempt budgets', () => {
       const res = await request(app)
         .post(api('/auth/verify-email'))
         .send({ email: w.buyer.email, otp: '654321' });
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(422);
       expect(res.body.error).toBe('Invalid or expired code.');
     }
 
@@ -407,7 +407,7 @@ describe('bounded values and escaped email output', () => {
       .post(api(`/auctions/${w.liveAuctionId}/bids`))
       .set(auth(w.buyer.token))
       .send({ amount: 2_000_000_000 });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
     expect(res.body.error).toContain('cannot exceed');
   });
 

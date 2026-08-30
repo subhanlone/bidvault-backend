@@ -29,7 +29,7 @@ router.post(
       return;
     }
     if (tx.status !== 'COMPLETED') {
-      fail(res, 'Complete payment before rating the seller.', 400);
+      fail(res, 'Complete payment before rating the seller.', 422);
       return;
     }
 

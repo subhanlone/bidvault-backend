@@ -14,8 +14,8 @@ import settingsRoutes from './modules/settings/settings.routes.js';
 import { env, clientOrigins } from './config/env.js';
 import { maintenanceGuard } from './middleware/maintenance.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
-import { responseContract } from './middleware/response-contract.js';
-import { ok } from './utils/response.js';
+import { responseContract, violationCount } from './middleware/response-contract.js';
+import { ok, fail } from './utils/response.js';
 import { asyncHandler } from './utils/async-handler.js';
 import { prisma } from './db/prisma.js';
 import { probeDatabase, probeRedis } from './services/health.service.js';
@@ -69,7 +69,14 @@ export function createApp() {
   //
   // So: the status code answers "is this process alive", the body answers "and how are its
   // dependencies". A caller that needs readiness reads `dependencies`.
-  app.get('/api/v1/health', asyncHandler(async (_req, res) => {
+  app.get('/api/v1/health', asyncHandler(async (req, res) => {
+    // Set by server.ts's shutdown handler the moment SIGTERM/SIGINT arrives. Distinct from
+    // the dependency-down case just above: that is "alive but degraded, do not restart me",
+    // this is "about to stop accepting work, stop sending me new traffic" (BV-052).
+    if (req.app.get('shuttingDown')) {
+      fail(res, 'Shutting down.', 503);
+      return;
+    }
     const [database, redis] = await Promise.all([probeDatabase(), probeRedis()]);
     ok(res, {
       status: 'ok',
@@ -77,6 +84,7 @@ export function createApp() {
       version: document.info.version,
       commit: env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local',
       dependencies: { database, redis },
+      contractViolations: violationCount(),
     });
   }));
 

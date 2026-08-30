@@ -185,7 +185,7 @@ router.post(
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
     if (!user) {
-      fail(res, INVALID_CODE, 400);
+      fail(res, INVALID_CODE, 422);
       return;
     }
 
@@ -201,7 +201,7 @@ router.post(
 
     if (!token || !otpMatches(token.code, otp)) {
       if (token) await recordVerificationMiss(token.id);
-      fail(res, INVALID_CODE, 400);
+      fail(res, INVALID_CODE, 422);
       return;
     }
 
@@ -425,7 +425,7 @@ router.post(
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
     if (!user) {
-      fail(res, INVALID_CODE, 400);
+      fail(res, INVALID_CODE, 422);
       return;
     }
 
@@ -441,7 +441,7 @@ router.post(
 
     if (!token || !otpMatches(token.code, otp)) {
       if (token) await recordResetMiss(token.id);
-      fail(res, INVALID_CODE, 400);
+      fail(res, INVALID_CODE, 422);
       return;
     }
 
@@ -457,7 +457,7 @@ router.post(
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
     if (!user) {
-      fail(res, INVALID_CODE, 400);
+      fail(res, INVALID_CODE, 422);
       return;
     }
 
@@ -473,7 +473,7 @@ router.post(
 
     if (!token || !otpMatches(token.code, otp)) {
       if (token) await recordResetMiss(token.id);
-      fail(res, INVALID_CODE, 400);
+      fail(res, INVALID_CODE, 422);
       return;
     }
 
@@ -552,7 +552,7 @@ router.post(
 
     const matched = await verifyPassword(currentPassword, user.passwordHash);
     if (!matched) {
-      fail(res, 'Current password is incorrect.', 400);
+      fail(res, 'Current password is incorrect.', 422);
       return;
     }
 

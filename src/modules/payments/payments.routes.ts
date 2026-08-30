@@ -137,7 +137,7 @@ router.post(
         // what made one decline permanent — see BV-006 and the lastPaymentError column.
         // COMPLETED is genuinely terminal.
         if (row.status === 'COMPLETED') {
-          return { kind: 'fail' as const, message: 'This purchase has already been paid for.', status: 400 };
+          return { kind: 'fail' as const, message: 'This purchase has already been paid for.', status: 409 };
         }
 
         if (row.stripePaymentIntentId) {
