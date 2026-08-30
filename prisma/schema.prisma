@@ -87,6 +87,9 @@ model Listing {
   updatedAt       DateTime      @updatedAt
   seller          User          @relation("SellerListings", fields: [sellerId], references: [id])
   auction         Auction?
+
+  @@index([status, submittedAt])
+  @@index([sellerId, submittedAt])
 }
 
 model Auction {
@@ -121,6 +124,9 @@ model Auction {
   watchlistBy   Watchlist[]
   transactions  AuctionTransaction[]
   reviews       SellerReview[]
+
+  @@index([status, endTime])
+  @@index([sellerId])
 }
 
 model Bid {
@@ -144,6 +150,7 @@ model Watchlist {
   auction   Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
 
   @@id([userId, auctionId])
+  @@index([auctionId])
 }
 
 model EmailVerificationToken {
@@ -196,6 +203,8 @@ model Notification {
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
 }
 
 model AuctionTransaction {
@@ -224,6 +233,8 @@ model AuctionTransaction {
   review               SellerReview?
 
   @@unique([auctionId])
+  @@index([sellerId, status])
+  @@index([winnerId])
 }
 
 model SellerReview {
