@@ -111,6 +111,10 @@ export const preferencesSchema = z
   })
   .meta({ id: 'NotificationPreferences' });
 
+export const deleteAccountSchema = z
+  .object({ password: z.string().min(1).max(128) })
+  .meta({ id: 'DeleteAccountRequest' });
+
 // ---- listings ---------------------------------------------------------------------
 
 export const submitListingSchema = z
@@ -181,3 +185,7 @@ export const updateSettingsSchema = z
 export const voidTransactionSchema = z
   .object({ reason: z.string().trim().min(3).max(500) })
   .meta({ id: 'VoidTransactionRequest' });
+
+export const anonymizeUserSchema = z
+  .object({ reason: z.string().trim().min(3).max(500) })
+  .meta({ id: 'AnonymizeUserRequest' });

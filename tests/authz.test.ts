@@ -83,6 +83,11 @@ const OPERATIONS: Op[] = [
   { method: 'get', contractPath: '/auth/me/preferences', url: () => '/auth/me/preferences', allow: ['BUYER', 'SELLER', 'ADMIN'] },
   { method: 'patch', contractPath: '/auth/me/preferences', url: () => '/auth/me/preferences',
     allow: ['BUYER', 'SELLER', 'ADMIN'], body: () => ({ notifyOutbid: false }) },
+  // Every role is allowed, so this table only ever exercises the no-token/wrong-role checks
+  // below, never a real deletion — see tests/account-deletion.test.ts for the guard and the
+  // anonymize behaviour itself.
+  { method: 'post', contractPath: '/auth/delete-account', url: () => '/auth/delete-account',
+    allow: ['BUYER', 'SELLER', 'ADMIN'], body: () => ({ password: 'test-password-123' }) },
 
   // ---- auctions -------------------------------------------------------------------------
   { method: 'get', contractPath: '/auctions/mine/bids', url: () => '/auctions/mine/bids', allow: ['BUYER'] },
@@ -125,6 +130,10 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/admin/transactions/{transactionId}/void',
     url: (w) => `/admin/transactions/${w.transactionId}/void`, allow: ['ADMIN'],
     body: () => ({ reason: 'Buyer unreachable after repeated attempts.' }) },
+  { method: 'get', contractPath: '/admin/users', url: () => '/admin/users?email=test', allow: ['ADMIN'] },
+  { method: 'post', contractPath: '/admin/users/{userId}/anonymize',
+    url: (w) => `/admin/users/${w.otherBuyer.id}/anonymize`, allow: ['ADMIN'],
+    body: () => ({ reason: 'Authz probe' }) },
 
   // ---- notifications --------------------------------------------------------------------
   { method: 'get', contractPath: '/notifications', url: () => '/notifications', allow: ['BUYER', 'SELLER', 'ADMIN'] },

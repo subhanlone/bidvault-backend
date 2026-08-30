@@ -262,6 +262,16 @@ describe('auth', () => {
       .send({ notifyOutbid: false });
     expect(res.status).toBe(200);
   });
+
+  it('POST /auth/delete-account', async () => {
+    hit('post', '/auth/delete-account');
+    // otherBuyer, not buyer: buyer has a PENDING transaction in this world and would 409.
+    const res = await request(app)
+      .post(api('/auth/delete-account'))
+      .set(auth(w.otherBuyer.token))
+      .send({ password: PASSWORD });
+    expect(res.status).toBe(200);
+  });
 });
 
 // ---- auctions ---------------------------------------------------------------------
@@ -642,6 +652,25 @@ describe('admin', () => {
 
     // Restore PENDING so later tests in this file that depend on w.transactionId are unaffected.
     await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'PENDING' } });
+  });
+
+  it('GET /admin/users', async () => {
+    hit('get', '/admin/users');
+    const res = await request(app)
+      .get(api(`/admin/users?email=${encodeURIComponent(w.otherSeller.email)}`))
+      .set(auth(w.admin.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.some((u: { userId: string }) => u.userId === w.otherSeller.id)).toBe(true);
+  });
+
+  it('POST /admin/users/{userId}/anonymize', async () => {
+    hit('post', '/admin/users/{userId}/anonymize');
+    const res = await request(app)
+      .post(api(`/admin/users/${w.otherSeller.id}/anonymize`))
+      .set(auth(w.admin.token))
+      .send({ reason: 'Requested via support ticket.' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('ANONYMIZED');
   });
 });
 

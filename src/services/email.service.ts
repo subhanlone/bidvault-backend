@@ -210,6 +210,19 @@ export async function sendPasswordResetCompletedEmail(to: { email: string; name:
   ));
 }
 
+// BV-018: sent to the address the account had *before* it was anonymised -- once the route
+// clears User.email there is nowhere left to deliver this, so it has to go out first.
+export async function sendAccountDeletedEmail(to: { email: string; name: string }): Promise<void> {
+  await send(to.email, 'Your BidVault account has been deleted', base(
+    'Account deleted',
+    `
+    ${h1('Account deleted')}
+    ${p(`Hi ${to.name}, your BidVault account has been deleted. Your name and email have been removed; bid and transaction records are kept as required for dispute resolution and legal compliance, but are no longer linked to an identifiable account.`)}
+    ${p('If you did not request this, contact support immediately.')}
+    `,
+  ));
+}
+
 // BV-031: a revoked refresh token being presented again means two holders came from the same
 // token family -- the signature the rotation machinery exists to catch. Revoking every
 // session is the containment step; this is the notification, so the account owner learns

@@ -281,6 +281,17 @@ export const AdminTransactionDto = z
   })
   .meta({ id: 'AdminTransaction' });
 
+/** A search result for GET /admin/users — used to find the account BV-018's anonymize route targets. */
+export const AdminUserDto = z
+  .object({
+    userId: z.string(),
+    name: z.string(),
+    email: z.string(),
+    role: UserRole,
+    createdAt: isoDateTime,
+  })
+  .meta({ id: 'AdminUser' });
+
 export const AnalyticsDto = z
   .object({
     totalRevenue: z.number().int(),

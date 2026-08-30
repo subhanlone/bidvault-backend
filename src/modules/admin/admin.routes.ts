@@ -5,7 +5,9 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
-import { voidTransactionSchema } from '../../openapi/requests.js';
+import { voidTransactionSchema, anonymizeUserSchema } from '../../openapi/requests.js';
+import { checkAccountDeletable, anonymizeUser } from '../../services/account.service.js';
+import { dispatchEmail, sendAccountDeletedEmail } from '../../services/email.service.js';
 
 const router = Router();
 
@@ -250,6 +252,75 @@ router.post(
       return;
     }
     ok(res, { transactionId, status: 'VOIDED' });
+  }),
+);
+
+// BV-018: the admin half of anonymise-in-place -- for a support request from someone who can
+// no longer sign in to use the self-service route themselves (auth/delete-account). Search by
+// email first: there is no general user-directory screen, and building one is a bigger
+// feature than this one action needs.
+router.get(
+  '/users',
+  requireAuth(['ADMIN']),
+  asyncHandler(async (req, res) => {
+    const email = (req.query.email as string | undefined)?.trim();
+    if (!email) {
+      fail(res, 'Query parameter "email" is required.', 400);
+      return;
+    }
+
+    const users = await prisma.user.findMany({
+      where: { email: { contains: email, mode: 'insensitive' } },
+      select: { id: true, name: true, email: true, role: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+
+    ok(res, users.map((u) => ({
+      userId: u.id,
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      createdAt: u.createdAt.toISOString(),
+    })));
+  }),
+);
+
+router.post(
+  '/users/:userId/anonymize',
+  requireAuth(['ADMIN']),
+  validateBody(anonymizeUserSchema),
+  asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    const { reason } = req.body;
+    const adminUserId = req.auth!.userId;
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      fail(res, 'User not found.', 404);
+      return;
+    }
+
+    const guard = await checkAccountDeletable(userId);
+    if (!guard.allowed) {
+      fail(res, guard.reason!, 409);
+      return;
+    }
+
+    dispatchEmail(sendAccountDeletedEmail({ email: user.email, name: user.name }), 'account deleted (admin)');
+
+    await anonymizeUser(userId);
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: adminUserId,
+        action: 'USER_ANONYMIZED',
+        entityType: 'User',
+        entityId: userId,
+        metadata: { reason },
+      },
+    });
+
+    ok(res, { userId, status: 'ANONYMIZED' });
   }),
 );
 

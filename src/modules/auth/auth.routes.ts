@@ -28,6 +28,7 @@ import {
   resendVerificationSchema,
   changePasswordSchema,
   preferencesSchema,
+  deleteAccountSchema,
 } from '../../openapi/requests.js';
 import { hashToken } from '../../utils/token-hash.js';
 import {
@@ -37,6 +38,7 @@ import {
   sendPasswordResetEmail,
   sendPasswordResetCompletedEmail,
   sendSessionsRevokedSecurityAlertEmail,
+  sendAccountDeletedEmail,
   sendVerificationResentEmail,
 } from '../../services/email.service.js';
 import {
@@ -45,6 +47,7 @@ import {
   loginEmailRateLimit,
   loginIpRateLimit,
 } from '../../middleware/rate-limit.js';
+import { checkAccountDeletable, anonymizeUser } from '../../services/account.service.js';
 
 const router = Router();
 const MAX_OTP_ATTEMPTS = 5;
@@ -584,6 +587,45 @@ router.post(
     );
 
     ok(res, { message: 'Password changed successfully.', ...tokens });
+  }),
+);
+
+// BV-018: anonymise-in-place, not DELETE -- see services/account.service.ts. Self-service
+// mirrors how eBay actually gates account closure: no active listing, nothing unpaid or
+// still in progress. Requires the current password for the same reason change-password does
+// -- a session left open on a shared device should not be able to do this with one click.
+router.post(
+  '/delete-account',
+  requireAuth(),
+  validateBody(deleteAccountSchema),
+  asyncHandler(async (req, res) => {
+    const { password } = req.body;
+    const userId = req.auth!.userId;
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+
+    if (!user) {
+      fail(res, 'User not found.', 404);
+      return;
+    }
+
+    const matched = await verifyPassword(password, user.passwordHash);
+    if (!matched) {
+      fail(res, 'Password is incorrect.', 422);
+      return;
+    }
+
+    const guard = await checkAccountDeletable(userId);
+    if (!guard.allowed) {
+      fail(res, guard.reason!, 409);
+      return;
+    }
+
+    // Sent to the real address before anonymizeUser replaces it -- there is nothing left to
+    // deliver to afterward.
+    dispatchEmail(sendAccountDeletedEmail({ email: user.email, name: user.name }), 'account deleted');
+
+    await anonymizeUser(userId);
+    ok(res, { message: 'Your account has been deleted.' });
   }),
 );
 
