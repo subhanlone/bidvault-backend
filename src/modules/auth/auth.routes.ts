@@ -128,18 +128,12 @@ router.post(
   '/register',
   validateBody(registerSchema),
   asyncHandler(async (req, res) => {
-    const { name, email, cnic, password, role } = req.body;
+    const { name, email, password, role } = req.body;
     const normalizedEmail = email.toLowerCase();
 
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (existing) {
-      fail(res, 'An account with these details already exists.', 409);
-      return;
-    }
-
-    const existingCnic = await prisma.user.findUnique({ where: { cnic } });
-    if (existingCnic) {
-      fail(res, 'An account with these details already exists.', 409);
+      fail(res, 'An account with this email already exists.', 409);
       return;
     }
 
@@ -147,7 +141,6 @@ router.post(
       data: {
         name,
         email: normalizedEmail,
-        cnic,
         passwordHash: await hashPassword(password),
         role,
         isEmailVerified: false,

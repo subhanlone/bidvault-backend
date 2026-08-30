@@ -143,7 +143,7 @@ const documentInput = {
     //
     // 2.5.0, 2026-08-30, minor: GET /health gained workerHeartbeatAgeSeconds, so a dead
     // lifecycle worker is externally observable instead of silent. See BV-012.
-    version: '2.6.0',
+    version: '2.7.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -188,7 +188,7 @@ const documentInput = {
         responses: {
           201: okBody(S.RegistrationDto, 'Account created; verification code sent'),
           400: badRequest,
-          409: errBody('Email or CNIC already registered'),
+          409: errBody('Email already registered'),
         },
       },
     },

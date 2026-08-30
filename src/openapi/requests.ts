@@ -18,8 +18,6 @@ import { isAcceptablePassword } from '../security/password-policy.js';
 
 // Letters (incl. accented), spaces, hyphens, and apostrophes only — no digits or other symbols.
 const NAME_REGEX = /^[\p{L}\s'-]+$/u;
-// Pakistani CNIC: 5 digits - 7 digits - 1 digit
-const CNIC_REGEX = /^\d{5}-\d{7}-\d{1}$/;
 const OTP_REGEX = /^\d{6}$/;
 const MAX_MONEY = 2_000_000_000;
 
@@ -63,7 +61,6 @@ export const registerSchema = z
       .max(100)
       .regex(NAME_REGEX, 'Name can only contain letters, spaces, hyphens, and apostrophes'),
     email: strictEmail,
-    cnic: z.string().trim().regex(CNIC_REGEX, 'CNIC must be in the format 12345-1234567-1'),
     password: strongPassword,
     role: z.enum(['BUYER', 'SELLER']),
   })

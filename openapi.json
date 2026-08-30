@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "2.6.0",
+    "version": "2.7.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually."
   },
   "servers": [
@@ -144,7 +144,7 @@
             }
           },
           "409": {
-            "description": "Email or CNIC already registered",
+            "description": "Email already registered",
             "content": {
               "application/json": {
                 "schema": {
@@ -2856,10 +2856,6 @@
             "type": "string",
             "maxLength": 254
           },
-          "cnic": {
-            "type": "string",
-            "pattern": "^\\d{5}-\\d{7}-\\d{1}$"
-          },
           "password": {
             "type": "string",
             "minLength": 8,
@@ -2877,7 +2873,6 @@
         "required": [
           "name",
           "email",
-          "cnic",
           "password",
           "role"
         ]

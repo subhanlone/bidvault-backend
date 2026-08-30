@@ -49,16 +49,14 @@ enum TransactionStatus {
 }
 
 // BV-018: no route deletes a User today. When one is added it can only be anonymise-in-place
-// (clear name/email/cnic, revoke refresh tokens) rather than a real DELETE -- Listing/Auction
-// already RESTRICT a seller's removal, AuctionTransaction RESTRICTs winner/seller too, and CNIC
-// clearing depends on how BV-042 decides to store it. Bid.buyerId SetNull already handles a
-// buyer's own bids safely; this comment is the placeholder the audit asked for until the rest
-// of that route exists.
+// (clear name/email, revoke refresh tokens) rather than a real DELETE -- Listing/Auction already
+// RESTRICT a seller's removal, AuctionTransaction RESTRICTs winner/seller too. Bid.buyerId
+// SetNull already handles a buyer's own bids safely; this comment is the placeholder the audit
+// asked for until the rest of that route exists.
 model User {
   id                 String                   @id @default(cuid())
   name               String
   email              String                   @unique
-  cnic               String?                  @unique
   passwordHash       String
   role               UserRole
   isEmailVerified    Boolean                  @default(false)

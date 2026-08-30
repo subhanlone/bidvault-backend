@@ -105,7 +105,6 @@ describe('auth', () => {
     const res = await request(app).post(api('/auth/register')).send({
       name: 'Fresh User',
       email: 'fresh@test.local',
-      cnic: '99999-1234567-1',
       password: 'a-good-password',
       role: 'BUYER',
     });
@@ -118,7 +117,6 @@ describe('auth', () => {
     await request(app).post(api('/auth/register')).send({
       name: 'Verify Me',
       email: 'verify@test.local',
-      cnic: '88888-1234567-1',
       password: 'a-good-password',
       role: 'BUYER',
     });
@@ -203,7 +201,6 @@ describe('auth', () => {
     await request(app).post(api('/auth/register')).send({
       name: 'Unverified Person',
       email: 'unverified@test.local',
-      cnic: '77777-1234567-1',
       password: 'a-good-password',
       role: 'BUYER',
     });
