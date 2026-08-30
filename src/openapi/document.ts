@@ -95,12 +95,19 @@ const documentInput = {
     // that" is not the same claim as "no caller could", and COMPATIBILITY.md is explicit that
     // the second is what minor asserts.
     //
-    // Also in this version, all additive: 429 declared on the four rate-limited operations,
+    // Also in 2.0.0, all additive: 429 declared on the four rate-limited operations,
     // 403 on login (EMAIL_NOT_VERIFIED, previously served but undocumented), the dead 404 on
     // verify-email removed now that an unknown address answers the same neutral 400 as a
     // wrong code, maxLength on password/token/text fields, and UploadSignature gaining
     // publicId and allowedFormats.
-    version: '2.0.0',
+    //
+    // 2.1.0, 2026-08-28, minor: change-password answers PasswordChanged rather than Message,
+    // adding accessToken and refreshToken beside the existing message. Strictly additive —
+    // the field a 2.0.0 caller reads is still there and still means the same thing — so minor
+    // is what COMPATIBILITY.md asks for. A caller that ignores the new fields behaves exactly
+    // as before, including being signed out when its access token expires; that is the bug
+    // the fields exist to let a caller fix, not a promise the document had made.
+    version: '2.1.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -235,7 +242,7 @@ const documentInput = {
         security: [{ bearerAuth: [] }],
         requestBody: jsonRequest(R.changePasswordSchema),
         responses: {
-          200: okBody(S.MessageDto, 'Password changed'),
+          200: okBody(S.PasswordChangedDto, 'Password changed; a replacement session is issued'),
           400: badRequest,
           401: unauthorized,
         },

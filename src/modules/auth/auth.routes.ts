@@ -568,12 +568,24 @@ router.post(
       }),
     ]);
 
+    // Revoking every session is the point -- a stolen one must not outlive the password. But that
+    // sweep also kills the session doing the asking, and until this was added the effect was that
+    // changing your own password signed you out of the device in front of you: the request
+    // succeeded, the screen looked fine, and some minutes later the next token refresh returned
+    // "Session invalidated. Please sign in again." mid-task, for no reason the user could see.
+    //
+    // Issued after the transaction, never inside it, so the sweep above cannot revoke the very
+    // token being handed back. Re-authenticating instead would cost a second bcrypt verify and
+    // spend from the login rate limiter, which is the wrong thing to charge someone for
+    // rotating their own password.
+    const tokens = await createSessionTokens({ userId: user.id, role: user.role, req });
+
     dispatchEmail(
       sendPasswordResetCompletedEmail({ email: user.email, name: user.name }),
       'password changed',
     );
 
-    ok(res, { message: 'Password changed successfully.' });
+    ok(res, { message: 'Password changed successfully.', ...tokens });
   }),
 );
 
