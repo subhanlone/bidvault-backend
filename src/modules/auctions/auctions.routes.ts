@@ -232,11 +232,18 @@ router.post(
 
     const { bid, updatedAuction, auctionTitle } = result;
 
-    await setAuctionRuntimeState({
+    // Not awaited (BV-010): the bid already committed in Postgres above, which is the source
+    // of truth this overlay only caches. getAuctionStateRedis() now bounds how long a command
+    // can take when Redis is unreachable (infra/redis.ts) -- but this used to run on
+    // redisConnection, the BullMQ client, which queues a command forever rather than
+    // rejecting, so a Redis outage hung every bid placement indefinitely. Not awaiting also
+    // means a caller no longer pays even the bounded timeout for a write nothing in this
+    // response depends on.
+    void setAuctionRuntimeState({
       auctionId,
       currentBid: updatedAuction.currentBid,
       bidCount: updatedAuction.bidCount,
-    });
+    }).catch((err: unknown) => console.error('[auctions] runtime state overlay update failed', { auctionId, err }));
 
     const io = req.app.get('io') as Server | undefined;
     io?.to(`auction:${auctionId}`).emit('bid:placed', {

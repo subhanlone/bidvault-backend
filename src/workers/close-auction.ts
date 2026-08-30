@@ -1,6 +1,7 @@
 import { AuctionStatus } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
 import { sendAuctionEndedEmail, sendReserveNotMetEmail } from '../services/email.service.js';
+import { deleteAuctionRuntimeState } from '../services/auction-state.service.js';
 
 /**
  * Closes one auction: decides the outcome, writes it, and tells both parties.
@@ -117,6 +118,14 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
   if (txResult.alreadyClosed) {
     return { alreadyClosed: true, reserveMet: null, sold: false };
   }
+
+  // Nothing can bid on a CLOSED auction again, so the overlay this auction's key held is dead
+  // weight from here on (BV-010). Best-effort and logged rather than awaited into failing the
+  // job -- a stale key past its own TTL is a minor cost, and this worker already has real work
+  // left below (the emails) that matters more than cache tidiness.
+  void deleteAuctionRuntimeState(auction.id).catch((err: unknown) =>
+    console.error('[close-auction] runtime state cleanup failed', { auctionId: auction.id, err }),
+  );
 
   const winningBid = txResult.winningBid;
   const sold = winningBid !== null && txResult.reserveMet !== false;

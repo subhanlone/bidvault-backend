@@ -44,6 +44,7 @@ const { prisma } = await import('../src/db/prisma.js');
 const { redisConnection } = await import('../src/infra/redis.js');
 const { seedWorld, PASSWORD } = await import('./helpers/world.js');
 const { takeViolations, contractSize } = await import('../src/middleware/response-contract.js');
+const { getAuctionRuntimeState } = await import('../src/services/auction-state.service.js');
 type World = Awaited<ReturnType<typeof seedWorld>>;
 
 const app = createApp();
@@ -297,6 +298,15 @@ describe('auctions', () => {
       .set(auth(w.buyer.token))
       .send({ amount: 25_000 });
     expect(res.status).toBe(201);
+
+    // BV-010: the overlay write is fire-and-forget from the route now, not awaited into the
+    // response -- waitFor rather than an immediate read, which would otherwise race it.
+    await vi.waitFor(async () => {
+      expect(await getAuctionRuntimeState(w.liveAuctionId)).toMatchObject({
+        currentBid: 25_000,
+        bidCount: 2,
+      });
+    });
   });
 
   it('GET /auctions/mine/bids', async () => {
