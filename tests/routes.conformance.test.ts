@@ -369,6 +369,15 @@ describe('listings', () => {
       .post(api(`/listings/${w.pendingListingId}/approve`))
       .set(auth(w.admin.token));
     expect(res.status).toBe(200);
+
+    // BV-050: written in the same transaction as the approval itself now, not a best-effort
+    // call afterward -- so it exists exactly when the approval that produced it does.
+    const entry = await prisma.auditLog.findFirst({
+      where: { entityId: w.pendingListingId, action: 'LISTING_APPROVED' },
+    });
+    expect(entry).not.toBeNull();
+    expect(entry?.actorUserId).toBe(w.admin.id);
+    expect((entry?.metadata as { auctionId?: string } | null)?.auctionId).toBe(res.body.data.auctionId);
   });
 
   it('POST /listings/{listingId}/reject', async () => {
