@@ -294,6 +294,15 @@ export const RefreshedTokensDto = z
   .meta({ id: 'RefreshedTokens' });
 
 /**
+ * Changing a password revokes every session the account has, including the one that asked, so a
+ * replacement pair is handed back with the confirmation. Without it the caller keeps working
+ * until its access token expires and is then signed out mid-task by its own successful request.
+ */
+export const PasswordChangedDto = z
+  .object({ message: z.string(), accessToken: z.string(), refreshToken: z.string() })
+  .meta({ id: 'PasswordChanged' });
+
+/**
  * OTPs come back in the response outside production, for local testing — hence optional.
  * In production these fields are absent.
  */
@@ -330,6 +339,8 @@ export const UploadSignatureDto = z
     cloudName: z.string(),
     folder: z.string(),
     format: z.string(),
+    publicId: z.string(),
+    allowedFormats: z.string(),
   })
   .meta({ id: 'UploadSignature' });
 

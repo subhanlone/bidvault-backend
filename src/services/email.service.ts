@@ -6,19 +6,41 @@ import { getPlatformSettings } from './settings.service.js';
 const client = env.RESEND_API_KEY ? new Resend(env.RESEND_API_KEY) : null;
 const FROM = env.RESEND_FROM_EMAIL ?? 'BidVault <onboarding@resend.dev>';
 
+export function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[char]!);
+}
+
+function sanitizeSubject(value: string): string {
+  // Subjects are mail headers, not HTML: remove CR/LF and control characters instead of
+  // inserting HTML entities that recipients would see literally.
+  return value
+    .replace(/[\r\n]+/g, ' ')
+    .split('')
+    .filter((char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127)
+    .join('')
+    .trim();
+}
+
 async function send(to: string | string[], subject: string, html: string): Promise<void> {
+  const safeSubject = sanitizeSubject(subject);
   if (!client) {
-    console.warn(`[email] RESEND_API_KEY not set — skipped: "${subject}"`);
+    console.warn(`[email] RESEND_API_KEY not set — skipped: "${safeSubject}"`);
     return;
   }
   try {
-    const { error } = await client.emails.send({ from: FROM, to, subject, html });
-    if (error) console.error(`[email] send failed for "${subject}":`, error.message);
+    const { error } = await client.emails.send({ from: FROM, to, subject: safeSubject, html });
+    if (error) console.error(`[email] send failed for "${safeSubject}":`, error.message);
   } catch (err) {
     // The SDK reports API-level problems via `error` above, but a transport failure — DNS,
     // timeout, connection reset — rejects instead. Callers dispatch these without awaiting,
     // so an escaping rejection would be unhandled and take the process down.
-    console.error(`[email] transport error for "${subject}":`, err instanceof Error ? err.message : err);
+    console.error(`[email] transport error for "${safeSubject}":`, err instanceof Error ? err.message : err);
   }
 }
 
@@ -63,7 +85,7 @@ function base(title: string, body: string): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>${title}</title>
+  <title>${escapeHtml(title)}</title>
 </head>
 <body style="margin:0;padding:0;background-color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f5f9;padding:32px 16px;">
@@ -103,7 +125,7 @@ function otpBlock(code: string): string {
       <tr>
         <td align="center" style="background-color:#f8fafc;border:2px dashed #e2e8f0;border-radius:8px;padding:20px;">
           <p style="margin:0 0 4px;color:#64748b;font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">Your Code</p>
-          <p style="margin:0;color:#0b1f3a;font-size:36px;font-weight:800;letter-spacing:8px;">${code}</p>
+          <p style="margin:0;color:#0b1f3a;font-size:36px;font-weight:800;letter-spacing:8px;">${escapeHtml(code)}</p>
           <p style="margin:6px 0 0;color:#94a3b8;font-size:11px;">Expires in ${OTP_EXPIRY_SECONDS} seconds</p>
         </td>
       </tr>
@@ -116,8 +138,8 @@ function infoRow(label: string, value: string): string {
       <td style="padding:8px 0;border-bottom:1px solid #f1f5f9;">
         <table width="100%" cellpadding="0" cellspacing="0">
           <tr>
-            <td style="color:#64748b;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;width:40%;">${label}</td>
-            <td style="color:#1e293b;font-size:13px;font-weight:600;text-align:right;">${value}</td>
+            <td style="color:#64748b;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;width:40%;">${escapeHtml(label)}</td>
+            <td style="color:#1e293b;font-size:13px;font-weight:600;text-align:right;">${escapeHtml(value)}</td>
           </tr>
         </table>
       </td>
@@ -125,11 +147,11 @@ function infoRow(label: string, value: string): string {
 }
 
 function h1(text: string): string {
-  return `<h1 style="margin:0 0 8px;color:#0b1f3a;font-size:22px;font-weight:800;">${text}</h1>`;
+  return `<h1 style="margin:0 0 8px;color:#0b1f3a;font-size:22px;font-weight:800;">${escapeHtml(text)}</h1>`;
 }
 
 function p(text: string): string {
-  return `<p style="margin:0 0 16px;color:#475569;font-size:14px;line-height:1.6;">${text}</p>`;
+  return `<p style="margin:0 0 16px;color:#475569;font-size:14px;line-height:1.6;">${escapeHtml(text)}</p>`;
 }
 
 
@@ -182,7 +204,7 @@ export async function sendPasswordResetCompletedEmail(to: { email: string; name:
     'Password changed',
     `
     ${h1('Password changed')}
-    ${p(`Hi ${to.name}, your password has been successfully updated. All active sessions have been logged out.`)}
+    ${p(`Hi ${to.name}, your password has been successfully updated. Other sessions can no longer renew. An access token already in use may remain active for up to 15 minutes.`)}
     ${p('If you did not make this change, contact support immediately.')}
     `,
   ));
@@ -347,7 +369,7 @@ export async function sendAuctionEndedEmail(
         ${infoRow('Your winning bid', pkr(winner.amount))}
       </table>
       ${divider()}
-      ${p('Log in to your BidVault account and go to <strong>My Wins</strong> to complete payment.')}
+      ${p('Log in to your BidVault account and go to My Wins to complete payment.')}
     `;
     await send(winner.email, `You won "${auction.title}"!`, base('You won!', winnerBody));
   }
@@ -400,7 +422,7 @@ export async function sendReserveNotMetEmail(
       ${infoRow('Result', 'Not sold — reserve not met')}
     </table>
     ${divider()}
-    ${p('<strong>No payment is due and nothing has been charged.</strong> Browse BidVault for similar items still open for bidding.')}
+    ${p('No payment is due and nothing has been charged. Browse BidVault for similar items still open for bidding.')}
   `;
   await send(
     topBidder.email,

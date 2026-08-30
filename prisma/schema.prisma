@@ -152,6 +152,7 @@ model EmailVerificationToken {
   code       String
   expiresAt  DateTime
   consumedAt DateTime?
+  attempts   Int       @default(0)
   createdAt  DateTime  @default(now())
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -164,6 +165,7 @@ model PasswordResetToken {
   code       String
   expiresAt  DateTime
   consumedAt DateTime?
+  attempts   Int       @default(0)
   createdAt  DateTime  @default(now())
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -181,6 +183,8 @@ model RefreshToken {
   userAgent         String?
   ipAddress         String?
   user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Notification {

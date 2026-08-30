@@ -5,7 +5,12 @@ import type { UserRole } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
-import { hashPassword, verifyPassword } from '../../utils/password.js';
+import {
+  DUMMY_PASSWORD_HASH,
+  hashPassword,
+  needsRehash,
+  verifyPassword,
+} from '../../utils/password.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../utils/jwt.js';
 import { validateBody } from '../../middleware/validate.js';
 import { requireAuth } from '../../middleware/auth.js';
@@ -33,11 +38,43 @@ import {
   sendPasswordResetCompletedEmail,
   sendVerificationResentEmail,
 } from '../../services/email.service.js';
+import {
+  authEmailAddressRateLimit,
+  authEmailIpRateLimit,
+  loginEmailRateLimit,
+  loginIpRateLimit,
+} from '../../middleware/rate-limit.js';
 
 const router = Router();
+const MAX_OTP_ATTEMPTS = 5;
+const INVALID_CODE = 'Invalid or expired code.';
 
 function generateOtp(): string {
   return String(crypto.randomInt(100000, 1000000));
+}
+
+function otpMatches(expected: string, received: string): boolean {
+  const left = Buffer.from(expected);
+  const right = Buffer.from(received);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+async function recordVerificationMiss(tokenId: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "EmailVerificationToken"
+    SET attempts = attempts + 1,
+        "consumedAt" = CASE WHEN attempts + 1 >= ${MAX_OTP_ATTEMPTS} THEN NOW() ELSE "consumedAt" END
+    WHERE id = ${tokenId} AND "consumedAt" IS NULL
+  `;
+}
+
+async function recordResetMiss(tokenId: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "PasswordResetToken"
+    SET attempts = attempts + 1,
+        "consumedAt" = CASE WHEN attempts + 1 >= ${MAX_OTP_ATTEMPTS} THEN NOW() ELSE "consumedAt" END
+    WHERE id = ${tokenId} AND "consumedAt" IS NULL
+  `;
 }
 
 // Window length and its rationale live in config/otp.ts, shared with the email templates.
@@ -95,13 +132,13 @@ router.post(
 
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (existing) {
-      fail(res, 'An account with this email already exists.', 409);
+      fail(res, 'An account with these details already exists.', 409);
       return;
     }
 
     const existingCnic = await prisma.user.findUnique({ where: { cnic } });
     if (existingCnic) {
-      fail(res, 'An account with this CNIC already exists.', 409);
+      fail(res, 'An account with these details already exists.', 409);
       return;
     }
 
@@ -148,22 +185,23 @@ router.post(
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
     if (!user) {
-      fail(res, 'Account not found.', 404);
+      fail(res, INVALID_CODE, 400);
       return;
     }
 
     const token = await prisma.emailVerificationToken.findFirst({
       where: {
         userId: user.id,
-        code: otp,
         consumedAt: null,
         expiresAt: { gt: new Date() },
+        attempts: { lt: MAX_OTP_ATTEMPTS },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!token) {
-      fail(res, 'Invalid or expired verification code.', 400);
+    if (!token || !otpMatches(token.code, otp)) {
+      if (token) await recordVerificationMiss(token.id);
+      fail(res, INVALID_CODE, 400);
       return;
     }
 
@@ -186,18 +224,15 @@ router.post(
 
 router.post(
   '/login',
+  loginIpRateLimit,
   validateBody(loginSchema),
+  loginEmailRateLimit,
   asyncHandler(async (req, res) => {
     const { email, password } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
-    if (!user) {
-      fail(res, 'Incorrect email or password.', 401);
-      return;
-    }
-
-    const matched = await verifyPassword(password, user.passwordHash);
-    if (!matched) {
+    const matched = await verifyPassword(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
+    if (!user || !matched) {
       fail(res, 'Incorrect email or password.', 401);
       return;
     }
@@ -205,6 +240,21 @@ router.post(
     if (!user.isEmailVerified) {
       fail(res, 'Please verify your email first.', 403, 'EMAIL_NOT_VERIFIED');
       return;
+    }
+
+    // Re-hash accounts still on the old cost, which is what makes the dummy-hash comparison
+    // above actually level the timing.
+    //
+    // Every account created before the cost went to 12 carries a cost-10 hash, and bcrypt reads
+    // the cost from the hash — so those users verify roughly four times faster than the cost-12
+    // dummy. The comparison closes the "does this address exist" gap only for accounts hashed at
+    // the current cost; until then it leaks the same fact with the sign reversed. Login is the
+    // one moment the plaintext is available, so it is the only place the upgrade can happen.
+    if (needsRehash(user.passwordHash)) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash: await hashPassword(password) },
+      });
     }
 
     const { accessToken, refreshToken } = await createSessionTokens({
@@ -241,7 +291,24 @@ router.post(
       include: { user: true },
     });
 
-    if (!tokenRecord || tokenRecord.revokedAt || tokenRecord.expiresAt <= new Date()) {
+    if (!tokenRecord) {
+      fail(res, 'Refresh token expired or revoked.', 401);
+      return;
+    }
+
+    if (tokenRecord.revokedAt) {
+      await prisma.refreshToken.updateMany({
+        where: { userId: tokenRecord.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      console.warn('[auth] refresh token reuse detected; revoked token family', {
+        userId: tokenRecord.userId,
+      });
+      fail(res, 'Session invalidated. Please sign in again.', 401);
+      return;
+    }
+
+    if (tokenRecord.expiresAt <= new Date()) {
       fail(res, 'Refresh token expired or revoked.', 401);
       return;
     }
@@ -312,7 +379,9 @@ router.post(
 
 router.post(
   '/forgot-password',
+  authEmailIpRateLimit,
   validateBody(forgotSchema),
+  authEmailAddressRateLimit,
   asyncHandler(async (req, res) => {
     const { email } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
@@ -356,22 +425,23 @@ router.post(
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
     if (!user) {
-      fail(res, 'No account found with this email address.', 404);
+      fail(res, INVALID_CODE, 400);
       return;
     }
 
     const token = await prisma.passwordResetToken.findFirst({
       where: {
         userId: user.id,
-        code: otp,
         consumedAt: null,
         expiresAt: { gt: new Date() },
+        attempts: { lt: MAX_OTP_ATTEMPTS },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!token) {
-      fail(res, 'Invalid or expired reset code.', 400);
+    if (!token || !otpMatches(token.code, otp)) {
+      if (token) await recordResetMiss(token.id);
+      fail(res, INVALID_CODE, 400);
       return;
     }
 
@@ -387,22 +457,23 @@ router.post(
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
     if (!user) {
-      fail(res, 'No account found with this email address.', 404);
+      fail(res, INVALID_CODE, 400);
       return;
     }
 
     const token = await prisma.passwordResetToken.findFirst({
       where: {
         userId: user.id,
-        code: otp,
         consumedAt: null,
         expiresAt: { gt: new Date() },
+        attempts: { lt: MAX_OTP_ATTEMPTS },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!token) {
-      fail(res, 'Invalid or expired reset code.', 400);
+    if (!token || !otpMatches(token.code, otp)) {
+      if (token) await recordResetMiss(token.id);
+      fail(res, INVALID_CODE, 400);
       return;
     }
 
@@ -429,7 +500,9 @@ router.post(
 
 router.post(
   '/resend-verification',
+  authEmailIpRateLimit,
   validateBody(resendVerificationSchema),
+  authEmailAddressRateLimit,
   asyncHandler(async (req, res) => {
     const { email } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
@@ -483,12 +556,36 @@ router.post(
       return;
     }
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { passwordHash: await hashPassword(newPassword) },
-    });
+    const passwordHash = await hashPassword(newPassword);
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash },
+      }),
+      prisma.refreshToken.updateMany({
+        where: { userId: user.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
 
-    ok(res, { message: 'Password changed successfully.' });
+    // Revoking every session is the point -- a stolen one must not outlive the password. But that
+    // sweep also kills the session doing the asking, and until this was added the effect was that
+    // changing your own password signed you out of the device in front of you: the request
+    // succeeded, the screen looked fine, and some minutes later the next token refresh returned
+    // "Session invalidated. Please sign in again." mid-task, for no reason the user could see.
+    //
+    // Issued after the transaction, never inside it, so the sweep above cannot revoke the very
+    // token being handed back. Re-authenticating instead would cost a second bcrypt verify and
+    // spend from the login rate limiter, which is the wrong thing to charge someone for
+    // rotating their own password.
+    const tokens = await createSessionTokens({ userId: user.id, role: user.role, req });
+
+    dispatchEmail(
+      sendPasswordResetCompletedEmail({ email: user.email, name: user.name }),
+      'password changed',
+    );
+
+    ok(res, { message: 'Password changed successfully.', ...tokens });
   }),
 );
 

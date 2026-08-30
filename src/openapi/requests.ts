@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { strictEmail, lookupEmail } from '../config/email.js';
+import { isAcceptablePassword } from '../security/password-policy.js';
 
 /**
  * Every request body the API accepts.
@@ -20,6 +21,34 @@ const NAME_REGEX = /^[\p{L}\s'-]+$/u;
 // Pakistani CNIC: 5 digits - 7 digits - 1 digit
 const CNIC_REGEX = /^\d{5}-\d{7}-\d{1}$/;
 const OTP_REGEX = /^\d{6}$/;
+const MAX_MONEY = 2_000_000_000;
+
+// The strength rule cannot be expressed in JSON Schema, so `.describe` carries it into
+// openapi.json instead. Without it the published contract says only "8-128 characters" while
+// the API rejects far more than that, and a client has no way to tell a user why.
+const strongPassword = z
+  .string()
+  .min(8, 'Password must be at least 8 characters')
+  .max(128, 'Password must be at most 128 characters')
+  .refine(isAcceptablePassword, 'Choose a less common password')
+  .describe(
+    '8-128 characters. Additionally scored with zxcvbn and rejected below score 2, which ' +
+      'refuses common passwords, keyboard walks and dictionary words regardless of length.',
+  );
+
+// Emoji are measured in graphemes, not UTF-16 code units.
+//
+// `.max(8)` on the raw string looks equivalent and is not: a ZWJ sequence such as the family
+// emoji is eleven code units and would be refused, while eight separate emoji would be allowed
+// through as a single "emoji". Segmenting counts what a reader would call a character. The
+// length ceiling stays as a cheap guard so a pathological string is rejected before it is
+// segmented at all.
+const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
+const emojiField = z
+  .string()
+  .max(64)
+  .refine((value) => [...graphemes.segment(value)].length <= 2, 'Use at most two emoji')
+  .describe('At most two emoji, measured as grapheme clusters.');
 
 // ---- auth -------------------------------------------------------------------------
 
@@ -35,7 +64,7 @@ export const registerSchema = z
       .regex(NAME_REGEX, 'Name can only contain letters, spaces, hyphens, and apostrophes'),
     email: strictEmail,
     cnic: z.string().trim().regex(CNIC_REGEX, 'CNIC must be in the format 12345-1234567-1'),
-    password: z.string().min(8, 'Password must be at least 8 characters'),
+    password: strongPassword,
     role: z.enum(['BUYER', 'SELLER']),
   })
   .meta({ id: 'RegisterRequest' });
@@ -45,7 +74,7 @@ export const verifyEmailSchema = z
   .meta({ id: 'VerifyEmailRequest' });
 
 export const loginSchema = z
-  .object({ email: lookupEmail, password: z.string().min(1) })
+  .object({ email: lookupEmail, password: z.string().min(1).max(128) })
   .meta({ id: 'LoginRequest' });
 
 export const forgotSchema = z.object({ email: lookupEmail }).meta({ id: 'ForgotPasswordRequest' });
@@ -58,12 +87,12 @@ export const resetSchema = z
   .object({
     email: lookupEmail,
     otp: z.string().regex(OTP_REGEX),
-    password: z.string().min(8, 'Password must be at least 8 characters'),
+    password: strongPassword,
   })
   .meta({ id: 'ResetPasswordRequest' });
 
 export const refreshSchema = z
-  .object({ refreshToken: z.string().min(1) })
+  .object({ refreshToken: z.string().min(1).max(4096) })
   .meta({ id: 'RefreshRequest' });
 
 export const resendVerificationSchema = z
@@ -72,8 +101,8 @@ export const resendVerificationSchema = z
 
 export const changePasswordSchema = z
   .object({
-    currentPassword: z.string().min(1),
-    newPassword: z.string().min(8, 'Password must be at least 8 characters'),
+    currentPassword: z.string().min(1).max(128),
+    newPassword: strongPassword,
   })
   .meta({ id: 'ChangePasswordRequest' });
 
@@ -90,15 +119,20 @@ export const preferencesSchema = z
 export const submitListingSchema = z
   .object({
     title: z.string().trim().min(3).max(150),
-    category: z.string().trim().min(2),
+    category: z.string().trim().min(2).max(100),
     condition: z.enum(['NEW', 'LIKE_NEW', 'USED']),
     description: z.string().trim().min(10).max(5000),
-    startPrice: z.coerce.number().int().positive(),
-    reservePrice: z.coerce.number().int().positive().optional(),
-    minIncrement: z.coerce.number().int().positive(),
+    startPrice: z.coerce.number().int().positive().max(MAX_MONEY),
+    reservePrice: z.coerce.number().int().positive().max(MAX_MONEY).optional(),
+    minIncrement: z.coerce.number().int().positive().max(MAX_MONEY),
     durationDays: z.coerce.number().int().positive().max(30),
-    imageUrl: z.url().optional(),
-    emoji: z.string().optional(),
+    imageUrl: z
+      .url()
+      .refine((value) => new URL(value).protocol === 'https:' && new URL(value).hostname === 'res.cloudinary.com', {
+        message: 'Image must use the configured Cloudinary host',
+      })
+      .optional(),
+    emoji: emojiField.optional(),
     // Zod 4 requires the key schema explicitly; single-argument z.record is gone.
     // Per-category shape is enforced separately by validateCategoryAttributes.
     attributes: z.record(z.string(), z.unknown()).optional(),
@@ -106,26 +140,26 @@ export const submitListingSchema = z
   .meta({ id: 'SubmitListingRequest' });
 
 export const rejectListingSchema = z
-  .object({ reason: z.string().trim().min(3) })
+  .object({ reason: z.string().trim().min(3).max(500) })
   .meta({ id: 'RejectListingRequest' });
 
 // ---- auctions ---------------------------------------------------------------------
 
 export const placeBidSchema = z
-  .object({ amount: z.coerce.number().int().positive() })
+  .object({ amount: z.coerce.number().int().positive().max(MAX_MONEY) })
   .meta({ id: 'PlaceBidRequest' });
 
 // ---- payments ---------------------------------------------------------------------
 
 export const createIntentSchema = z
-  .object({ transactionId: z.string().min(1) })
+  .object({ transactionId: z.string().min(1).max(128) })
   .meta({ id: 'CreateIntentRequest' });
 
 // ---- reviews ----------------------------------------------------------------------
 
 export const createReviewSchema = z
   .object({
-    transactionId: z.string().min(1),
+    transactionId: z.string().min(1).max(128),
     stars: z.coerce.number().int().min(1).max(5),
     comment: z.string().max(500).optional(),
   })

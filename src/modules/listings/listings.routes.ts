@@ -20,8 +20,12 @@ import { getPlatformSettings } from '../../services/settings.service.js';
 import { validateCategoryAttributes } from './category-attributes.js';
 import type { ListingDtoType } from '../../openapi/schemas.js';
 import { submitListingSchema, rejectListingSchema } from '../../openapi/requests.js';
+import { uploadSignatureRateLimit } from '../../middleware/rate-limit.js';
 
 const router = Router();
+const ALLOWED_UPLOAD_FORMATS = 'jpg,png,webp';
+
+class ListingStateError extends Error {}
 
 // See toAuctionDto — the return type is the published contract, so drift is a build error.
 function toListingDto(
@@ -56,13 +60,25 @@ function generateListingCode(): string {
   return `BV-${year}-${suffix}`;
 }
 
+function isOwnedCloudinaryImage(imageUrl: string, sellerId: string): boolean {
+  const url = new URL(imageUrl);
+  const expectedAccountPath = `/${env.CLOUDINARY_CLOUD_NAME}/image/upload/`;
+  const expectedAssetPrefix = `/bidvault/listings/listing-${sellerId}-`;
+  return (
+    url.protocol === 'https:' &&
+    url.hostname === 'res.cloudinary.com' &&
+    url.pathname.startsWith(expectedAccountPath) &&
+    url.pathname.includes(expectedAssetPrefix)
+  );
+}
+
 async function approveOneListing(
   listing: Prisma.ListingGetPayload<{ include: { seller: true } }>,
   adminUserId: string,
   io: Server | undefined,
 ): Promise<{ listingId: string; auctionId?: string; warning?: string }> {
   if (listing.status !== 'PENDING') {
-    throw new Error('Only pending listings can be approved.');
+    throw new ListingStateError('Only pending listings can be approved.');
   }
 
   const startTime = new Date();
@@ -159,16 +175,40 @@ async function approveOneListing(
 router.post(
   '/upload-signature',
   requireAuth(['SELLER']),
-  asyncHandler(async (_req, res) => {
+  uploadSignatureRateLimit,
+  asyncHandler(async (req, res) => {
     const timestamp = Math.round(Date.now() / 1000);
     const folder = 'bidvault/listings';
+    const publicId = `listing-${req.auth!.userId}-${crypto.randomUUID()}`;
     // Normalizes every upload to JPEG. Without this, Cloudinary stores whatever format
     // the browser sent verbatim — iPhone photos default to HEIC, which Chrome/Firefox/Edge
     // cannot render in an <img> tag, so the listing's image silently never displays for
     // most visitors even though the upload itself "succeeded".
     const format = 'jpg';
+    // Only parameters Cloudinary itself recognises may be signed.
+    //
+    // Cloudinary rebuilds the signature from the parameters it understands and ignores the
+    // rest, so signing one it does not know breaks every upload: it computes over a shorter
+    // string than we did and answers 401 Invalid Signature. `max_file_size` was signed here
+    // and is not an Upload API parameter — verified against the live API, which returned
+    // `String to sign - 'allowed_formats=...&folder=...&format=jpg&public_id=...&timestamp=...'`
+    // with max_file_size absent. `allowed_formats` is real and is enforced: the same probe
+    // uploading a GIF was refused with 400 "Image file format gif not allowed".
+    //
+    // The Upload API has no per-request size cap, so size is not server-enforceable here. What
+    // does constrain abuse: the format allow-list above, a server-issued public_id that pins
+    // the asset to this seller (checked again on submit by isOwnedCloudinaryImage), and the
+    // per-user rate limit on this route. The client's own 5 MB check is a courtesy to the
+    // user, not a control — anyone holding the signature can skip it.
+    const signedParams = {
+      timestamp,
+      folder,
+      public_id: publicId,
+      format,
+      allowed_formats: ALLOWED_UPLOAD_FORMATS,
+    };
     const signature = cloudinary.utils.api_sign_request(
-      { timestamp, folder, format },
+      signedParams,
       env.CLOUDINARY_API_SECRET,
     );
     ok(res, {
@@ -178,6 +218,8 @@ router.post(
       cloudName: env.CLOUDINARY_CLOUD_NAME,
       folder,
       format,
+      publicId,
+      allowedFormats: ALLOWED_UPLOAD_FORMATS,
     });
   }),
 );
@@ -190,6 +232,10 @@ router.post(
     const settings = await getPlatformSettings();
     if (req.body.startPrice < settings.minListingPrice) {
       fail(res, `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`, 400);
+      return;
+    }
+    if (req.body.imageUrl && !isOwnedCloudinaryImage(req.body.imageUrl, req.auth!.userId)) {
+      fail(res, 'Image must be an upload issued for this seller by BidVault.', 400);
       return;
     }
     if (req.body.minIncrement > settings.maxBidIncrement) {
@@ -287,7 +333,11 @@ router.post(
         ...(result.warning && { warning: result.warning }),
       });
     } catch (err) {
-      fail(res, err instanceof Error ? err.message : 'Could not approve listing.', 400);
+      if (err instanceof ListingStateError) {
+        fail(res, err.message, 400);
+        return;
+      }
+      throw err;
     }
   }),
 );
@@ -310,10 +360,11 @@ router.post(
         await approveOneListing(listing, req.auth!.userId, io);
         approved++;
       } catch (err) {
-        failures.push({
-          listingId: listing.id,
-          error: err instanceof Error ? err.message : 'Unknown error',
-        });
+        if (err instanceof ListingStateError) {
+          failures.push({ listingId: listing.id, error: err.message });
+          continue;
+        }
+        throw err;
       }
     }
 

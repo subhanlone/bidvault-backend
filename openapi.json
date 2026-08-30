@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "1.1.0",
-    "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json."
+    "version": "2.1.0",
+    "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually."
   },
   "servers": [
     {
@@ -194,16 +194,6 @@
                 }
               }
             }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
           }
         }
       }
@@ -214,6 +204,7 @@
           "Auth"
         ],
         "summary": "Neutral response — does not reveal whether the address exists",
+        "description": "Limited to 3 per hour per address and 10 per hour per client address, shared with /auth/forgot-password.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -257,6 +248,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Rate limit exceeded; retry after the window resets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -266,6 +267,7 @@
         "tags": [
           "Auth"
         ],
+        "description": "Limited to 10 attempts per 15 minutes, per client address and per address.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -312,6 +314,26 @@
           },
           "401": {
             "description": "Incorrect email or password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Email not verified (code EMAIL_NOT_VERIFIED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded; retry after the window resets",
             "content": {
               "application/json": {
                 "schema": {
@@ -424,6 +446,7 @@
           "Auth"
         ],
         "summary": "Neutral response — does not reveal whether the address exists",
+        "description": "Limited to 3 per hour per address and 10 per hour per client address, shared with /auth/resend-verification.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -464,6 +487,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded; retry after the window resets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -596,7 +629,7 @@
         },
         "responses": {
           "200": {
-            "description": "Password changed",
+            "description": "Password changed; a replacement session is issued",
             "content": {
               "application/json": {
                 "schema": {
@@ -607,7 +640,7 @@
                       "const": true
                     },
                     "data": {
-                      "$ref": "#/components/schemas/Message"
+                      "$ref": "#/components/schemas/PasswordChanged"
                     }
                   },
                   "required": [
@@ -1217,6 +1250,7 @@
           }
         ],
         "summary": "Signed Cloudinary upload params; forces JPEG so HEIC uploads stay viewable",
+        "description": "Limited to 10 per hour per seller. Post exactly the returned `signature`, `timestamp`, `apiKey`, `folder`, `format`, `publicId` and `allowedFormats` to Cloudinary — any additional parameter changes the string Cloudinary signs and the upload is refused with 401.",
         "responses": {
           "200": {
             "description": "Upload params",
@@ -1244,6 +1278,26 @@
           },
           "401": {
             "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded; retry after the window resets",
             "content": {
               "application/json": {
                 "schema": {
@@ -2534,7 +2588,9 @@
           },
           "password": {
             "type": "string",
-            "minLength": 8
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "8-128 characters. Additionally scored with zxcvbn and rejected below score 2, which refuses common passwords, keyboard walks and dictionary words regardless of length."
           },
           "role": {
             "type": "string",
@@ -2593,7 +2649,8 @@
           },
           "password": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 128
           }
         },
         "required": [
@@ -2606,7 +2663,8 @@
         "properties": {
           "refreshToken": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 4096
           }
         },
         "required": [
@@ -2658,7 +2716,9 @@
           },
           "password": {
             "type": "string",
-            "minLength": 8
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "8-128 characters. Additionally scored with zxcvbn and rejected below score 2, which refuses common passwords, keyboard walks and dictionary words regardless of length."
           }
         },
         "required": [
@@ -2672,11 +2732,14 @@
         "properties": {
           "currentPassword": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 128
           },
           "newPassword": {
             "type": "string",
-            "minLength": 8
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "8-128 characters. Additionally scored with zxcvbn and rejected below score 2, which refuses common passwords, keyboard walks and dictionary words regardless of length."
           }
         },
         "required": [
@@ -2712,7 +2775,7 @@
           "amount": {
             "type": "integer",
             "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
+            "maximum": 2000000000
           }
         },
         "required": [
@@ -2729,7 +2792,8 @@
           },
           "category": {
             "type": "string",
-            "minLength": 2
+            "minLength": 2,
+            "maxLength": 100
           },
           "condition": {
             "type": "string",
@@ -2747,17 +2811,17 @@
           "startPrice": {
             "type": "integer",
             "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
+            "maximum": 2000000000
           },
           "reservePrice": {
             "type": "integer",
             "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
+            "maximum": 2000000000
           },
           "minIncrement": {
             "type": "integer",
             "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
+            "maximum": 2000000000
           },
           "durationDays": {
             "type": "integer",
@@ -2769,7 +2833,9 @@
             "format": "uri"
           },
           "emoji": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 64,
+            "description": "At most two emoji, measured as grapheme clusters."
           },
           "attributes": {
             "type": "object",
@@ -2794,7 +2860,8 @@
         "properties": {
           "reason": {
             "type": "string",
-            "minLength": 3
+            "minLength": 3,
+            "maxLength": 500
           }
         },
         "required": [
@@ -2806,7 +2873,8 @@
         "properties": {
           "transactionId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 128
           }
         },
         "required": [
@@ -2818,7 +2886,8 @@
         "properties": {
           "transactionId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 128
           },
           "stars": {
             "type": "integer",
@@ -3165,6 +3234,26 @@
           }
         },
         "required": [
+          "accessToken",
+          "refreshToken"
+        ],
+        "additionalProperties": false
+      },
+      "PasswordChanged": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "accessToken": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
           "accessToken",
           "refreshToken"
         ],
@@ -3547,6 +3636,12 @@
           },
           "format": {
             "type": "string"
+          },
+          "publicId": {
+            "type": "string"
+          },
+          "allowedFormats": {
+            "type": "string"
           }
         },
         "required": [
@@ -3555,7 +3650,9 @@
           "apiKey",
           "cloudName",
           "folder",
-          "format"
+          "format",
+          "publicId",
+          "allowedFormats"
         ],
         "additionalProperties": false
       },

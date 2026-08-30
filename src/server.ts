@@ -5,6 +5,7 @@ import { env, clientOrigins } from './config/env.js';
 import { prisma } from './db/prisma.js';
 import { redisConnection } from './infra/redis.js';
 import { verifyAccessToken } from './utils/jwt.js';
+import { registerAuctionSubscriptions } from './socket/auction-subscriptions.js';
 
 const app = createApp();
 const httpServer = createServer(app);
@@ -35,28 +36,7 @@ io.use((socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  socket.on('auction:subscribe', (auctionId: unknown) => {
-    if (typeof auctionId !== 'string' || !auctionId.trim()) return;
-
-    // Deliberately not an async listener. Socket.IO ignores the returned promise, so a
-    // rejection here — the database being briefly unreachable, say — was an unhandled
-    // rejection, which Node turns into a process exit. One anonymous socket subscribing at
-    // the wrong moment could take the API down. The lookup is best-effort: if it fails, the
-    // client simply does not join the room.
-    void prisma.auction
-      // NEW-02: validate auction exists before joining room
-      .findUnique({ where: { id: auctionId }, select: { id: true } })
-      .then((exists) => {
-        if (exists) void socket.join(`auction:${auctionId}`);
-      })
-      .catch((err: unknown) => {
-        console.error('[socket] auction:subscribe lookup failed:', err instanceof Error ? err.message : err);
-      });
-  });
-
-  socket.on('auction:unsubscribe', (auctionId: unknown) => {
-    if (typeof auctionId === 'string') void socket.leave(`auction:${auctionId}`);
-  });
+  registerAuctionSubscriptions(socket);
 });
 
 httpServer.listen(env.PORT, () => {

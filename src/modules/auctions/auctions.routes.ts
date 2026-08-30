@@ -12,6 +12,7 @@ import { placeBidSchema } from '../../openapi/requests.js';
 import { buildSellerStatsMap, toAuctionDto } from './auction-dto.js';
 
 const router = Router();
+const MAX_STORED_MONEY = 2_000_000_000;
 
 router.get(
   '/',
@@ -148,13 +149,14 @@ router.post(
           id: string;
           sellerId: string;
           title: string;
+          startPrice: number;
           currentBid: number;
           bidCount: number;
           minIncrement: number;
           status: AuctionStatus;
           endTime: Date;
         }>>`
-          SELECT id, "sellerId", title, "currentBid", "bidCount", "minIncrement", status, "endTime"
+          SELECT id, "sellerId", title, "startPrice", "currentBid", "bidCount", "minIncrement", status, "endTime"
           FROM "Auction"
           WHERE id = ${auctionId}
           FOR UPDATE
@@ -168,6 +170,17 @@ router.post(
         const minAllowed = row.currentBid + row.minIncrement;
         if (amount < minAllowed) {
           throw new BidError(400, `Bid must be at least PKR ${minAllowed.toLocaleString()}.`);
+        }
+
+        // The int32 schema ceiling prevents a database overflow, but by itself still lets a
+        // buyer lock a low-value auction with a deliberately absurd yet storable bid. Bound
+        // the jump relative to the auction under the same row lock used for the minimum.
+        const maxAllowed = Math.min(
+          MAX_STORED_MONEY,
+          Math.max(minAllowed, row.currentBid * 10, row.startPrice * 100),
+        );
+        if (amount > maxAllowed) {
+          throw new BidError(400, `Bid cannot exceed PKR ${maxAllowed.toLocaleString()} for this auction.`);
         }
 
         // NEW-05: outbid notification — find previous highest bidder before updating

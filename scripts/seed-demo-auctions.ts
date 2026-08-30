@@ -5,7 +5,7 @@
  * is active in the environment (e.g. via `railway run` for production).
  */
 import { PrismaClient, ItemCondition, AuctionStatus } from '@prisma/client';
-import bcrypt from 'bcryptjs';
+import { hash } from '@node-rs/bcrypt';
 import crypto from 'node:crypto';
 import { auctionLifecycleQueue, scheduleAuctionLifecycle } from '../src/queues/auction-lifecycle.queue.js';
 import { redisConnection } from '../src/infra/redis.js';
@@ -33,7 +33,7 @@ function hoursFromNow(h: number): Date {
 async function upsertUser(params: {
   email: string; name: string; role: 'BUYER' | 'SELLER'; cnic: string;
 }) {
-  const passwordHash = await bcrypt.hash(requiredPassword('SEED_DEMO_PASSWORD'), 10);
+  const passwordHash = await hash(requiredPassword('SEED_DEMO_PASSWORD'), 12);
   return prisma.user.upsert({
     where: { email: params.email },
     update: {},

@@ -20,6 +20,8 @@ import { asyncHandler } from './utils/async-handler.js';
 import { prisma } from './db/prisma.js';
 import { probeDatabase, probeRedis } from './services/health.service.js';
 import { document } from './openapi/document.js';
+import { AppError } from './errors/app-error.js';
+import { globalRateLimit } from './middleware/rate-limit.js';
 
 export function createApp() {
   const app = express();
@@ -39,12 +41,13 @@ export function createApp() {
     cors({
       origin: (origin, callback) => {
         if (!origin || clientOrigins.includes(origin)) callback(null, true);
-        else callback(new Error('Not allowed by CORS'));
+        else callback(new AppError(403, 'Origin not allowed.'));
       },
       credentials: true,
     }),
   );
   app.use(helmet());
+  app.use(globalRateLimit);
   app.use('/api/v1/payments/webhook', express.raw({ type: 'application/json' }));
   app.use(express.json({ limit: '1mb' }));
   // Silent under test: the conformance suite makes a few hundred requests and the access
