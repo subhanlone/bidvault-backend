@@ -140,7 +140,10 @@ const documentInput = {
     //
     // 2.4.0, 2026-08-30, minor: GET /health documents 503 during graceful shutdown, so a load
     // balancer stops routing new traffic to an instance that is draining. See BV-052.
-    version: '2.4.0',
+    //
+    // 2.5.0, 2026-08-30, minor: GET /health gained workerHeartbeatAgeSeconds, so a dead
+    // lifecycle worker is externally observable instead of silent. See BV-012.
+    version: '2.5.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +

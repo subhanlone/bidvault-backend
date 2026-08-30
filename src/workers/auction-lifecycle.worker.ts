@@ -8,6 +8,7 @@ import {
   type AuctionLifecycleJobName,
 } from '../queues/auction-lifecycle.queue.js';
 import { closeAuction } from './close-auction.js';
+import { WORKER_HEARTBEAT_KEY, WORKER_HEARTBEAT_INTERVAL_MS } from '../infra/worker-heartbeat.js';
 
 // The close logic itself lives in ./close-auction.ts, which imports no BullMQ and opens no
 // connection — so it can be tested without joining the queue. This file is only the plumbing.
@@ -19,6 +20,13 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
   {
     connection: redisConnection,
     prefix: env.QUEUE_PREFIX,
+    // BV-012: the close path is already lock-safe (SELECT ... FOR UPDATE inside the
+    // transaction) and idempotency-tested (a retried job writes nothing twice), so ten
+    // auctions can close in parallel without racing each other. The default is 1 --
+    // strictly sequential -- which meant a burst of auctions ending at the same moment (a
+    // realistic case: several listings approved together with the same duration) queued
+    // behind whichever one happened to be sending an email at the time.
+    concurrency: 10,
   },
 );
 
@@ -31,6 +39,19 @@ worker.on('failed', (job, error) => {
 });
 
 const RECONCILE_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Written on startup and every WORKER_HEARTBEAT_INTERVAL_MS after -- health.service.ts reads
+ * its age. redisConnection directly, not a bounded client: this is a background write with
+ * nobody waiting on it, exactly the case that connection's queue-forever behaviour is
+ * correct for (see infra/redis.ts). A write that queues during an outage and lands once
+ * Redis returns is fine; a write that silently never happens because a bounded client
+ * dropped it is the opposite of what a liveness signal needs.
+ */
+function writeHeartbeat(): void {
+  void redisConnection.set(WORKER_HEARTBEAT_KEY, Date.now().toString())
+    .catch((err: unknown) => console.error('[worker] heartbeat write failed', err));
+}
 
 /**
  * Safety net for auctions that are past their end time but still ACTIVE.
@@ -68,7 +89,11 @@ async function reconcileOverdueAuctions(): Promise<void> {
       }
     }
 
-    console.log(
+    // console.error rather than .log (BV-012): a non-zero count here means the happy path
+    // (the scheduled job) missed at least one auction, which is exactly the failure this
+    // sweep exists to catch -- it belongs at the severity that gets someone's attention in
+    // whatever aggregates these logs, not alongside routine informational lines.
+    console.error(
       `[reconcile] ${overdue.length} overdue auction(s) still ACTIVE; re-queued ${requeued}, ${overdue.length - requeued} already pending.`,
     );
   } catch (error) {
@@ -81,8 +106,12 @@ async function reconcileOverdueAuctions(): Promise<void> {
 const reconcileTimer = setInterval(() => void reconcileOverdueAuctions(), RECONCILE_INTERVAL_MS);
 reconcileTimer.unref();
 
+const heartbeatTimer = setInterval(writeHeartbeat, WORKER_HEARTBEAT_INTERVAL_MS);
+heartbeatTimer.unref();
+
 async function shutdown() {
   clearInterval(reconcileTimer);
+  clearInterval(heartbeatTimer);
   await worker.close();
   await prisma.$disconnect();
   await redisConnection.quit();
@@ -93,4 +122,5 @@ process.on('SIGINT', () => void shutdown());
 process.on('SIGTERM', () => void shutdown());
 
 console.log(`Auction lifecycle worker started (queue prefix: ${env.QUEUE_PREFIX}).`);
+writeHeartbeat();
 void reconcileOverdueAuctions();

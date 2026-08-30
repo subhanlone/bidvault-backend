@@ -179,6 +179,14 @@ export const HealthDto = z
      * logs. See BV-016.
      */
     contractViolations: z.number().int().nonnegative(),
+    /**
+     * Seconds since the lifecycle worker last wrote its heartbeat, or null when that cannot
+     * be determined — the worker has never run against this Redis, or the read itself timed
+     * out. A crashed worker leaves every ACTIVE auction open past its end time with nothing
+     * else in the system saying why; this is what makes that externally observable. See
+     * BV-012.
+     */
+    workerHeartbeatAgeSeconds: z.number().int().nonnegative().nullable(),
   })
   .meta({ id: 'Health' });
 
