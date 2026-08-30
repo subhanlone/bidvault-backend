@@ -224,29 +224,6 @@ describe('enumeration resistance and session recovery', () => {
     });
   });
 
-  it('uses one registration conflict message for email and CNIC', async () => {
-    const buyer = await prisma.user.findUniqueOrThrow({ where: { id: w.buyer.id } });
-    const base = {
-      name: 'Conflict Person',
-      password: 'Correct-Horse-Battery-Staple-42!',
-      role: 'BUYER',
-    };
-    const emailConflict = await request(app).post(api('/auth/register')).send({
-      ...base,
-      email: w.buyer.email,
-      cnic: '99998-1234567-1',
-    });
-    const cnicConflict = await request(app).post(api('/auth/register')).send({
-      ...base,
-      email: 'different@test.local',
-      cnic: buyer.cnic,
-    });
-
-    expect(emailConflict.status).toBe(409);
-    expect(cnicConflict.status).toBe(409);
-    expect(emailConflict.body.error).toBe(cnicConflict.body.error);
-  });
-
   it('changes the password and revokes every refresh session atomically', async () => {
     const tokens = await Promise.all(['one', 'two'].map(async (suffix) => {
       const id = `session-${suffix}`;
@@ -352,6 +329,14 @@ describe('enumeration resistance and session recovery', () => {
     expect(res.body.error).toBe('Session invalidated. Please sign in again.');
     const active = await prisma.refreshToken.findUniqueOrThrow({ where: { id: activeId } });
     expect(active.revokedAt).toBeInstanceOf(Date);
+
+    // BV-031: reuse of a revoked token is the signature the rotation machinery exists to
+    // catch, so the account owner must be told -- not just have the family revoked silently.
+    await vi.waitFor(() => {
+      expect(mail.send).toHaveBeenCalledWith(
+        expect.objectContaining({ subject: 'Security alert: all BidVault sessions were signed out' }),
+      );
+    });
   });
 });
 
@@ -379,7 +364,6 @@ describe('JWT and password policy', () => {
     expect(registerSchema.safeParse({
       name: 'Weak Password',
       email: 'weak@test.local',
-      cnic: '55555-1234567-1',
       password: 'password123',
       role: 'BUYER',
     }).success).toBe(false);

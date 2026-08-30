@@ -109,6 +109,33 @@ describe('closeAuction', () => {
     });
   });
 
+  // ---- BV-018 ---------------------------------------------------------------------------
+
+  it('skips a bid whose buyer has been anonymised and awards the next real bidder', async () => {
+    // buyerId is nullable now (SetNull, not Cascade) so an anonymised account's bid survives
+    // instead of vanishing -- but there is no winnerId to write for it, so it must not win.
+    const id = await endingAuction({ reservePrice: null, topBid: 6_000 });
+    const topBid = await prisma.bid.findFirstOrThrow({ where: { auctionId: id, amount: 6_000 } });
+    await prisma.bid.update({ where: { id: topBid.id }, data: { buyerId: null } });
+    await prisma.bid.create({
+      data: { auctionId: id, buyerId: w.otherBuyer.id, amount: 5_000 },
+    });
+
+    const result = await closeAuction(id);
+
+    expect(result).toMatchObject({ alreadyClosed: false, sold: true });
+    expect(await transactionFor(id)).toMatchObject({
+      winnerId: w.otherBuyer.id,
+      finalAmount: 5_000,
+    });
+    // The anonymised bid is untouched, not deleted -- proof the fix is SetNull, not a filter
+    // that happens to hide it.
+    expect(await prisma.bid.findUnique({ where: { id: topBid.id } })).toMatchObject({
+      buyerId: null,
+      amount: 6_000,
+    });
+  });
+
   it('sells at exactly the reserve — the floor is inclusive', async () => {
     // The copy says "won't close below this amount", so equal must sell. An off-by-one here
     // would refuse a sale the seller agreed to.
@@ -208,4 +235,5 @@ describe('closeAuction', () => {
     const result = await closeAuction('cl00000000000000000000000');
     expect(result).toMatchObject({ alreadyClosed: false, sold: false });
   });
+
 });

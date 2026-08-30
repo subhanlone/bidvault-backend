@@ -13,6 +13,7 @@ const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
 const { redisConnection } = await import('../src/infra/redis.js');
 const { probe } = await import('../src/services/health.service.js');
+const { WORKER_HEARTBEAT_KEY } = await import('../src/infra/worker-heartbeat.js');
 
 const app = createApp();
 
@@ -34,6 +35,28 @@ describe('GET /health', () => {
     expect(res.body.data.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(res.body.data.commit).toBeTruthy();
     expect(res.body.data.dependencies.database.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  // BV-012: a crashed worker leaves every ACTIVE auction open past its end time with nothing
+  // else in the system saying why. These two are its liveness signal, not the worker
+  // process itself -- that lives in auction-lifecycle.worker.ts, which this suite never
+  // imports (see close-auction.ts's own comment on why: importing it joins the real queue).
+  it('reports workerHeartbeatAgeSeconds null when the worker has never written one', async () => {
+    await redisConnection.del(WORKER_HEARTBEAT_KEY);
+    const res = await request(app).get('/api/v1/health');
+    expect(res.body.data.workerHeartbeatAgeSeconds).toBeNull();
+  });
+
+  it('reports the age of a real heartbeat written to Redis', async () => {
+    const thirtySecondsAgo = Date.now() - 30_000;
+    await redisConnection.set(WORKER_HEARTBEAT_KEY, thirtySecondsAgo.toString());
+    try {
+      const res = await request(app).get('/api/v1/health');
+      expect(res.body.data.workerHeartbeatAgeSeconds).toBeGreaterThanOrEqual(30);
+      expect(res.body.data.workerHeartbeatAgeSeconds).toBeLessThan(35);
+    } finally {
+      await redisConnection.del(WORKER_HEARTBEAT_KEY);
+    }
   });
 
   it('stays 200 and reports redis down when redis is unreachable', async () => {

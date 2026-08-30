@@ -1,6 +1,6 @@
 import { AuctionStatus } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
-import { sendAuctionEndedEmail, sendReserveNotMetEmail } from '../services/email.service.js';
+import { dispatchEmail, sendAuctionEndedEmail, sendReserveNotMetEmail } from '../services/email.service.js';
 
 /**
  * Closes one auction: decides the outcome, writes it, and tells both parties.
@@ -43,11 +43,21 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
       return { alreadyClosed: true, winningBid: null, notifyWinner: false, reserveMet: null };
     }
 
-    const winBid = await tx.bid.findFirst({
-      where: { auctionId: auction.id },
+    // BV-018: buyerId is nullable now (a deleted buyer's bid is anonymised in place, not
+    // cascaded away, so bidCount/currentBid stay accurate). A bid with no buyer left can't be
+    // awarded a transaction -- there is no winnerId to write -- so it is excluded here rather
+    // than filtered out after the fact, and the next real bidder wins instead.
+    const rawWinBid = await tx.bid.findFirst({
+      where: { auctionId: auction.id, buyerId: { not: null } },
       orderBy: { amount: 'desc' },
       include: { buyer: true },
     });
+    // The where-filter above guarantees buyerId/buyer are non-null whenever a row comes back;
+    // Prisma's generated type doesn't encode that, so narrow once here instead of asserting at
+    // every later use of winBid.buyerId / winBid.buyer.
+    const winBid = rawWinBid && rawWinBid.buyerId !== null && rawWinBid.buyer !== null
+      ? { ...rawWinBid, buyerId: rawWinBid.buyerId, buyer: rawWinBid.buyer }
+      : null;
 
     // The reserve is the seller's floor — the create-listing form promises "Auction won't close
     // below this amount". An auction that ends under it closes UNSOLD: no winner is declared and
@@ -121,29 +131,38 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
   const winningBid = txResult.winningBid;
   const sold = winningBid !== null && txResult.reserveMet !== false;
 
-  // These two stay awaited, unlike the sends in the HTTP routes. Nothing is waiting on a
-  // response here, and letting the job own the send means a failure is visible as a job
-  // failure rather than a log line nobody reads.
+  // Not awaited (BV-012): concurrency:10 lets ten close jobs run in parallel, but each job's
+  // own two awaited sends still serialised its slot for ~3.3s of measured Resend latency.
+  // dispatchEmail matches what the HTTP routes already do -- fire-and-forget, failure logged
+  // rather than swallowed. A retried job would not resend it anyway: the FOR UPDATE check
+  // above returns early once status is CLOSED, before this point is ever reached again, so
+  // awaiting here never actually bought a retry of the email -- only of the job wrapper.
   if (winningBid && txResult.reserveMet === false) {
-    await sendReserveNotMetEmail(
-      { email: auction.seller.email, name: auction.seller.name },
-      {
-        title: auction.title,
-        reservePrice: auction.reservePrice!,
-        bidCount: auction.bidCount,
-      },
-      { email: winningBid.buyer.email, name: winningBid.buyer.name, amount: winningBid.amount },
+    dispatchEmail(
+      sendReserveNotMetEmail(
+        { email: auction.seller.email, name: auction.seller.name },
+        {
+          title: auction.title,
+          reservePrice: auction.reservePrice!,
+          bidCount: auction.bidCount,
+        },
+        { email: winningBid.buyer.email, name: winningBid.buyer.name, amount: winningBid.amount },
+      ),
+      `reserve-not-met (${auction.id})`,
     );
     return { alreadyClosed: false, reserveMet: txResult.reserveMet, sold };
   }
 
-  await sendAuctionEndedEmail(
-    { email: auction.seller.email, name: auction.seller.name },
-    { title: auction.title, finalBid: auction.currentBid, bidCount: auction.bidCount },
-    winningBid
-      ? { email: winningBid.buyer.email, name: winningBid.buyer.name, amount: winningBid.amount }
-      : null,
-    txResult.notifyWinner,
+  dispatchEmail(
+    sendAuctionEndedEmail(
+      { email: auction.seller.email, name: auction.seller.name },
+      { title: auction.title, finalBid: auction.currentBid, bidCount: auction.bidCount },
+      winningBid
+        ? { email: winningBid.buyer.email, name: winningBid.buyer.name, amount: winningBid.amount }
+        : null,
+      txResult.notifyWinner,
+    ),
+    `auction-ended (${auction.id})`,
   );
 
   return { alreadyClosed: false, reserveMet: txResult.reserveMet, sold };

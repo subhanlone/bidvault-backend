@@ -72,3 +72,49 @@ export function getRateLimitRedis(): Redis {
   })();
   return rateLimitClient;
 }
+
+
+/**
+ * Settings cache invalidation (BV-025) — each process (API server, worker) caches
+ * `PlatformSetting` in module scope for 10s. Without this, the settings PUT only clears the
+ * cache of whichever process served it; every other process keeps answering with the old
+ * values for up to 10s, so e.g. maintenanceMode can appear on in one process and off in
+ * another. Publishing needs a bounded client, same reasoning as the auction-state overlay
+ * above: it fires from the PUT /settings request path and must not hang if Redis is down.
+ * Subscribing needs its OWN separate connection — ioredis puts a client that issues SUBSCRIBE
+ * into subscriber mode, where it can no longer run ordinary commands, so it cannot be shared
+ * with the publisher or anything else. The subscriber is a background listener nobody awaits;
+ * a missed message during a reconnect just means that process falls back to the TTL, which is
+ * the existing acceptable-interim behaviour, not a new failure mode.
+ */
+export const SETTINGS_INVALIDATE_CHANNEL = 'settings:invalidate';
+
+let settingsPublishClient: Redis | undefined;
+
+export function getSettingsPublishRedis(): Redis {
+  settingsPublishClient ??= (() => {
+    const client = new Redis(env.REDIS_URL, {
+      maxRetriesPerRequest: 1,
+      commandTimeout: 2_000,
+      enableReadyCheck: false,
+    });
+    client.on('error', (err) =>
+      console.error('[redis:settings-publish] Connection error:', err.message),
+    );
+    return client;
+  })();
+  return settingsPublishClient;
+}
+
+let settingsSubscribeClient: Redis | undefined;
+
+export function getSettingsSubscribeRedis(): Redis {
+  settingsSubscribeClient ??= (() => {
+    const client = new Redis(env.REDIS_URL, { enableReadyCheck: false });
+    client.on('error', (err) =>
+      console.error('[redis:settings-subscribe] Connection error:', err.message),
+    );
+    return client;
+  })();
+  return settingsSubscribeClient;
+}

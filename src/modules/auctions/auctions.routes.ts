@@ -6,7 +6,6 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
-import { getAuctionRuntimeState, setAuctionRuntimeState } from '../../services/auction-state.service.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 import { placeBidSchema } from '../../openapi/requests.js';
 import { buildSellerStatsMap, toAuctionDto } from './auction-dto.js';
@@ -65,7 +64,10 @@ router.get(
         bidId: bid.id,
         auctionId: bid.auctionId,
         buyerId: bid.buyerId,
-        buyerName: bid.buyer.name,
+        // Filtered to `where: { buyerId }` above (the caller's own id, a live authenticated
+        // user), so this bid's buyer can never be the null/anonymised case -- unlike the public
+        // bid list on GET /:auctionId/bids.
+        buyerName: bid.buyer!.name,
         amount: bid.amount,
         timestamp: bid.createdAt.toISOString(),
         auction: toAuctionDto(bid.auction, statsMap),
@@ -87,14 +89,9 @@ router.get(
       return;
     }
 
-    const runtime = await getAuctionRuntimeState(auction.id);
     const statsMap = await buildSellerStatsMap([auction.sellerId]);
     const dto = toAuctionDto(auction, statsMap);
-    ok(res, {
-      ...dto,
-      currentBid: runtime.currentBid ?? dto.currentBid,
-      bidCount: runtime.bidCount ?? dto.bidCount,
-    });
+    ok(res, dto);
   }),
 );
 
@@ -112,8 +109,12 @@ router.get(
       bids.map((bid) => ({
         bidId: bid.id,
         auctionId: bid.auctionId,
+        // BV-018: buyerId/buyer can now be null (an anonymised, deleted account) -- unreachable
+        // today since no account-deletion route exists yet, but the contract still needs a
+        // real string here. Widening this DTO to nullable is deferred to when that route ships
+        // (BV-042 first -- anonymisation clears the same fields that decision governs).
         buyerId: bid.buyerId,
-        buyerName: bid.buyer.name,
+        buyerName: bid.buyer?.name ?? 'Deleted user',
         amount: bid.amount,
         timestamp: bid.createdAt.toISOString(),
       })),
@@ -139,7 +140,6 @@ router.post(
 
     let result: {
       bid: Prisma.BidGetPayload<{ include: { buyer: true } }>;
-      updatedAuction: { currentBid: number; bidCount: number };
       auctionTitle: string;
     };
 
@@ -197,13 +197,14 @@ router.post(
           include: { buyer: true },
         });
 
-        const nextAuction = await tx.auction.update({
+        await tx.auction.update({
           where: { id: row.id },
           data: { currentBid: amount, bidCount: { increment: 1 } },
-          select: { currentBid: true, bidCount: true },
+          select: { id: true },
         });
 
-        if (prevHighest && prevHighest.buyerId !== buyerId) {
+        // BV-018: a null buyerId means that bidder's account was anonymised -- nobody to notify.
+        if (prevHighest && prevHighest.buyerId !== null && prevHighest.buyerId !== buyerId) {
           const recipient = await tx.user.findUnique({
             where: { id: prevHighest.buyerId },
             select: { notifyOutbid: true },
@@ -220,7 +221,7 @@ router.post(
           }
         }
 
-        return { bid: createdBid, updatedAuction: nextAuction, auctionTitle: row.title };
+        return { bid: createdBid, auctionTitle: row.title };
       });
     } catch (err) {
       if (err instanceof BidError) {
@@ -230,14 +231,14 @@ router.post(
       throw err;
     }
 
-    const { bid, updatedAuction, auctionTitle } = result;
+    const { bid, auctionTitle } = result;
+    // bid.buyer is the caller who just placed this bid a moment ago -- it cannot be the
+    // null/anonymised case (BV-018) that only applies to a bid's buyer sometime after the fact.
+    const buyer = bid.buyer!;
 
-    await setAuctionRuntimeState({
-      auctionId,
-      currentBid: updatedAuction.currentBid,
-      bidCount: updatedAuction.bidCount,
-    });
-
+    // The database is the only source of truth for currentBid/bidCount (BV-010 removed the
+    // Redis overlay that used to shadow it here) -- live viewers get the update below via the
+    // socket broadcast, not by re-reading the row.
     const io = req.app.get('io') as Server | undefined;
     io?.to(`auction:${auctionId}`).emit('bid:placed', {
       auctionId,
@@ -245,7 +246,7 @@ router.post(
         bidId: bid.id,
         amount: bid.amount,
         buyerId: bid.buyerId,
-        buyerName: bid.buyer.name,
+        buyerName: buyer.name,
         timestamp: bid.createdAt.toISOString(),
       },
     });
@@ -253,7 +254,7 @@ router.post(
     // Not awaited: bidding is the most latency-sensitive action in the product and this
     // send was adding ~3.3s to every bid.
     dispatchEmail(sendBidPlacedEmail(
-      { email: bid.buyer.email, name: bid.buyer.name },
+      { email: buyer.email, name: buyer.name },
       { title: auctionTitle, amount: bid.amount, auctionId },
     ), 'bid placed');
 
@@ -261,7 +262,7 @@ router.post(
       bidId: bid.id,
       auctionId: bid.auctionId,
       buyerId: bid.buyerId,
-      buyerName: bid.buyer.name,
+      buyerName: buyer.name,
       amount: bid.amount,
       timestamp: bid.createdAt.toISOString(),
     }, 201);

@@ -17,8 +17,7 @@ function redact(text: string): string {
   return text
     .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer [REDACTED]')
     .replace(/\b(?:sk|rk|pk|whsec)_(?:test|live)?_?[A-Za-z0-9]+\b/g, '[REDACTED_SECRET]')
-    .replace(/\bpi_[A-Za-z0-9]+_secret_[A-Za-z0-9]+\b/g, '[REDACTED_CLIENT_SECRET]')
-    .replace(/\b\d{5}-\d{7}-\d\b/g, '[REDACTED_CNIC]');
+    .replace(/\bpi_[A-Za-z0-9]+_secret_[A-Za-z0-9]+\b/g, '[REDACTED_CLIENT_SECRET]');
 }
 
 function safeLogError(error: unknown): Record<string, unknown> {

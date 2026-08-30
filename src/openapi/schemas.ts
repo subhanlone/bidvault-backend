@@ -25,7 +25,7 @@ export const AuctionStatus = z
   .enum(['SCHEDULED', 'ACTIVE', 'CLOSED'])
   .meta({ id: 'AuctionStatus' });
 export const TransactionStatus = z
-  .enum(['PENDING', 'COMPLETED', 'FAILED'])
+  .enum(['PENDING', 'COMPLETED', 'FAILED', 'VOIDED'])
   .meta({ id: 'TransactionStatus' });
 export const NotificationType = z
   .enum([
@@ -179,6 +179,14 @@ export const HealthDto = z
      * logs. See BV-016.
      */
     contractViolations: z.number().int().nonnegative(),
+    /**
+     * Seconds since the lifecycle worker last wrote its heartbeat, or null when that cannot
+     * be determined — the worker has never run against this Redis, or the read itself timed
+     * out. A crashed worker leaves every ACTIVE auction open past its end time with nothing
+     * else in the system saying why; this is what makes that externally observable. See
+     * BV-012.
+     */
+    workerHeartbeatAgeSeconds: z.number().int().nonnegative().nullable(),
   })
   .meta({ id: 'Health' });
 
@@ -255,6 +263,34 @@ export const WonTransactionDto = z
 export const SellerStatsDto = z
   .object({ totalRevenue: z.number().int(), itemsSold: z.number().int() })
   .meta({ id: 'SellerStats' });
+
+/** A PENDING transaction an admin can void — see POST /admin/transactions/{transactionId}/void. */
+export const AdminTransactionDto = z
+  .object({
+    transactionId: z.string(),
+    auctionId: z.string(),
+    auctionTitle: z.string(),
+    buyerId: z.string(),
+    buyerName: z.string(),
+    sellerId: z.string(),
+    sellerName: z.string(),
+    finalAmount: z.number().int(),
+    status: TransactionStatus,
+    lastPaymentError: z.string().optional(),
+    createdAt: isoDateTime,
+  })
+  .meta({ id: 'AdminTransaction' });
+
+/** A search result for GET /admin/users — used to find the account BV-018's anonymize route targets. */
+export const AdminUserDto = z
+  .object({
+    userId: z.string(),
+    name: z.string(),
+    email: z.string(),
+    role: UserRole,
+    createdAt: isoDateTime,
+  })
+  .meta({ id: 'AdminUser' });
 
 export const AnalyticsDto = z
   .object({

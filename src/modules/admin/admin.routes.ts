@@ -1,8 +1,13 @@
 import { Router } from 'express';
+import type { TransactionStatus } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
-import { ok } from '../../utils/response.js';
+import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { validateBody } from '../../middleware/validate.js';
+import { voidTransactionSchema, anonymizeUserSchema } from '../../openapi/requests.js';
+import { checkAccountDeletable, anonymizeUser } from '../../services/account.service.js';
+import { dispatchEmail, sendAccountDeletedEmail } from '../../services/email.service.js';
 
 const router = Router();
 
@@ -12,18 +17,20 @@ router.get(
   '/analytics',
   requireAuth(['ADMIN']),
   asyncHandler(async (_req, res) => {
-    const twelveMonthsAgo = new Date();
-    twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
-    twelveMonthsAgo.setDate(1);
-    twelveMonthsAgo.setHours(0, 0, 0, 0);
+    // UTC throughout (BV-008): a server running in any timezone other than UTC bucketed
+    // records near a month boundary into the wrong month, silently -- Jan 31 23:30 UTC is
+    // still January there, but `new Date(...).getMonth()` reads it back in *local* time,
+    // which pushes it into February the moment the container's zone is even one hour ahead.
+    const now = new Date();
+    const twelveMonthsAgo = new Date(Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), 1));
 
     const [
       listingsTotal,
       listingsApproved,
       completedTxStats,
       bidStats,
-      recentTxs,
-      recentBids,
+      revenueByMonth,
+      bidsByMonth,
       categoryGroups,
       sellerTxGroups,
     ] = await Promise.all([
@@ -38,14 +45,34 @@ router.get(
         _count: { id: true },
         _avg: { amount: true },
       }),
-      prisma.auctionTransaction.findMany({
-        where: { status: 'COMPLETED', createdAt: { gte: twelveMonthsAgo } },
-        select: { finalAmount: true, createdAt: true },
-      }),
-      prisma.bid.findMany({
-        where: { createdAt: { gte: twelveMonthsAgo } },
-        select: { createdAt: true },
-      }),
+      // Grouped and summed in Postgres rather than pulled row-by-row and reduced in JS
+      // (BV-008): the old findMany fetched every matching row just to compute 12 monthly
+      // sums, a cost that grows with total row count instead of staying at "12 numbers".
+      //
+      // date_trunc('month', x AT TIME ZONE 'UTC') returns a *naive* timestamp -- one with no
+      // zone attached, holding UTC wall-clock digits ("2026-06-01 00:00:00" for midnight UTC
+      // on June 1st, regardless of what "createdAt" itself carried). node-postgres decodes a
+      // naive timestamp into a JS Date by reading those same digits as *local* time, so the
+      // Date this produces has its correct UTC-wall-clock reading sitting behind whatever the
+      // process's own zone is -- read it back with the matching local getters below
+      // (row.month.getFullYear()/getMonth()), not the UTC ones, or the two conversions no
+      // longer cancel out and the month silently shifts by the server's own offset. Confirmed
+      // by running both readings side by side against a known date: UTC getters landed a
+      // 2026-06-01 UTC row in May.
+      prisma.$queryRaw<{ month: Date; revenue: bigint | null }[]>`
+        SELECT date_trunc('month', "createdAt" AT TIME ZONE 'UTC') AS month,
+               SUM("finalAmount") AS revenue
+        FROM "AuctionTransaction"
+        WHERE status = 'COMPLETED' AND "createdAt" >= ${twelveMonthsAgo}
+        GROUP BY month
+      `,
+      prisma.$queryRaw<{ month: Date; count: bigint }[]>`
+        SELECT date_trunc('month', "createdAt" AT TIME ZONE 'UTC') AS month,
+               COUNT(*) AS count
+        FROM "Bid"
+        WHERE "createdAt" >= ${twelveMonthsAgo}
+        GROUP BY month
+      `,
       // No `take` — a truncated groupBy makes the percentages below add up to 100% while
       // silently omitting whole categories, presenting partial data as the full picture.
       // Callers that need a short list should aggregate the tail into an "Other" row.
@@ -64,27 +91,24 @@ router.get(
       }),
     ]);
 
-    // Build ordered month key list for last 12 months
+    // Build ordered month key list for last 12 months, in UTC to match the queries above.
     const orderedKeys: string[] = [];
     for (let i = 11; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(1);
-      d.setMonth(d.getMonth() - i);
-      orderedKeys.push(`${d.getFullYear()}-${d.getMonth()}`);
+      const key = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+      orderedKeys.push(`${key.getUTCFullYear()}-${key.getUTCMonth()}`);
     }
 
     const revenueMap = new Map<string, number>(orderedKeys.map(k => [k, 0]));
     const bidsMap    = new Map<string, number>(orderedKeys.map(k => [k, 0]));
 
-    for (const tx of recentTxs) {
-      const d = new Date(tx.createdAt);
-      const key = `${d.getFullYear()}-${d.getMonth()}`;
-      if (revenueMap.has(key)) revenueMap.set(key, (revenueMap.get(key) ?? 0) + tx.finalAmount);
+    for (const row of revenueByMonth) {
+      // Local getters, deliberately -- see the query comment above.
+      const key = `${row.month.getFullYear()}-${row.month.getMonth()}`;
+      if (revenueMap.has(key)) revenueMap.set(key, Number(row.revenue ?? 0));
     }
-    for (const b of recentBids) {
-      const d = new Date(b.createdAt);
-      const key = `${d.getFullYear()}-${d.getMonth()}`;
-      if (bidsMap.has(key)) bidsMap.set(key, (bidsMap.get(key) ?? 0) + 1);
+    for (const row of bidsByMonth) {
+      const key = `${row.month.getFullYear()}-${row.month.getMonth()}`;
+      if (bidsMap.has(key)) bidsMap.set(key, Number(row.count));
     }
 
     const monthlyRevenue = orderedKeys.map(key => ({
@@ -144,6 +168,159 @@ router.get(
       categoryBreakdown,
       topSellers,
     });
+  }),
+);
+
+// BV-004 / BV-006: neither an uncapped-bid winner who vanishes nor a buyer who never returns
+// after a decline had any way out before this — the transaction just sat PENDING forever,
+// with the listing permanently consumed (Auction.listingId is @unique) and no admin surface
+// to do anything about it. This is that surface: list the stuck ones, then void the ones that
+// are never going to be paid.
+router.get(
+  '/transactions',
+  requireAuth(['ADMIN']),
+  asyncHandler(async (_req, res) => {
+    const transactions = await prisma.auctionTransaction.findMany({
+      where: { status: 'PENDING' },
+      include: {
+        auction: { select: { title: true } },
+        winner: { select: { id: true, name: true } },
+        seller: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    ok(res, transactions.map((tx) => ({
+      transactionId: tx.id,
+      auctionId: tx.auctionId,
+      auctionTitle: tx.auction.title,
+      buyerId: tx.winner.id,
+      buyerName: tx.winner.name,
+      sellerId: tx.seller.id,
+      sellerName: tx.seller.name,
+      finalAmount: tx.finalAmount,
+      status: tx.status,
+      lastPaymentError: tx.lastPaymentError ?? undefined,
+      createdAt: tx.createdAt.toISOString(),
+    })));
+  }),
+);
+
+router.post(
+  '/transactions/:transactionId/void',
+  requireAuth(['ADMIN']),
+  validateBody(voidTransactionSchema),
+  asyncHandler(async (req, res) => {
+    const { transactionId } = req.params;
+    const { reason } = req.body;
+    const adminUserId = req.auth!.userId;
+
+    // Locked so a webhook delivery completing this exact transaction and an admin voiding it
+    // cannot both win -- the same FOR UPDATE pattern payments.routes.ts uses for create-intent.
+    const outcome = await prisma.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<Array<{ id: string; status: TransactionStatus }>>`
+        SELECT id, status FROM "AuctionTransaction" WHERE id = ${transactionId} FOR UPDATE
+      `;
+
+      if (!row) return { kind: 'not-found' as const };
+      if (row.status !== 'PENDING') return { kind: 'not-pending' as const };
+
+      await tx.auctionTransaction.update({
+        where: { id: row.id },
+        data: { status: 'VOIDED', lastPaymentError: null },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorUserId: adminUserId,
+          action: 'TRANSACTION_VOIDED',
+          entityType: 'AuctionTransaction',
+          entityId: row.id,
+          metadata: { reason },
+        },
+      });
+
+      return { kind: 'ok' as const };
+    });
+
+    if (outcome.kind === 'not-found') {
+      fail(res, 'Transaction not found.', 404);
+      return;
+    }
+    if (outcome.kind === 'not-pending') {
+      fail(res, 'Only a pending transaction can be voided.', 409);
+      return;
+    }
+    ok(res, { transactionId, status: 'VOIDED' });
+  }),
+);
+
+// BV-018: the admin half of anonymise-in-place -- for a support request from someone who can
+// no longer sign in to use the self-service route themselves (auth/delete-account). Search by
+// email first: there is no general user-directory screen, and building one is a bigger
+// feature than this one action needs.
+router.get(
+  '/users',
+  requireAuth(['ADMIN']),
+  asyncHandler(async (req, res) => {
+    const email = (req.query.email as string | undefined)?.trim();
+    if (!email) {
+      fail(res, 'Query parameter "email" is required.', 400);
+      return;
+    }
+
+    const users = await prisma.user.findMany({
+      where: { email: { contains: email, mode: 'insensitive' } },
+      select: { id: true, name: true, email: true, role: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+
+    ok(res, users.map((u) => ({
+      userId: u.id,
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      createdAt: u.createdAt.toISOString(),
+    })));
+  }),
+);
+
+router.post(
+  '/users/:userId/anonymize',
+  requireAuth(['ADMIN']),
+  validateBody(anonymizeUserSchema),
+  asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    const { reason } = req.body;
+    const adminUserId = req.auth!.userId;
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      fail(res, 'User not found.', 404);
+      return;
+    }
+
+    const guard = await checkAccountDeletable(userId);
+    if (!guard.allowed) {
+      fail(res, guard.reason!, 409);
+      return;
+    }
+
+    dispatchEmail(sendAccountDeletedEmail({ email: user.email, name: user.name }), 'account deleted (admin)');
+
+    await anonymizeUser(userId);
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: adminUserId,
+        action: 'USER_ANONYMIZED',
+        entityType: 'User',
+        entityId: userId,
+        metadata: { reason },
+      },
+    });
+
+    ok(res, { userId, status: 'ANONYMIZED' });
   }),
 );
 

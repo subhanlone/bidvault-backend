@@ -105,7 +105,6 @@ describe('auth', () => {
     const res = await request(app).post(api('/auth/register')).send({
       name: 'Fresh User',
       email: 'fresh@test.local',
-      cnic: '99999-1234567-1',
       password: 'a-good-password',
       role: 'BUYER',
     });
@@ -118,7 +117,6 @@ describe('auth', () => {
     await request(app).post(api('/auth/register')).send({
       name: 'Verify Me',
       email: 'verify@test.local',
-      cnic: '88888-1234567-1',
       password: 'a-good-password',
       role: 'BUYER',
     });
@@ -203,7 +201,6 @@ describe('auth', () => {
     await request(app).post(api('/auth/register')).send({
       name: 'Unverified Person',
       email: 'unverified@test.local',
-      cnic: '77777-1234567-1',
       password: 'a-good-password',
       role: 'BUYER',
     });
@@ -263,6 +260,16 @@ describe('auth', () => {
       .patch(api('/auth/me/preferences'))
       .set(auth(w.buyer.token))
       .send({ notifyOutbid: false });
+    expect(res.status).toBe(200);
+  });
+
+  it('POST /auth/delete-account', async () => {
+    hit('post', '/auth/delete-account');
+    // otherBuyer, not buyer: buyer has a PENDING transaction in this world and would 409.
+    const res = await request(app)
+      .post(api('/auth/delete-account'))
+      .set(auth(w.otherBuyer.token))
+      .send({ password: PASSWORD });
     expect(res.status).toBe(200);
   });
 });
@@ -588,6 +595,82 @@ describe('admin', () => {
     hit('get', '/admin/analytics');
     const res = await request(app).get(api('/admin/analytics')).set(auth(w.admin.token));
     expect(res.status).toBe(200);
+  });
+
+  // BV-008: the monthly buckets used to be JS Date math over every fetched row -- getFullYear()
+  // / getMonth() read in the *server's local* timezone, so a record near a month boundary
+  // could land one month off depending on where the process runs. Now it's date_trunc(...
+  // AT TIME ZONE 'UTC') in Postgres, which cannot drift with the app server's zone. A fixed
+  // relative offset (two months back) rather than a hardcoded date, so this keeps testing
+  // something regardless of when it runs.
+  it('GET /admin/analytics — buckets revenue and bids by UTC month', async () => {
+    const now = new Date();
+    const boundary = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 2, 1, 0, 0, 0));
+    const monthLabel = boundary.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+
+    await prisma.auctionTransaction.create({
+      data: {
+        auctionId: w.liveAuctionId,
+        winnerId: w.buyer.id,
+        sellerId: w.seller.id,
+        finalAmount: 77_000,
+        status: 'COMPLETED',
+        createdAt: boundary,
+      },
+    });
+    await prisma.bid.create({
+      data: { auctionId: w.liveAuctionId, buyerId: w.buyer.id, amount: 21_500, createdAt: boundary },
+    });
+
+    const res = await request(app).get(api('/admin/analytics')).set(auth(w.admin.token));
+    expect(res.status).toBe(200);
+
+    const bucket = res.body.data.monthlyRevenue.find((m: { month: string }) => m.month === monthLabel);
+    expect(bucket).toBeDefined();
+    expect(bucket.value).toBeGreaterThanOrEqual(77_000);
+    expect(bucket.bids).toBeGreaterThanOrEqual(1);
+  });
+
+  it('GET /admin/transactions', async () => {
+    hit('get', '/admin/transactions');
+    const res = await request(app).get(api('/admin/transactions')).set(auth(w.admin.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.some((tx: { transactionId: string }) => tx.transactionId === w.transactionId)).toBe(true);
+  });
+
+  it('POST /admin/transactions/{transactionId}/void', async () => {
+    hit('post', '/admin/transactions/{transactionId}/void');
+    const res = await request(app)
+      .post(api(`/admin/transactions/${w.transactionId}/void`))
+      .set(auth(w.admin.token))
+      .send({ reason: 'Buyer unreachable after repeated attempts.' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('VOIDED');
+
+    const row = await prisma.auctionTransaction.findUniqueOrThrow({ where: { id: w.transactionId } });
+    expect(row.status).toBe('VOIDED');
+
+    // Restore PENDING so later tests in this file that depend on w.transactionId are unaffected.
+    await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'PENDING' } });
+  });
+
+  it('GET /admin/users', async () => {
+    hit('get', '/admin/users');
+    const res = await request(app)
+      .get(api(`/admin/users?email=${encodeURIComponent(w.otherSeller.email)}`))
+      .set(auth(w.admin.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.some((u: { userId: string }) => u.userId === w.otherSeller.id)).toBe(true);
+  });
+
+  it('POST /admin/users/{userId}/anonymize', async () => {
+    hit('post', '/admin/users/{userId}/anonymize');
+    const res = await request(app)
+      .post(api(`/admin/users/${w.otherSeller.id}/anonymize`))
+      .set(auth(w.admin.token))
+      .send({ reason: 'Requested via support ticket.' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('ANONYMIZED');
   });
 });
 

@@ -18,7 +18,7 @@ import { responseContract, violationCount } from './middleware/response-contract
 import { ok, fail } from './utils/response.js';
 import { asyncHandler } from './utils/async-handler.js';
 import { prisma } from './db/prisma.js';
-import { probeDatabase, probeRedis } from './services/health.service.js';
+import { probeDatabase, probeRedis, getWorkerHeartbeatAgeSeconds } from './services/health.service.js';
 import { document } from './openapi/document.js';
 import { AppError } from './errors/app-error.js';
 import { globalRateLimit } from './middleware/rate-limit.js';
@@ -77,7 +77,11 @@ export function createApp() {
       fail(res, 'Shutting down.', 503);
       return;
     }
-    const [database, redis] = await Promise.all([probeDatabase(), probeRedis()]);
+    const [database, redis, workerHeartbeatAgeSeconds] = await Promise.all([
+      probeDatabase(),
+      probeRedis(),
+      getWorkerHeartbeatAgeSeconds(),
+    ]);
     ok(res, {
       status: 'ok',
       service: 'bidvault-backend',
@@ -85,6 +89,7 @@ export function createApp() {
       commit: env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local',
       dependencies: { database, redis },
       contractViolations: violationCount(),
+      workerHeartbeatAgeSeconds,
     });
   }));
 

@@ -51,17 +51,11 @@ export interface World {
   notificationId: string;
 }
 
-let cnicCounter = 0;
-
 async function makeUser(name: string, email: string, role: 'BUYER' | 'SELLER' | 'ADMIN') {
-  // Unique per *user*, not per role: there are now two buyers and two sellers, and cnic is
-  // a unique column. Format-valid; register's own test supplies its own.
-  const serial = String(++cnicCounter).padStart(5, '0');
   return prisma.user.create({
     data: {
       name,
       email,
-      cnic: `${serial}-1234567-1`,
       // Cost 4 keeps fixture creation fast; production hashing is exercised separately at
       // cost 12 in phase2-security.test.ts. bcrypt hashes carry their own cost, so login
       // verifies both without changing application behaviour.
@@ -88,7 +82,6 @@ export async function seedWorld(): Promise<World> {
   // read minListingPrice gets a figure that is no longer stored anywhere.
   invalidateSettingsCache();
 
-  cnicCounter = 0;
   const [buyer, seller, admin, otherBuyer, otherSeller] = await Promise.all([
     makeUser('Test Buyer', 'buyer@test.local', 'BUYER'),
     makeUser('Test Seller', 'seller@test.local', 'SELLER'),

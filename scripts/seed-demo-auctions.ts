@@ -31,7 +31,7 @@ function hoursFromNow(h: number): Date {
 }
 
 async function upsertUser(params: {
-  email: string; name: string; role: 'BUYER' | 'SELLER'; cnic: string;
+  email: string; name: string; role: 'BUYER' | 'SELLER';
 }) {
   const passwordHash = await hash(requiredPassword('SEED_DEMO_PASSWORD'), 12);
   return prisma.user.upsert({
@@ -40,7 +40,6 @@ async function upsertUser(params: {
     create: {
       name: params.name,
       email: params.email,
-      cnic: params.cnic,
       role: params.role,
       passwordHash,
       isEmailVerified: true,
@@ -51,17 +50,17 @@ async function upsertUser(params: {
 async function main() {
   // ── Demo buyers & sellers ───────────────────────────────────────────────
   const buyers = await Promise.all([
-    upsertUser({ email: 'bilal.khan.demo@gmail.com', name: 'Bilal Khan', role: 'BUYER', cnic: '35202-1111111-1' }),
-    upsertUser({ email: 'ayesha.malik.demo@gmail.com', name: 'Ayesha Malik', role: 'BUYER', cnic: '35202-2222222-2' }),
-    upsertUser({ email: 'hamza.sheikh.demo@gmail.com', name: 'Hamza Sheikh', role: 'BUYER', cnic: '35202-3333333-3' }),
-    upsertUser({ email: 'fatima.iqbal.demo@gmail.com', name: 'Fatima Iqbal', role: 'BUYER', cnic: '35202-4444444-4' }),
-    upsertUser({ email: 'usman.tariq.demo@gmail.com', name: 'Usman Tariq', role: 'BUYER', cnic: '35202-5555555-5' }),
+    upsertUser({ email: 'bilal.khan.demo@gmail.com', name: 'Bilal Khan', role: 'BUYER' }),
+    upsertUser({ email: 'ayesha.malik.demo@gmail.com', name: 'Ayesha Malik', role: 'BUYER' }),
+    upsertUser({ email: 'hamza.sheikh.demo@gmail.com', name: 'Hamza Sheikh', role: 'BUYER' }),
+    upsertUser({ email: 'fatima.iqbal.demo@gmail.com', name: 'Fatima Iqbal', role: 'BUYER' }),
+    upsertUser({ email: 'usman.tariq.demo@gmail.com', name: 'Usman Tariq', role: 'BUYER' }),
   ]);
   const [bilal, ayesha, hamza, fatima, usman] = buyers;
 
-  const sellerZainab = await upsertUser({ email: 'zainab.hussain.demo@gmail.com', name: 'Zainab Hussain', role: 'SELLER', cnic: '35202-6666666-6' });
-  const sellerTariq = await upsertUser({ email: 'tariq.mehmood.demo@gmail.com', name: 'Tariq Mehmood', role: 'SELLER', cnic: '35202-7777777-7' });
-  const sellerSana = await upsertUser({ email: 'sana.aslam.demo@gmail.com', name: 'Sana Aslam', role: 'SELLER', cnic: '35202-8888888-8' });
+  const sellerZainab = await upsertUser({ email: 'zainab.hussain.demo@gmail.com', name: 'Zainab Hussain', role: 'SELLER' });
+  const sellerTariq = await upsertUser({ email: 'tariq.mehmood.demo@gmail.com', name: 'Tariq Mehmood', role: 'SELLER' });
+  const sellerSana = await upsertUser({ email: 'sana.aslam.demo@gmail.com', name: 'Sana Aslam', role: 'SELLER' });
 
   interface DemoItem {
     seller: typeof sellerZainab;

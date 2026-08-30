@@ -210,6 +210,34 @@ export async function sendPasswordResetCompletedEmail(to: { email: string; name:
   ));
 }
 
+// BV-018: sent to the address the account had *before* it was anonymised -- once the route
+// clears User.email there is nowhere left to deliver this, so it has to go out first.
+export async function sendAccountDeletedEmail(to: { email: string; name: string }): Promise<void> {
+  await send(to.email, 'Your BidVault account has been deleted', base(
+    'Account deleted',
+    `
+    ${h1('Account deleted')}
+    ${p(`Hi ${to.name}, your BidVault account has been deleted. Your name and email have been removed; bid and transaction records are kept as required for dispute resolution and legal compliance, but are no longer linked to an identifiable account.`)}
+    ${p('If you did not request this, contact support immediately.')}
+    `,
+  ));
+}
+
+// BV-031: a revoked refresh token being presented again means two holders came from the same
+// token family -- the signature the rotation machinery exists to catch. Revoking every
+// session is the containment step; this is the notification, so the account owner learns
+// about it instead of the incident going silent the way a bare 401 would leave it.
+export async function sendSessionsRevokedSecurityAlertEmail(to: { email: string; name: string }): Promise<void> {
+  await send(to.email, 'Security alert: all BidVault sessions were signed out', base(
+    'Security alert',
+    `
+    ${h1('All sessions signed out')}
+    ${p(`Hi ${to.name}, BidVault detected a sign-in token being used a second time after it had already been replaced. As a precaution, every session on your account has been signed out.`)}
+    ${p('If this was you on another device, just sign in again. If it was not, change your password immediately and review your account activity.')}
+    `,
+  ));
+}
+
 export async function sendVerificationResentEmail(to: { email: string; name: string }, code: string): Promise<void> {
   await send(to.email, 'New verification code for BidVault', base(
     'New verification code',

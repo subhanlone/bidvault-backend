@@ -1,5 +1,6 @@
 import { prisma } from '../db/prisma.js';
 import { redisConnection } from '../infra/redis.js';
+import { WORKER_HEARTBEAT_KEY } from '../infra/worker-heartbeat.js';
 
 /**
  * Dependency probes for GET /health.
@@ -53,3 +54,31 @@ export async function probe(run: () => Promise<unknown>): Promise<Probe> {
 export const probeDatabase = (): Promise<Probe> => probe(() => prisma.$queryRaw`SELECT 1`);
 
 export const probeRedis = (): Promise<Probe> => probe(() => redisConnection.ping());
+
+/**
+ * How long since the lifecycle worker last wrote its heartbeat (BV-012), or null when that
+ * cannot be determined -- no key yet (the worker has never run against this Redis), or the
+ * read itself timed out, which /health's existing dependency probes already treat as "down"
+ * rather than hang the request on it. A worker that has crashed leaves every ACTIVE auction
+ * open past its end time with nothing else in the system saying why; this is what makes that
+ * externally observable instead of only visible in a log nobody is tailing.
+ */
+export async function getWorkerHeartbeatAgeSeconds(): Promise<number | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const value = await Promise.race([
+      redisConnection.get(WORKER_HEARTBEAT_KEY),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('heartbeat read timed out')), PROBE_TIMEOUT_MS);
+      }),
+    ]);
+    if (!value) return null;
+    const writtenAt = Number(value);
+    if (Number.isNaN(writtenAt)) return null;
+    return Math.max(0, Math.round((Date.now() - writtenAt) / 1000));
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}

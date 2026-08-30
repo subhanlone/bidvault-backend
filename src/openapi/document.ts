@@ -140,7 +140,10 @@ const documentInput = {
     //
     // 2.4.0, 2026-08-30, minor: GET /health documents 503 during graceful shutdown, so a load
     // balancer stops routing new traffic to an instance that is draining. See BV-052.
-    version: '2.4.0',
+    //
+    // 2.5.0, 2026-08-30, minor: GET /health gained workerHeartbeatAgeSeconds, so a dead
+    // lifecycle worker is externally observable instead of silent. See BV-012.
+    version: '2.8.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -185,7 +188,7 @@ const documentInput = {
         responses: {
           201: okBody(S.RegistrationDto, 'Account created; verification code sent'),
           400: badRequest,
-          409: errBody('Email or CNIC already registered'),
+          409: errBody('Email already registered'),
         },
       },
     },
@@ -291,6 +294,21 @@ const documentInput = {
           400: badRequest,
           401: unauthorized,
           422: unprocessable('The current password is incorrect'),
+        },
+      },
+    },
+    '/auth/delete-account': {
+      post: {
+        tags: ['Auth'],
+        security: [{ bearerAuth: [] }],
+        summary: 'Anonymise-in-place (BV-018) — refused while you have an active auction or a pending transaction',
+        requestBody: jsonRequest(R.deleteAccountSchema),
+        responses: {
+          200: okBody(z.object({ message: z.string() }), 'Account deleted'),
+          400: badRequest,
+          401: unauthorized,
+          409: errBody('You have an active auction or a pending transaction'),
+          422: unprocessable('The password is incorrect'),
         },
       },
     },
@@ -632,6 +650,66 @@ const documentInput = {
           200: okBody(S.AnalyticsDto, 'Platform analytics'),
           401: unauthorized,
           403: forbidden,
+        },
+      },
+    },
+    '/admin/transactions': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'Every PENDING transaction, oldest first — the ones a void might apply to',
+        responses: {
+          200: okBody(z.array(S.AdminTransactionDto), 'Pending transactions'),
+          401: unauthorized,
+          403: forbidden,
+        },
+      },
+    },
+    '/admin/transactions/{transactionId}/void': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'PENDING transactions only — a COMPLETED sale needs a refund, not a void',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        requestBody: jsonRequest(R.voidTransactionSchema),
+        responses: {
+          200: okBody(z.object({ transactionId: z.string(), status: z.literal('VOIDED') }), 'Voided'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The transaction is not pending'),
+        },
+      },
+    },
+    '/admin/users': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'Search by email — finds the account an anonymize request targets',
+        requestParams: { query: z.object({ email: z.string() }) },
+        responses: {
+          200: okBody(z.array(S.AdminUserDto), 'Matching users'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+        },
+      },
+    },
+    '/admin/users/{userId}/anonymize': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'Anonymise-in-place (BV-018) — refused while the user has an active auction or a pending transaction',
+        requestParams: { path: z.object({ userId: z.string() }) },
+        requestBody: jsonRequest(R.anonymizeUserSchema),
+        responses: {
+          200: okBody(z.object({ userId: z.string(), status: z.literal('ANONYMIZED') }), 'Anonymized'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The user has an active auction or a pending transaction'),
         },
       },
     },
