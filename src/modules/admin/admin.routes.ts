@@ -12,18 +12,20 @@ router.get(
   '/analytics',
   requireAuth(['ADMIN']),
   asyncHandler(async (_req, res) => {
-    const twelveMonthsAgo = new Date();
-    twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
-    twelveMonthsAgo.setDate(1);
-    twelveMonthsAgo.setHours(0, 0, 0, 0);
+    // UTC throughout (BV-008): a server running in any timezone other than UTC bucketed
+    // records near a month boundary into the wrong month, silently -- Jan 31 23:30 UTC is
+    // still January there, but `new Date(...).getMonth()` reads it back in *local* time,
+    // which pushes it into February the moment the container's zone is even one hour ahead.
+    const now = new Date();
+    const twelveMonthsAgo = new Date(Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), 1));
 
     const [
       listingsTotal,
       listingsApproved,
       completedTxStats,
       bidStats,
-      recentTxs,
-      recentBids,
+      revenueByMonth,
+      bidsByMonth,
       categoryGroups,
       sellerTxGroups,
     ] = await Promise.all([
@@ -38,14 +40,34 @@ router.get(
         _count: { id: true },
         _avg: { amount: true },
       }),
-      prisma.auctionTransaction.findMany({
-        where: { status: 'COMPLETED', createdAt: { gte: twelveMonthsAgo } },
-        select: { finalAmount: true, createdAt: true },
-      }),
-      prisma.bid.findMany({
-        where: { createdAt: { gte: twelveMonthsAgo } },
-        select: { createdAt: true },
-      }),
+      // Grouped and summed in Postgres rather than pulled row-by-row and reduced in JS
+      // (BV-008): the old findMany fetched every matching row just to compute 12 monthly
+      // sums, a cost that grows with total row count instead of staying at "12 numbers".
+      //
+      // date_trunc('month', x AT TIME ZONE 'UTC') returns a *naive* timestamp -- one with no
+      // zone attached, holding UTC wall-clock digits ("2026-06-01 00:00:00" for midnight UTC
+      // on June 1st, regardless of what "createdAt" itself carried). node-postgres decodes a
+      // naive timestamp into a JS Date by reading those same digits as *local* time, so the
+      // Date this produces has its correct UTC-wall-clock reading sitting behind whatever the
+      // process's own zone is -- read it back with the matching local getters below
+      // (row.month.getFullYear()/getMonth()), not the UTC ones, or the two conversions no
+      // longer cancel out and the month silently shifts by the server's own offset. Confirmed
+      // by running both readings side by side against a known date: UTC getters landed a
+      // 2026-06-01 UTC row in May.
+      prisma.$queryRaw<{ month: Date; revenue: bigint | null }[]>`
+        SELECT date_trunc('month', "createdAt" AT TIME ZONE 'UTC') AS month,
+               SUM("finalAmount") AS revenue
+        FROM "AuctionTransaction"
+        WHERE status = 'COMPLETED' AND "createdAt" >= ${twelveMonthsAgo}
+        GROUP BY month
+      `,
+      prisma.$queryRaw<{ month: Date; count: bigint }[]>`
+        SELECT date_trunc('month', "createdAt" AT TIME ZONE 'UTC') AS month,
+               COUNT(*) AS count
+        FROM "Bid"
+        WHERE "createdAt" >= ${twelveMonthsAgo}
+        GROUP BY month
+      `,
       // No `take` — a truncated groupBy makes the percentages below add up to 100% while
       // silently omitting whole categories, presenting partial data as the full picture.
       // Callers that need a short list should aggregate the tail into an "Other" row.
@@ -64,27 +86,24 @@ router.get(
       }),
     ]);
 
-    // Build ordered month key list for last 12 months
+    // Build ordered month key list for last 12 months, in UTC to match the queries above.
     const orderedKeys: string[] = [];
     for (let i = 11; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(1);
-      d.setMonth(d.getMonth() - i);
-      orderedKeys.push(`${d.getFullYear()}-${d.getMonth()}`);
+      const key = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+      orderedKeys.push(`${key.getUTCFullYear()}-${key.getUTCMonth()}`);
     }
 
     const revenueMap = new Map<string, number>(orderedKeys.map(k => [k, 0]));
     const bidsMap    = new Map<string, number>(orderedKeys.map(k => [k, 0]));
 
-    for (const tx of recentTxs) {
-      const d = new Date(tx.createdAt);
-      const key = `${d.getFullYear()}-${d.getMonth()}`;
-      if (revenueMap.has(key)) revenueMap.set(key, (revenueMap.get(key) ?? 0) + tx.finalAmount);
+    for (const row of revenueByMonth) {
+      // Local getters, deliberately -- see the query comment above.
+      const key = `${row.month.getFullYear()}-${row.month.getMonth()}`;
+      if (revenueMap.has(key)) revenueMap.set(key, Number(row.revenue ?? 0));
     }
-    for (const b of recentBids) {
-      const d = new Date(b.createdAt);
-      const key = `${d.getFullYear()}-${d.getMonth()}`;
-      if (bidsMap.has(key)) bidsMap.set(key, (bidsMap.get(key) ?? 0) + 1);
+    for (const row of bidsByMonth) {
+      const key = `${row.month.getFullYear()}-${row.month.getMonth()}`;
+      if (bidsMap.has(key)) bidsMap.set(key, Number(row.count));
     }
 
     const monthlyRevenue = orderedKeys.map(key => ({

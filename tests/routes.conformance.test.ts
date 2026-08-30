@@ -589,6 +589,40 @@ describe('admin', () => {
     const res = await request(app).get(api('/admin/analytics')).set(auth(w.admin.token));
     expect(res.status).toBe(200);
   });
+
+  // BV-008: the monthly buckets used to be JS Date math over every fetched row -- getFullYear()
+  // / getMonth() read in the *server's local* timezone, so a record near a month boundary
+  // could land one month off depending on where the process runs. Now it's date_trunc(...
+  // AT TIME ZONE 'UTC') in Postgres, which cannot drift with the app server's zone. A fixed
+  // relative offset (two months back) rather than a hardcoded date, so this keeps testing
+  // something regardless of when it runs.
+  it('GET /admin/analytics — buckets revenue and bids by UTC month', async () => {
+    const now = new Date();
+    const boundary = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 2, 1, 0, 0, 0));
+    const monthLabel = boundary.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+
+    await prisma.auctionTransaction.create({
+      data: {
+        auctionId: w.liveAuctionId,
+        winnerId: w.buyer.id,
+        sellerId: w.seller.id,
+        finalAmount: 77_000,
+        status: 'COMPLETED',
+        createdAt: boundary,
+      },
+    });
+    await prisma.bid.create({
+      data: { auctionId: w.liveAuctionId, buyerId: w.buyer.id, amount: 21_500, createdAt: boundary },
+    });
+
+    const res = await request(app).get(api('/admin/analytics')).set(auth(w.admin.token));
+    expect(res.status).toBe(200);
+
+    const bucket = res.body.data.monthlyRevenue.find((m: { month: string }) => m.month === monthLabel);
+    expect(bucket).toBeDefined();
+    expect(bucket.value).toBeGreaterThanOrEqual(77_000);
+    expect(bucket.bids).toBeGreaterThanOrEqual(1);
+  });
 });
 
 // ---- the guard --------------------------------------------------------------------
