@@ -252,10 +252,7 @@ describe('enumeration resistance and session recovery', () => {
     expect(remaining).toHaveLength(1);
     expect(['session-one', 'session-two']).not.toContain(remaining[0].id);
 
-    // 5s rather than the 1s default: a loaded CI runner can take longer than that to
-    // schedule the fire-and-forget send's microtask chain (observed failing at 1s in CI,
-    // never locally).
-    await vi.waitFor(() => expect(mail.send).toHaveBeenCalled(), 5000);
+    await vi.waitFor(() => expect(mail.send).toHaveBeenCalled());
   }, 15_000);
 
   it('hands the caller a session that works, and kills the one it arrived with', async () => {
@@ -335,12 +332,11 @@ describe('enumeration resistance and session recovery', () => {
 
     // BV-031: reuse of a revoked token is the signature the rotation machinery exists to
     // catch, so the account owner must be told -- not just have the family revoked silently.
-    // 5s rather than the 1s default -- see the comment on the equivalent wait above.
     await vi.waitFor(() => {
       expect(mail.send).toHaveBeenCalledWith(
         expect.objectContaining({ subject: 'Security alert: all BidVault sessions were signed out' }),
       );
-    }, 5000);
+    });
   });
 });
 
@@ -488,9 +484,7 @@ describe('socket and Cloudinary abuse controls', () => {
     const subscribe = handlers.get('auction:subscribe')!;
     for (let i = 0; i < 30; i++) subscribe(`auction-${i}`);
 
-    // 5s rather than the 1s default: each subscribe() fires an unawaited DB-backed .then()
-    // chain, and 30 of them queued at once can outrun vi.waitFor's default under CI load.
-    await vi.waitFor(() => expect(fake.join).toHaveBeenCalledTimes(25), 5000);
+    await vi.waitFor(() => expect(fake.join).toHaveBeenCalledTimes(25));
     expect([...rooms].filter((room) => room.startsWith('auction:'))).toHaveLength(25);
     expect(findUnique).toHaveBeenCalledTimes(25);
   });

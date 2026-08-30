@@ -184,11 +184,19 @@ jobs:
     # Overrides the workflow-level values. tests/setup.ts refuses to run unless the
     # database name ends in _test, the Redis host is loopback and QUEUE_PREFIX is not
     # production's 'bull' — so these are load-bearing, not decoration.
+    #
+    # RESEND_API_KEY is a new addition, not an override: it is optional in config/env.ts,
+    # so its absence never failed validation, but email.service.ts's `client` is null
+    # without it and every send silently no-ops -- Resend itself is mocked in the suite, so
+    # any non-empty value satisfies this, but a batch of email-content assertions genuinely
+    # depended on the value leaking in locally from an untracked .env Prisma loads as a side
+    # effect, and failed here, where no such file exists, until this was added.
     env:
       NODE_ENV: test
       DATABASE_URL: postgresql://bidvault:bidvault@localhost:5432/bidvault_test
       REDIS_URL: redis://127.0.0.1:6379
       QUEUE_PREFIX: bull:test
+      RESEND_API_KEY: re_ci_placeholder_not_a_real_key
 
     steps:
       - uses: actions/checkout@v5

@@ -112,16 +112,12 @@ describe('POST /auth/delete-account', () => {
     const tokens = await prisma.refreshToken.findMany({ where: { userId: w.otherBuyer.id } });
     expect(tokens.every((t) => t.revokedAt !== null)).toBe(true);
 
-    // The address that no longer exists on the row by the time this assertion runs. The
-    // send is fire-and-forget (dispatchEmail), so this polls rather than asserting
-    // immediately -- 5s rather than vi.waitFor's 1s default because a CI runner under load
-    // can genuinely take longer than that to schedule an unawaited microtask chain (this
-    // was observed failing at 1s on GitHub's shared runners, never locally).
+    // The address that no longer exists on the row by the time this assertion runs.
     await vi.waitFor(() => {
       expect(mail.send).toHaveBeenCalledWith(
         expect.objectContaining({ to: w.otherBuyer.email, subject: 'Your BidVault account has been deleted' }),
       );
-    }, 5000);
+    });
   });
 
   it('the account can no longer log in afterward', async () => {
