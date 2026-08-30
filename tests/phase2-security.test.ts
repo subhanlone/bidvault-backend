@@ -131,6 +131,31 @@ describe('rate limits and OTP attempt budgets', () => {
     expect(blocked.body.error).toBe('Too many login attempts. Please try again later.');
   }, 15_000);
 
+  it('spends the login budget on failures only, so a shared address is not locked out', async () => {
+    // Everyone behind one NAT or a carrier's CGNAT shares the IP key. If a correct sign-in
+    // counted, the eleventh person to sign in correctly within the window would be refused --
+    // an outage for a network of legitimate users, caused by them using the product properly.
+    for (let attempt = 1; attempt <= 12; attempt++) {
+      const res = await request(app)
+        .post(api('/auth/login'))
+        .send({ email: w.buyer.email, password: PASSWORD });
+      expect(res.status, `successful attempt ${attempt}`).toBe(200);
+    }
+
+    // Failures still count, and still bite, on the very same key.
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      const res = await request(app)
+        .post(api('/auth/login'))
+        .send({ email: w.buyer.email, password: 'wrong-password' });
+      expect(res.status, `failed attempt ${attempt}`).toBe(401);
+    }
+
+    const blocked = await request(app)
+      .post(api('/auth/login'))
+      .send({ email: w.buyer.email, password: 'wrong-password' });
+    expect(blocked.status).toBe(429);
+  }, 40_000);
+
   it('shares a three-per-hour email budget across reset email requests', async () => {
     for (let attempt = 1; attempt <= 3; attempt++) {
       const res = await request(app)
@@ -238,13 +263,61 @@ describe('enumeration resistance and session recovery', () => {
       .send({ currentPassword: PASSWORD, newPassword: 'Correct-Horse-Battery-Staple-42!' });
 
     expect(res.status).toBe(200);
-    const active = await prisma.refreshToken.count({
-      where: { userId: w.buyer.id, revokedAt: null },
-    });
-    expect(active).toBe(0);
     expect(tokens).toHaveLength(2);
+
+    // Both pre-existing sessions are gone, and exactly one survives: the replacement issued to
+    // the caller. Asserting "zero active" would have been wrong -- that state is what signed the
+    // user out of the device they were sitting at.
+    const remaining = await prisma.refreshToken.findMany({
+      where: { userId: w.buyer.id, revokedAt: null },
+      select: { id: true },
+    });
+    expect(remaining).toHaveLength(1);
+    expect(['session-one', 'session-two']).not.toContain(remaining[0].id);
+
     await vi.waitFor(() => expect(mail.send).toHaveBeenCalled());
   }, 15_000);
+
+  it('hands the caller a session that works, and kills the one it arrived with', async () => {
+    const oldValue = signRefreshToken({ sub: w.buyer.id, jti: 'pre-change' });
+    await prisma.refreshToken.create({
+      data: { id: 'pre-change', userId: w.buyer.id, tokenHash: hashToken(oldValue), expiresAt: future() },
+    });
+
+    const changed = await request(app)
+      .post(api('/auth/change-password'))
+      .set(auth(w.buyer.token))
+      .send({ currentPassword: PASSWORD, newPassword: 'Correct-Horse-Battery-Staple-42!' });
+
+    expect(changed.status).toBe(200);
+    expect(typeof changed.body.data.accessToken).toBe('string');
+    expect(typeof changed.body.data.refreshToken).toBe('string');
+
+    // The replacement works -- the usability half, and the half that was missing.
+    const fresh = await request(app)
+      .post(api('/auth/refresh'))
+      .send({ refreshToken: changed.body.data.refreshToken });
+    expect(fresh.status).toBe(200);
+    expect(typeof fresh.body.data.accessToken).toBe('string');
+
+    // The session held before the change is dead -- the security half.
+    //
+    // Checked last, and that ordering is load-bearing. Presenting the revoked token is exactly
+    // what reuse detection is watching for, so it revokes the whole family, the new session
+    // included. Probing it first would therefore have failed the assertion above and looked
+    // like a broken replacement rather than a working defence -- which is what the first draft
+    // of this test did. The behaviour is right: a genuinely stolen token should cost the
+    // attacker and the victim every session, password change or not.
+    const stale = await request(app)
+      .post(api('/auth/refresh'))
+      .send({ refreshToken: oldValue });
+    expect(stale.status).toBe(401);
+
+    const afterReuse = await prisma.refreshToken.count({
+      where: { userId: w.buyer.id, revokedAt: null },
+    });
+    expect(afterReuse).toBe(0);
+  }, 20_000);
 
   it('revokes the whole family when a recognised revoked refresh token is reused', async () => {
     const oldId = 'old-session';
