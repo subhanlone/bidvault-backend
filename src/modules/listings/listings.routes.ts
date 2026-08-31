@@ -21,6 +21,7 @@ import { validateCategoryAttributes } from './category-attributes.js';
 import type { ListingDtoType } from '../../openapi/schemas.js';
 import { submitListingSchema, rejectListingSchema } from '../../openapi/requests.js';
 import { uploadSignatureRateLimit } from '../../middleware/rate-limit.js';
+import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 
 const router = Router();
 const ALLOWED_UPLOAD_FORMATS = 'jpg,png,webp';
@@ -296,25 +297,58 @@ router.get(
   '/mine',
   requireAuth(['SELLER']),
   asyncHandler(async (req, res) => {
-    const listings = await prisma.listing.findMany({
-      where: { sellerId: req.auth!.userId },
+    const sellerId = req.auth!.userId;
+    const limit = parseLimit(req.query.limit);
+    const cursor = decodeCursor(req.query.cursor);
+
+    const where: Prisma.ListingWhereInput = cursor
+      ? {
+          sellerId,
+          OR: [
+            { submittedAt: { lt: new Date(cursor.sortValue) } },
+            { submittedAt: new Date(cursor.sortValue), id: { lt: cursor.id } },
+          ],
+        }
+      : { sellerId };
+
+    const rows = await prisma.listing.findMany({
+      where,
       include: { seller: true },
-      orderBy: { submittedAt: 'desc' },
+      orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
     });
-    ok(res, listings.map(toListingDto));
+
+    const { pageRows, nextCursor } = slicePage(rows, limit, (l) => l.submittedAt, (l) => l.id);
+    ok(res, { items: pageRows.map(toListingDto), nextCursor });
   }),
 );
 
 router.get(
   '/pending',
   requireAuth(['ADMIN']),
-  asyncHandler(async (_req, res) => {
-    const listings = await prisma.listing.findMany({
-      where: { status: 'PENDING' },
+  asyncHandler(async (req, res) => {
+    const limit = parseLimit(req.query.limit);
+    const cursor = decodeCursor(req.query.cursor);
+
+    const where: Prisma.ListingWhereInput = cursor
+      ? {
+          status: 'PENDING',
+          OR: [
+            { submittedAt: { gt: new Date(cursor.sortValue) } },
+            { submittedAt: new Date(cursor.sortValue), id: { gt: cursor.id } },
+          ],
+        }
+      : { status: 'PENDING' };
+
+    const rows = await prisma.listing.findMany({
+      where,
       include: { seller: true },
-      orderBy: { submittedAt: 'asc' },
+      orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
+      take: limit + 1,
     });
-    ok(res, listings.map(toListingDto));
+
+    const { pageRows, nextCursor } = slicePage(rows, limit, (l) => l.submittedAt, (l) => l.id);
+    ok(res, { items: pageRows.map(toListingDto), nextCursor });
   }),
 );
 

@@ -281,7 +281,8 @@ describe('auctions', () => {
     hit('get', '/auctions');
     const res = await request(app).get(api('/auctions'));
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.data)).toBe(true);
+    expect(Array.isArray(res.body.data.items)).toBe(true);
+    expect(res.body.data).toHaveProperty('nextCursor');
   });
 
   it('GET /auctions/{auctionId}', async () => {
@@ -295,6 +296,8 @@ describe('auctions', () => {
     hit('get', '/auctions/{auctionId}/bids');
     const res = await request(app).get(api(`/auctions/${w.liveAuctionId}/bids`));
     expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.data.items)).toBe(true);
+    expect(res.body.data).toHaveProperty('nextCursor');
   });
 
   it('POST /auctions/{auctionId}/bids', async () => {
@@ -310,6 +313,8 @@ describe('auctions', () => {
     hit('get', '/auctions/mine/bids');
     const res = await request(app).get(api('/auctions/mine/bids')).set(auth(w.buyer.token));
     expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.data.items)).toBe(true);
+    expect(res.body.data).toHaveProperty('nextCursor');
   });
 
   // BV-065: this operation's 400 is validateBody's ValidationErrorBody; the bid-floor
@@ -353,12 +358,16 @@ describe('listings', () => {
     hit('get', '/listings/mine');
     const res = await request(app).get(api('/listings/mine')).set(auth(w.seller.token));
     expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.data.items)).toBe(true);
+    expect(res.body.data).toHaveProperty('nextCursor');
   });
 
   it('GET /listings/pending', async () => {
     hit('get', '/listings/pending');
     const res = await request(app).get(api('/listings/pending')).set(auth(w.admin.token));
     expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.data.items)).toBe(true);
+    expect(res.body.data).toHaveProperty('nextCursor');
   });
 
   it('POST /listings/upload-signature', async () => {
@@ -410,7 +419,7 @@ describe('watchlist', () => {
     hit('get', '/watchlist');
     const res = await request(app).get(api('/watchlist')).set(auth(w.buyer.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.length).toBeGreaterThan(0);
+    expect(res.body.data.items.length).toBeGreaterThan(0);
   });
 
   it('POST /watchlist/{auctionId}', async () => {
