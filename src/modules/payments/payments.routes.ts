@@ -81,14 +81,18 @@ router.get(
   '/seller-stats',
   requireAuth(['SELLER']),
   asyncHandler(async (req, res) => {
-    const sellerId = req.auth!.userId;
-    const txs = await prisma.auctionTransaction.findMany({
-      where: { sellerId, status: 'COMPLETED' },
-      select: { finalAmount: true },
+    // BV-029's evidence table listed this alongside the six list endpoints, but it doesn't
+    // return a list -- {totalRevenue, itemsSold} is an aggregate, so cursor pagination
+    // doesn't apply to it. Its actual defect (BV-008's shape: every completed row fetched
+    // to sum in JS) gets BV-008's fix instead -- the aggregate in Postgres.
+    const { _sum, _count } = await prisma.auctionTransaction.aggregate({
+      where: { sellerId: req.auth!.userId, status: 'COMPLETED' },
+      _sum: { finalAmount: true },
+      _count: { id: true },
     });
     ok(res, {
-      totalRevenue: txs.reduce((sum, tx) => sum + tx.finalAmount, 0),
-      itemsSold: txs.length,
+      totalRevenue: _sum.finalAmount ?? 0,
+      itemsSold: _count.id,
     });
   }),
 );

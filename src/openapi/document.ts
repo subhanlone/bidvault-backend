@@ -143,7 +143,7 @@ const documentInput = {
     //
     // 2.5.0, 2026-08-30, minor: GET /health gained workerHeartbeatAgeSeconds, so a dead
     // lifecycle worker is externally observable instead of silent. See BV-012.
-    version: '2.8.0',
+    version: '3.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -344,38 +344,43 @@ const documentInput = {
     '/auctions': {
       get: {
         tags: ['Auctions'],
-        summary: 'Public. Reserve amounts are never included — only reserveMet.',
+        summary: 'Public, cursor-paginated. Defaults to status=ACTIVE. Reserve amounts are never included — only reserveMet.',
         requestParams: {
           query: z.object({
             status: S.AuctionStatus.optional(),
             category: z.string().optional(),
             search: z.string().optional(),
-          }),
+          }).extend(R.paginationQuerySchema.shape),
         },
-        responses: { 200: okBody(z.array(S.AuctionDto), 'Matching auctions') },
+        responses: { 200: okBody(S.PaginatedAuctionsDto, 'A page of matching auctions') },
       },
     },
     '/auctions/mine/bids': {
       get: {
         tags: ['Auctions'],
         security: [{ bearerAuth: [] }],
-        summary: "The signed-in buyer's bids, each with its auction",
-        responses: { 200: okBody(z.array(S.BidWithAuctionDto), 'Your bids'), 401: unauthorized },
+        summary: "Cursor-paginated. The signed-in buyer's bids, each with its auction",
+        requestParams: { query: R.paginationQuerySchema },
+        responses: { 200: okBody(S.PaginatedBidsWithAuctionDto, 'A page of your bids'), 401: unauthorized },
       },
     },
     '/auctions/{auctionId}': {
       get: {
         tags: ['Auctions'],
         requestParams: { path: z.object({ auctionId: z.string() }) },
-        summary: 'currentBid and bidCount come from Redis when a live value exists',
+        summary: 'currentBid and bidCount are read straight from the row — see BV-010',
         responses: { 200: okBody(S.AuctionDto, 'The auction'), 404: notFound },
       },
     },
     '/auctions/{auctionId}/bids': {
       get: {
         tags: ['Auctions'],
-        requestParams: { path: z.object({ auctionId: z.string() }) },
-        responses: { 200: okBody(z.array(S.BidDto), 'Bid history, newest first') },
+        summary: 'Cursor-paginated, newest first',
+        requestParams: {
+          path: z.object({ auctionId: z.string() }),
+          query: R.paginationQuerySchema,
+        },
+        responses: { 200: okBody(S.PaginatedBidsDto, 'A page of bid history') },
       },
       post: {
         tags: ['Auctions'],
@@ -441,15 +446,19 @@ const documentInput = {
       get: {
         tags: ['Listings'],
         security: [{ bearerAuth: [] }],
-        responses: { 200: okBody(z.array(S.ListingDto), 'Your listings'), 401: unauthorized },
+        summary: 'Cursor-paginated, newest first',
+        requestParams: { query: R.paginationQuerySchema },
+        responses: { 200: okBody(S.PaginatedListingsDto, 'A page of your listings'), 401: unauthorized },
       },
     },
     '/listings/pending': {
       get: {
         tags: ['Listings'],
         security: [{ bearerAuth: [] }],
+        summary: 'Cursor-paginated, oldest first',
+        requestParams: { query: R.paginationQuerySchema },
         responses: {
-          200: okBody(z.array(S.ListingDto), 'Listings awaiting review'),
+          200: okBody(S.PaginatedListingsDto, 'A page of listings awaiting review'),
           401: unauthorized,
           403: forbidden,
         },
@@ -504,7 +513,9 @@ const documentInput = {
       get: {
         tags: ['Watchlist'],
         security: [{ bearerAuth: [] }],
-        responses: { 200: okBody(z.array(S.AuctionDto), 'Watched auctions'), 401: unauthorized },
+        summary: 'Cursor-paginated, most recently watched first',
+        requestParams: { query: R.paginationQuerySchema },
+        responses: { 200: okBody(S.PaginatedAuctionsDto, 'A page of watched auctions'), 401: unauthorized },
       },
     },
     '/watchlist/{auctionId}': {

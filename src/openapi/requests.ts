@@ -189,3 +189,15 @@ export const voidTransactionSchema = z
 export const anonymizeUserSchema = z
   .object({ reason: z.string().trim().min(3).max(500) })
   .meta({ id: 'AnonymizeUserRequest' });
+
+// ---- pagination ---------------------------------------------------------------------
+
+// BV-029: query params for every cursor-paginated list endpoint. Both optional -- a caller
+// that sends neither gets the first page at the default size. `cursor` is opaque and
+// unvalidated here on purpose: a malformed one is treated as "no cursor" by
+// utils/pagination.ts's decodeCursor, not rejected, since a stale bookmarked link should
+// degrade to page one rather than error.
+export const paginationQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).optional(),
+  cursor: z.string().optional(),
+});

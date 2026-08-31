@@ -1,6 +1,17 @@
 import { z } from 'zod';
 
 /**
+ * BV-029: the envelope every cursor-paginated list endpoint answers with. `nextCursor` is
+ * `null`, not omitted, when the caller has reached the end -- the field always exists, so
+ * callers can check it directly rather than distinguishing "absent" from "null".
+ */
+function paginated<T extends z.ZodTypeAny>(id: string, item: T) {
+  return z
+    .object({ items: z.array(item), nextCursor: z.string().nullable() })
+    .meta({ id });
+}
+
+/**
  * The response contract. This is the source of truth for what the API sends, and the
  * frontend's `src/types/api.d.ts` is generated from it — so a change here shows up as a
  * type error in the client rather than as a runtime surprise.
@@ -426,6 +437,14 @@ export const PaymentIntentDto = z
   .meta({ id: 'PaymentIntent' });
 
 export const WebhookAckDto = z.object({ received: z.literal(true) }).meta({ id: 'WebhookAck' });
+
+// BV-029: cursor-paginated list responses. One per endpoint's item shape, not one shared
+// generic $ref -- zod-openapi needs a distinct schema id per named type, and each of these
+// really is a different item shape.
+export const PaginatedAuctionsDto = paginated('PaginatedAuctions', AuctionDto);
+export const PaginatedBidsWithAuctionDto = paginated('PaginatedBidsWithAuction', BidWithAuctionDto);
+export const PaginatedBidsDto = paginated('PaginatedBids', BidDto);
+export const PaginatedListingsDto = paginated('PaginatedListings', ListingDto);
 
 export type UserDtoType = z.infer<typeof UserDto>;
 export type AuctionDtoType = z.infer<typeof AuctionDto>;

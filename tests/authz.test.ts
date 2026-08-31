@@ -259,19 +259,19 @@ describe('one user cannot reach another user\'s data', () => {
 
   it('GET /listings/mine returns only the caller\'s listings', async () => {
     const res = await request(app).get(api('/listings/mine')).set(bearer(w.seller.token)).expect(200);
-    const ids = (res.body.data as Array<{ listingId: string }>).map((l) => l.listingId);
+    const ids = (res.body.data.items as Array<{ listingId: string }>).map((l) => l.listingId);
     expect(ids).not.toContain(w.otherSellerListingId);
   });
 
   it('GET /auctions/mine/bids returns only the caller\'s bids', async () => {
     const res = await request(app).get(api('/auctions/mine/bids')).set(bearer(w.buyer.token)).expect(200);
-    const buyerIds = new Set((res.body.data as Array<{ buyerId: string }>).map((b) => b.buyerId));
+    const buyerIds = new Set((res.body.data.items as Array<{ buyerId: string }>).map((b) => b.buyerId));
     expect([...buyerIds]).toEqual([w.buyer.id]);
   });
 
   it('GET /watchlist returns only the caller\'s watched auctions', async () => {
     const res = await request(app).get(api('/watchlist')).set(bearer(w.buyer.token)).expect(200);
-    const ids = (res.body.data as Array<{ auctionId: string }>).map((a) => a.auctionId);
+    const ids = (res.body.data.items as Array<{ auctionId: string }>).map((a) => a.auctionId);
     expect(ids).toContain(w.liveAuctionId);
     expect(ids).not.toContain(w.otherBuyerWatchedAuctionId);
   });

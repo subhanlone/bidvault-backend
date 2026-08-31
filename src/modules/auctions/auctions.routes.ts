@@ -9,6 +9,7 @@ import { validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 import { placeBidSchema } from '../../openapi/requests.js';
 import { buildSellerStatsMap, toAuctionDto } from './auction-dto.js';
+import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 
 const router = Router();
 const MAX_STORED_MONEY = 2_000_000_000;
@@ -19,29 +20,50 @@ router.get(
     const status = req.query.status as AuctionStatus | undefined;
     const category = (req.query.category as string | undefined)?.trim();
     const search = (req.query.search as string | undefined)?.trim();
+    const limit = parseLimit(req.query.limit);
+    const cursor = decodeCursor(req.query.cursor);
 
-    const where: Prisma.AuctionWhereInput = {};
-    if (status && ['SCHEDULED', 'ACTIVE', 'CLOSED'].includes(status)) {
-      where.status = status;
-    }
+    const filters: Prisma.AuctionWhereInput = {};
+    // BV-029: defaults to ACTIVE now that the list is paginated -- an unfiltered call used to
+    // return every auction ever created, closed ones included, which is the exact unbounded
+    // read this finding is about. The one current caller already asks for ?status=ACTIVE
+    // explicitly (useActiveAuctions), so this default serves no one today and only narrows
+    // what a direct API call returns by default. Still overridable: ?status=CLOSED etc. works.
+    filters.status = status && ['SCHEDULED', 'ACTIVE', 'CLOSED'].includes(status) ? status : 'ACTIVE';
     if (category) {
-      where.category = { contains: category, mode: 'insensitive' };
+      filters.category = { contains: category, mode: 'insensitive' };
     }
     if (search) {
-      where.OR = [
+      filters.OR = [
         { title: { contains: search, mode: 'insensitive' } },
         { description: { contains: search, mode: 'insensitive' } },
       ];
     }
 
-    const auctions = await prisma.auction.findMany({
+    const where: Prisma.AuctionWhereInput = cursor
+      ? {
+          AND: [
+            filters,
+            {
+              OR: [
+                { endTime: { gt: new Date(cursor.sortValue) } },
+                { endTime: new Date(cursor.sortValue), id: { gt: cursor.id } },
+              ],
+            },
+          ],
+        }
+      : filters;
+
+    const rows = await prisma.auction.findMany({
       where,
       include: { seller: true },
-      orderBy: { endTime: 'asc' },
+      orderBy: [{ endTime: 'asc' }, { id: 'asc' }],
+      take: limit + 1,
     });
 
-    const statsMap = await buildSellerStatsMap(auctions.map(a => a.sellerId));
-    ok(res, auctions.map(a => toAuctionDto(a, statsMap)));
+    const { pageRows, nextCursor } = slicePage(rows, limit, (a) => a.endTime, (a) => a.id);
+    const statsMap = await buildSellerStatsMap(pageRows.map(a => a.sellerId));
+    ok(res, { items: pageRows.map(a => toAuctionDto(a, statsMap)), nextCursor });
   }),
 );
 
@@ -50,17 +72,31 @@ router.get(
   requireAuth(['BUYER']),
   asyncHandler(async (req, res) => {
     const buyerId = req.auth!.userId;
-    const bids = await prisma.bid.findMany({
-      where: { buyerId },
+    const limit = parseLimit(req.query.limit);
+    const cursor = decodeCursor(req.query.cursor);
+
+    const where: Prisma.BidWhereInput = cursor
+      ? {
+          buyerId,
+          OR: [
+            { createdAt: { lt: new Date(cursor.sortValue) } },
+            { createdAt: new Date(cursor.sortValue), id: { lt: cursor.id } },
+          ],
+        }
+      : { buyerId };
+
+    const rows = await prisma.bid.findMany({
+      where,
       include: { buyer: true, auction: { include: { seller: true } } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
     });
 
-    const statsMap = await buildSellerStatsMap(bids.map(b => b.auction.sellerId));
+    const { pageRows, nextCursor } = slicePage(rows, limit, (b) => b.createdAt, (b) => b.id);
+    const statsMap = await buildSellerStatsMap(pageRows.map(b => b.auction.sellerId));
 
-    ok(
-      res,
-      bids.map(bid => ({
+    ok(res, {
+      items: pageRows.map(bid => ({
         bidId: bid.id,
         auctionId: bid.auctionId,
         buyerId: bid.buyerId,
@@ -72,7 +108,8 @@ router.get(
         timestamp: bid.createdAt.toISOString(),
         auction: toAuctionDto(bid.auction, statsMap),
       })),
-    );
+      nextCursor,
+    });
   }),
 );
 
@@ -98,27 +135,44 @@ router.get(
 router.get(
   '/:auctionId/bids',
   asyncHandler(async (req, res) => {
-    const bids = await prisma.bid.findMany({
-      where: { auctionId: req.params.auctionId },
+    const auctionId = req.params.auctionId;
+    const limit = parseLimit(req.query.limit);
+    const cursor = decodeCursor(req.query.cursor);
+
+    const where: Prisma.BidWhereInput = cursor
+      ? {
+          auctionId,
+          OR: [
+            { createdAt: { lt: new Date(cursor.sortValue) } },
+            { createdAt: new Date(cursor.sortValue), id: { lt: cursor.id } },
+          ],
+        }
+      : { auctionId };
+
+    const rows = await prisma.bid.findMany({
+      where,
       include: { buyer: true },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
     });
 
-    ok(
-      res,
-      bids.map((bid) => ({
+    const { pageRows, nextCursor } = slicePage(rows, limit, (b) => b.createdAt, (b) => b.id);
+
+    ok(res, {
+      items: pageRows.map((bid) => ({
         bidId: bid.id,
         auctionId: bid.auctionId,
-        // BV-018: buyerId/buyer can now be null (an anonymised, deleted account) -- unreachable
-        // today since no account-deletion route exists yet, but the contract still needs a
-        // real string here. Widening this DTO to nullable is deferred to when that route ships
-        // (BV-042 first -- anonymisation clears the same fields that decision governs).
+        // BV-018: buyerId/buyer can now be null (an anonymised, deleted account). Reachable
+        // now that the account-deletion route exists (BV-018/BV-042) -- anonymizeUser() keeps
+        // the Bid row and its buyerId intact, so this stays a defensive fallback rather than
+        // the common case, but it is genuinely reachable, not hypothetical.
         buyerId: bid.buyerId,
         buyerName: bid.buyer?.name ?? 'Deleted user',
         amount: bid.amount,
         timestamp: bid.createdAt.toISOString(),
       })),
-    );
+      nextCursor,
+    });
   }),
 );
 

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "2.8.0",
+    "version": "3.0.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually."
   },
   "servers": [
@@ -997,7 +997,7 @@
         "tags": [
           "Auctions"
         ],
-        "summary": "Public. Reserve amounts are never included — only reserveMet.",
+        "summary": "Public, cursor-paginated. Defaults to status=ACTIVE. Reserve amounts are never included — only reserveMet.",
         "parameters": [
           {
             "in": "query",
@@ -1019,11 +1019,27 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Matching auctions",
+            "description": "A page of matching auctions",
             "content": {
               "application/json": {
                 "schema": {
@@ -1034,10 +1050,7 @@
                       "const": true
                     },
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Auction"
-                      }
+                      "$ref": "#/components/schemas/PaginatedAuctions"
                     }
                   },
                   "required": [
@@ -1062,10 +1075,28 @@
             "bearerAuth": []
           }
         ],
-        "summary": "The signed-in buyer's bids, each with its auction",
+        "summary": "Cursor-paginated. The signed-in buyer's bids, each with its auction",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Your bids",
+            "description": "A page of your bids",
             "content": {
               "application/json": {
                 "schema": {
@@ -1076,10 +1107,7 @@
                       "const": true
                     },
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/BidWithAuction"
-                      }
+                      "$ref": "#/components/schemas/PaginatedBidsWithAuction"
                     }
                   },
                   "required": [
@@ -1109,7 +1137,7 @@
         "tags": [
           "Auctions"
         ],
-        "summary": "currentBid and bidCount come from Redis when a live value exists",
+        "summary": "currentBid and bidCount are read straight from the row — see BV-010",
         "parameters": [
           {
             "in": "path",
@@ -1163,6 +1191,7 @@
         "tags": [
           "Auctions"
         ],
+        "summary": "Cursor-paginated, newest first",
         "parameters": [
           {
             "in": "path",
@@ -1171,11 +1200,27 @@
               "type": "string"
             },
             "required": true
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Bid history, newest first",
+            "description": "A page of bid history",
             "content": {
               "application/json": {
                 "schema": {
@@ -1186,10 +1231,7 @@
                       "const": true
                     },
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Bid"
-                      }
+                      "$ref": "#/components/schemas/PaginatedBids"
                     }
                   },
                   "required": [
@@ -1476,9 +1518,28 @@
             "bearerAuth": []
           }
         ],
+        "summary": "Cursor-paginated, newest first",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Your listings",
+            "description": "A page of your listings",
             "content": {
               "application/json": {
                 "schema": {
@@ -1489,10 +1550,7 @@
                       "const": true
                     },
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Listing"
-                      }
+                      "$ref": "#/components/schemas/PaginatedListings"
                     }
                   },
                   "required": [
@@ -1527,9 +1585,28 @@
             "bearerAuth": []
           }
         ],
+        "summary": "Cursor-paginated, oldest first",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Listings awaiting review",
+            "description": "A page of listings awaiting review",
             "content": {
               "application/json": {
                 "schema": {
@@ -1540,10 +1617,7 @@
                       "const": true
                     },
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Listing"
-                      }
+                      "$ref": "#/components/schemas/PaginatedListings"
                     }
                   },
                   "required": [
@@ -1843,9 +1917,28 @@
             "bearerAuth": []
           }
         ],
+        "summary": "Cursor-paginated, most recently watched first",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Watched auctions",
+            "description": "A page of watched auctions",
             "content": {
               "application/json": {
                 "schema": {
@@ -1856,10 +1949,7 @@
                       "const": true
                     },
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Auction"
-                      }
+                      "$ref": "#/components/schemas/PaginatedAuctions"
                     }
                   },
                   "required": [
@@ -3907,6 +3997,32 @@
         ],
         "additionalProperties": false
       },
+      "PaginatedAuctions": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Auction"
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "additionalProperties": false
+      },
       "Auction": {
         "type": "object",
         "properties": {
@@ -4065,6 +4181,32 @@
         },
         "description": "Category-specific fields; keys vary by category."
       },
+      "PaginatedBidsWithAuction": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BidWithAuction"
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "additionalProperties": false
+      },
       "BidWithAuction": {
         "type": "object",
         "properties": {
@@ -4102,6 +4244,32 @@
           "amount",
           "timestamp",
           "auction"
+        ],
+        "additionalProperties": false
+      },
+      "PaginatedBids": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Bid"
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
         ],
         "additionalProperties": false
       },
@@ -4281,6 +4449,32 @@
           "format",
           "publicId",
           "allowedFormats"
+        ],
+        "additionalProperties": false
+      },
+      "PaginatedListings": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Listing"
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
         ],
         "additionalProperties": false
       },
