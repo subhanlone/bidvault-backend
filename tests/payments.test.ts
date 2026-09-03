@@ -167,7 +167,7 @@ describe('the amount sent to Stripe', () => {
     await request(app)
       .post(api('/payments/create-intent'))
       .set(bearer(w.buyer.token))
-      .send({ transactionId: w.transactionId })
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' })
       .expect(200);
 
     expect(created).toHaveLength(1);
@@ -179,7 +179,7 @@ describe('the amount sent to Stripe', () => {
     await request(app)
       .post(api('/payments/create-intent'))
       .set(bearer(w.buyer.token))
-      .send({ transactionId: w.transactionId })
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' })
       .expect(200);
 
     expect(created[0].options?.idempotencyKey).toBe(`bidvault-intent-${w.transactionId}`);
@@ -200,7 +200,7 @@ describe('concurrent create-intent calls', () => {
       request(app)
         .post(api('/payments/create-intent'))
         .set(bearer(w.buyer.token))
-        .send({ transactionId: w.transactionId });
+        .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
 
     const both = Promise.all([call(), call()]);
     // Give both requests time to reach the lock before letting Stripe answer.
@@ -225,11 +225,11 @@ describe('concurrent create-intent calls', () => {
 
   it('reuses an intent that is still awaiting payment', async () => {
     await request(app).post(api('/payments/create-intent')).set(bearer(w.buyer.token))
-      .send({ transactionId: w.transactionId }).expect(200);
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }).expect(200);
     expect(created).toHaveLength(1);
 
     await request(app).post(api('/payments/create-intent')).set(bearer(w.buyer.token))
-      .send({ transactionId: w.transactionId }).expect(200);
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }).expect(200);
     expect(created).toHaveLength(1);
   });
 
@@ -248,7 +248,7 @@ describe('concurrent create-intent calls', () => {
     const res = await request(app)
       .post(api('/payments/create-intent'))
       .set(bearer(w.buyer.token))
-      .send({ transactionId: w.transactionId });
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
 
     expect(res.status).toBe(200);
     // A fresh intent, for the right amount.
@@ -267,7 +267,7 @@ describe('concurrent create-intent calls', () => {
     retrieveOverride = { amount: 800_000, currency: 'usd' };
 
     await request(app).post(api('/payments/create-intent')).set(bearer(w.buyer.token))
-      .send({ transactionId: w.transactionId }).expect(200);
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }).expect(200);
 
     expect(created).toHaveLength(1);
     expect(canceled).toContain('pi_wrong_currency');
@@ -275,14 +275,14 @@ describe('concurrent create-intent calls', () => {
 
   it('mints a fresh intent when the stored one was canceled', async () => {
     await request(app).post(api('/payments/create-intent')).set(bearer(w.buyer.token))
-      .send({ transactionId: w.transactionId }).expect(200);
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }).expect(200);
 
     // A canceled intent cannot be confirmed again; returning its client_secret would fail
     // inside Stripe.js with a message meaning nothing to the buyer.
     retrieveOverride = { status: 'canceled' };
 
     await request(app).post(api('/payments/create-intent')).set(bearer(w.buyer.token))
-      .send({ transactionId: w.transactionId }).expect(200);
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }).expect(200);
     expect(created).toHaveLength(2);
   });
 });
@@ -363,7 +363,7 @@ describe('the webhook checks what actually arrived', () => {
       id: 'pi_the_older_one',              // no row points at this any more
       amount_received: 800_000,
       currency: 'pkr',
-      metadata: { transactionId: w.transactionId },
+      metadata: { transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' },
     });
 
     expect(res.status).toBe(200);
@@ -381,7 +381,7 @@ describe('the webhook checks what actually arrived', () => {
       id: 'pi_the_older_one',
       amount_received: 8_000,               // rupees, not paisa
       currency: 'pkr',
-      metadata: { transactionId: w.transactionId },
+      metadata: { transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' },
     });
 
     expect((await reload(w.transactionId)).status).toBe('PENDING');
@@ -432,7 +432,7 @@ describe('a declined card', () => {
     const retry = await request(app)
       .post(api('/payments/create-intent'))
       .set(bearer(w.buyer.token))
-      .send({ transactionId: w.transactionId });
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
 
     expect(retry.status).toBe(200);
     const tx = await reload(w.transactionId);
@@ -485,7 +485,7 @@ describe('a completed purchase', () => {
     const res = await request(app)
       .post(api('/payments/create-intent'))
       .set(bearer(w.buyer.token))
-      .send({ transactionId: w.transactionId });
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
 
     expect(res.status).toBe(409);
     expect(created).toHaveLength(0);
@@ -499,7 +499,7 @@ describe('when Stripe itself rejects the request', () => {
     const res = await request(app)
       .post(api('/payments/create-intent'))
       .set(bearer(w.buyer.token))
-      .send({ transactionId: w.transactionId });
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
 
     expect(res.status).toBe(502);
     expect(JSON.stringify(res.body)).not.toContain('fils');

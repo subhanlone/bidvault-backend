@@ -153,8 +153,19 @@ export const placeBidSchema = z
 // ---- payments ---------------------------------------------------------------------
 
 export const createIntentSchema = z
-  .object({ transactionId: z.string().min(1).max(128) })
+  .object({
+    transactionId: z.string().min(1).max(128),
+    // BV-047 / E4: the platform held no delivery contact data at all before this. Collected
+    // alongside payment rather than as a separate step, since the buyer is already filling in
+    // the PaymentModal at that point.
+    deliveryAddress: z.string().trim().min(10).max(300),
+    deliveryPhone: z.string().trim().min(7).max(20),
+  })
   .meta({ id: 'CreateIntentRequest' });
+
+export const raiseDisputeSchema = z
+  .object({ reason: z.string().trim().min(10).max(1000) })
+  .meta({ id: 'RaiseDisputeRequest' });
 
 // ---- reviews ----------------------------------------------------------------------
 
@@ -189,6 +200,13 @@ export const voidTransactionSchema = z
 export const anonymizeUserSchema = z
   .object({ reason: z.string().trim().min(3).max(500) })
   .meta({ id: 'AnonymizeUserRequest' });
+
+export const resolveDisputeSchema = z
+  .object({
+    resolution: z.enum(['REFUND', 'RELEASE']),
+    note: z.string().trim().min(3).max(500),
+  })
+  .meta({ id: 'ResolveDisputeRequest' });
 
 // ---- pagination ---------------------------------------------------------------------
 

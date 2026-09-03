@@ -502,3 +502,79 @@ export async function sendPaymentCompletedEmail(
     send(seller.email, `Payment received for "${details.auctionTitle}"`, base('Payment received', sellerBody)),
   ]);
 }
+
+// ---------------------------------------------------------------------------
+// Fulfilment emails (BV-047)
+// ---------------------------------------------------------------------------
+
+export async function sendItemShippedEmail(
+  buyer: { email: string; name: string },
+  details: { auctionTitle: string; reviewTimeoutHours: number },
+): Promise<void> {
+  if (!(await alertsEnabled())) return;
+  await send(buyer.email, `On its way — "${details.auctionTitle}"`, base('Item shipped', `
+    ${h1('Your item is on its way')}
+    ${p(`Hi ${buyer.name}, the seller has marked "${details.auctionTitle}" as shipped.`)}
+    ${divider()}
+    ${p(`Once it arrives, confirm receipt so the seller gets paid. If it doesn't turn up, or isn't what you ordered, you can report a problem instead — you have ${details.reviewTimeoutHours} hours from today. If we don't hear from you in that time, receipt is confirmed automatically.`)}
+  `));
+}
+
+export async function sendDeliveryConfirmedEmail(
+  seller: { email: string; name: string },
+  details: { auctionTitle: string; finalAmount: number; auto: boolean },
+): Promise<void> {
+  if (!(await alertsEnabled())) return;
+  const pkr = (n: number) => `PKR ${n.toLocaleString()}`;
+  await send(seller.email, `Delivery confirmed — payout released for "${details.auctionTitle}"`, base('Payout released', `
+    ${h1('Payout released')}
+    ${p(`Hi ${seller.name}, ${details.auto ? 'the confirm-receipt window has passed with no dispute raised, so' : 'the buyer has confirmed receipt, so'} your payout for "${details.auctionTitle}" has been sent to your connected account.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Item', details.auctionTitle)}
+      ${infoRow('Payout amount', pkr(details.finalAmount))}
+    </table>
+  `));
+}
+
+export async function sendDisputeRaisedEmail(
+  seller: { email: string; name: string },
+  details: { auctionTitle: string; reason: string },
+): Promise<void> {
+  if (!(await alertsEnabled())) return;
+  await send(seller.email, `A dispute was raised — "${details.auctionTitle}"`, base('Dispute raised', `
+    ${h1('The buyer has reported a problem')}
+    ${p(`Hi ${seller.name}, the buyer has raised a dispute on "${details.auctionTitle}" instead of confirming receipt.`)}
+    ${divider()}
+    ${p(`Reason given: "${details.reason}"`)}
+    ${divider()}
+    ${p('Your payout for this sale is on hold until an admin reviews it. No action is needed from you right now.')}
+  `));
+}
+
+export async function sendDisputeResolvedEmail(
+  buyer: { email: string; name: string },
+  seller: { email: string; name: string },
+  details: { auctionTitle: string; resolution: 'REFUNDED' | 'RELEASED'; note: string },
+): Promise<void> {
+  if (!(await alertsEnabled())) return;
+  const refunded = details.resolution === 'REFUNDED';
+  const buyerBody = `
+    ${h1('Dispute resolved')}
+    ${p(`Hi ${buyer.name}, an admin has reviewed your dispute on "${details.auctionTitle}".`)}
+    ${divider()}
+    ${p(refunded ? 'Your payment has been refunded.' : 'The seller\'s payout has been released — the item was found to have been delivered as described.')}
+    ${p(`Note from the admin: ${details.note}`)}
+  `;
+  const sellerBody = `
+    ${h1('Dispute resolved')}
+    ${p(`Hi ${seller.name}, an admin has reviewed the dispute raised on "${details.auctionTitle}".`)}
+    ${divider()}
+    ${p(refunded ? 'The buyer has been refunded; no payout will be sent for this sale.' : 'Your payout has been released.')}
+    ${p(`Note from the admin: ${details.note}`)}
+  `;
+  await Promise.all([
+    send(buyer.email, `Dispute resolved — "${details.auctionTitle}"`, base('Dispute resolved', buyerBody)),
+    send(seller.email, `Dispute resolved — "${details.auctionTitle}"`, base('Dispute resolved', sellerBody)),
+  ]);
+}

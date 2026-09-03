@@ -5,9 +5,10 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
-import { voidTransactionSchema, anonymizeUserSchema } from '../../openapi/requests.js';
+import { voidTransactionSchema, anonymizeUserSchema, resolveDisputeSchema } from '../../openapi/requests.js';
 import { checkAccountDeletable, anonymizeUser } from '../../services/account.service.js';
 import { dispatchEmail, sendAccountDeletedEmail } from '../../services/email.service.js';
+import { resolveDispute, REVENUE_STATUSES } from '../../services/fulfillment.service.js';
 
 const router = Router();
 
@@ -37,7 +38,7 @@ router.get(
       prisma.listing.count(),
       prisma.listing.count({ where: { status: 'APPROVED' } }),
       prisma.auctionTransaction.aggregate({
-        where: { status: 'COMPLETED' },
+        where: { status: { in: REVENUE_STATUSES } },
         _sum: { finalAmount: true },
         _count: { id: true },
       }),
@@ -59,11 +60,13 @@ router.get(
       // longer cancel out and the month silently shifts by the server's own offset. Confirmed
       // by running both readings side by side against a known date: UTC getters landed a
       // 2026-06-01 UTC row in May.
+      // Kept in sync by hand with REVENUE_STATUSES (fulfillment.service.ts) — raw SQL can't
+      // share that array directly.
       prisma.$queryRaw<{ month: Date; revenue: bigint | null }[]>`
         SELECT date_trunc('month', "createdAt" AT TIME ZONE 'UTC') AS month,
                SUM("finalAmount") AS revenue
         FROM "AuctionTransaction"
-        WHERE status = 'COMPLETED' AND "createdAt" >= ${twelveMonthsAgo}
+        WHERE status IN ('COMPLETED', 'SHIPPED', 'DELIVERED', 'DISPUTED') AND "createdAt" >= ${twelveMonthsAgo}
         GROUP BY month
       `,
       prisma.$queryRaw<{ month: Date; count: bigint }[]>`
@@ -83,7 +86,7 @@ router.get(
       }),
       prisma.auctionTransaction.groupBy({
         by: ['sellerId'],
-        where: { status: 'COMPLETED' },
+        where: { status: { in: REVENUE_STATUSES } },
         _sum: { finalAmount: true },
         _count: { id: true },
         orderBy: { _sum: { finalAmount: 'desc' } },
@@ -252,6 +255,65 @@ router.post(
       return;
     }
     ok(res, { transactionId, status: 'VOIDED' });
+  }),
+);
+
+// BV-047 / E6: the admin side of the dispute the platform previously had no way to express at
+// all. Every state transition and every Stripe call lives in fulfillment.service.ts -- this
+// route only authenticates and translates the result.
+router.get(
+  '/disputes',
+  requireAuth(['ADMIN']),
+  asyncHandler(async (_req, res) => {
+    const disputes = await prisma.dispute.findMany({
+      where: { status: 'OPEN' },
+      include: {
+        transaction: {
+          include: {
+            auction: { select: { title: true } },
+            winner: { select: { id: true, name: true } },
+            seller: { select: { id: true, name: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    ok(res, disputes.map((d) => ({
+      disputeId: d.id,
+      transactionId: d.transactionId,
+      auctionTitle: d.transaction.auction.title,
+      buyerId: d.transaction.winner.id,
+      buyerName: d.transaction.winner.name,
+      sellerId: d.transaction.seller.id,
+      sellerName: d.transaction.seller.name,
+      finalAmount: d.transaction.finalAmount,
+      reason: d.reason,
+      createdAt: d.createdAt.toISOString(),
+    })));
+  }),
+);
+
+router.post(
+  '/disputes/:disputeId/resolve',
+  requireAuth(['ADMIN']),
+  validateBody(resolveDisputeSchema),
+  asyncHandler(async (req, res) => {
+    const { disputeId } = req.params;
+    const { resolution, note } = req.body;
+    const adminUserId = req.auth!.userId;
+
+    const result = await resolveDispute(disputeId, adminUserId, resolution, note);
+
+    if (result.kind === 'not-found') {
+      fail(res, 'Dispute not found.', 404);
+      return;
+    }
+    if (result.kind === 'not-open') {
+      fail(res, 'This dispute has already been resolved.', 409);
+      return;
+    }
+    ok(res, { disputeId, resolution });
   }),
 );
 

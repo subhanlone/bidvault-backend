@@ -34,6 +34,18 @@ vi.mock('stripe', async () => {
       create: vi.fn(async () => intent),
       retrieve: vi.fn(async () => intent),
     };
+    // BV-047: transfers (confirm-receipt / dispute-resolve RELEASE), refunds (dispute-resolve
+    // REFUND), and accounts/accountLinks (Connect onboarding) — same "replace the network
+    // call, keep everything else real" reasoning as paymentIntents above.
+    transfers = { create: vi.fn(async () => ({ id: 'tr_test_conformance' })) };
+    refunds = { create: vi.fn(async () => ({ id: 're_test_conformance' })) };
+    accounts = {
+      create: vi.fn(async () => ({ id: 'acct_test_conformance' })),
+      retrieve: vi.fn(async () => ({ id: 'acct_test_conformance', charges_enabled: true, payouts_enabled: true })),
+    };
+    accountLinks = {
+      create: vi.fn(async () => ({ url: 'https://connect.stripe.com/setup/test_conformance' })),
+    };
   }
   // Spread first: `actual` carries its own `default`, which would otherwise replace the mock.
   return { ...actual, default: MockStripe };
@@ -460,7 +472,7 @@ describe('payments', () => {
     const res = await request(app)
       .post(api('/payments/create-intent'))
       .set(auth(w.buyer.token))
-      .send({ transactionId: w.transactionId });
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveProperty('clientSecret');
   });
@@ -490,9 +502,77 @@ describe('payments', () => {
     const res = await request(app)
       .post(api('/payments/create-intent'))
       .set(auth(w.buyer.token))
-      .send({ transactionId: w.transactionId });
+      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({ success: false, error: expect.stringContaining('already') });
+  });
+
+  it('GET /payments/my-sales', async () => {
+    hit('get', '/payments/my-sales');
+    const res = await request(app).get(api('/payments/my-sales')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.items.some((t: { transactionId: string }) => t.transactionId === w.transactionId)).toBe(true);
+  });
+
+  it('PATCH /payments/{transactionId}/ship', async () => {
+    hit('patch', '/payments/{transactionId}/ship');
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: { status: 'COMPLETED', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' },
+    });
+    await prisma.user.update({ where: { id: w.seller.id }, data: { stripeOnboardingComplete: true } });
+    const res = await request(app)
+      .patch(api(`/payments/${w.transactionId}/ship`))
+      .set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('SHIPPED');
+  });
+
+  it('POST /payments/{transactionId}/confirm-receipt', async () => {
+    hit('post', '/payments/{transactionId}/confirm-receipt');
+    await prisma.user.update({
+      where: { id: w.seller.id },
+      data: { stripeAccountId: 'acct_test_conformance', stripeOnboardingComplete: true },
+    });
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: { status: 'SHIPPED', shippedAt: new Date() },
+    });
+    const res = await request(app)
+      .post(api(`/payments/${w.transactionId}/confirm-receipt`))
+      .set(auth(w.buyer.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('DELIVERED');
+  });
+
+  it('POST /payments/{transactionId}/dispute', async () => {
+    hit('post', '/payments/{transactionId}/dispute');
+    // A separate transaction (the second seeded buyer's) so this does not collide with the
+    // confirm-receipt test's use of w.transactionId — both run against the same fresh world.
+    await prisma.auctionTransaction.update({
+      where: { id: w.otherBuyerTransactionId },
+      data: { status: 'SHIPPED', shippedAt: new Date() },
+    });
+    const res = await request(app)
+      .post(api(`/payments/${w.otherBuyerTransactionId}/dispute`))
+      .set(auth(w.otherBuyer.token))
+      .send({ reason: 'Item arrived damaged and unusable.' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('DISPUTED');
+  });
+
+  it('POST /payments/connect/onboard', async () => {
+    hit('post', '/payments/connect/onboard');
+    const res = await request(app).post(api('/payments/connect/onboard')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveProperty('url');
+  });
+
+  it('GET /payments/connect/status', async () => {
+    hit('get', '/payments/connect/status');
+    const res = await request(app).get(api('/payments/connect/status')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveProperty('connected');
   });
 
   it('POST /payments/webhook', async () => {
@@ -554,9 +634,10 @@ describe('notifications', () => {
 describe('reviews', () => {
   it('POST /reviews', async () => {
     hit('post', '/reviews');
+    // BV-047: a review requires DELIVERED (receipt confirmed), not just COMPLETED (paid).
     await prisma.auctionTransaction.update({
       where: { id: w.transactionId },
-      data: { status: 'COMPLETED' },
+      data: { status: 'DELIVERED' },
     });
     const res = await request(app)
       .post(api('/reviews'))
@@ -661,6 +742,35 @@ describe('admin', () => {
 
     // Restore PENDING so later tests in this file that depend on w.transactionId are unaffected.
     await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'PENDING' } });
+  });
+
+  it('GET /admin/disputes', async () => {
+    hit('get', '/admin/disputes');
+    await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'DISPUTED' } });
+    await prisma.dispute.create({
+      data: { transactionId: w.transactionId, raisedByUserId: w.buyer.id, reason: 'Item never arrived.' },
+    });
+    const res = await request(app).get(api('/admin/disputes')).set(auth(w.admin.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.some((d: { transactionId: string }) => d.transactionId === w.transactionId)).toBe(true);
+  });
+
+  it('POST /admin/disputes/{disputeId}/resolve', async () => {
+    hit('post', '/admin/disputes/{disputeId}/resolve');
+    await prisma.user.update({
+      where: { id: w.seller.id },
+      data: { stripeAccountId: 'acct_test_conformance', stripeOnboardingComplete: true },
+    });
+    await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'DISPUTED' } });
+    const dispute = await prisma.dispute.create({
+      data: { transactionId: w.transactionId, raisedByUserId: w.buyer.id, reason: 'Item never arrived.' },
+    });
+    const res = await request(app)
+      .post(api(`/admin/disputes/${dispute.id}/resolve`))
+      .set(auth(w.admin.token))
+      .send({ resolution: 'RELEASE', note: 'Seller provided proof of delivery.' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.resolution).toBe('RELEASE');
   });
 
   it('GET /admin/users', async () => {

@@ -18,6 +18,7 @@ import { responseContract, violationCount } from './middleware/response-contract
 import { ok, fail } from './utils/response.js';
 import { asyncHandler } from './utils/async-handler.js';
 import { prisma } from './db/prisma.js';
+import { REVENUE_STATUSES } from './services/fulfillment.service.js';
 import { probeDatabase, probeRedis, getWorkerHeartbeatAgeSeconds } from './services/health.service.js';
 import { document } from './openapi/document.js';
 import { AppError } from './errors/app-error.js';
@@ -98,17 +99,19 @@ export function createApp() {
       await Promise.all([
         prisma.user.count(),
         prisma.auction.count({ where: { status: 'ACTIVE' } }),
-        // COMPLETED only — a transaction row exists from the moment an auction closes,
-        // long before (and whether or not) the winner actually pays.
+        // A paid status, not just COMPLETED (BV-047 split payment from fulfilment) — a
+        // transaction row exists from the moment an auction closes, long before (and whether
+        // or not) the winner actually pays, so PENDING/FAILED/VOIDED still don't count, and
+        // REFUNDED is excluded because the money went back.
         prisma.auctionTransaction.aggregate({
-          where: { status: 'COMPLETED' },
+          where: { status: { in: REVENUE_STATUSES } },
           _sum: { finalAmount: true },
         }),
         // Feeds the public stat panels. They previously padded themselves out with
         // invented figures ("4.9/5 satisfaction", "99% satisfaction", "99.9% uptime")
         // that nothing measured; these are real counts so every tile traces to a query.
         prisma.listing.count({ where: { status: 'APPROVED' } }),
-        prisma.auctionTransaction.count({ where: { status: 'COMPLETED' } }),
+        prisma.auctionTransaction.count({ where: { status: { in: REVENUE_STATUSES } } }),
       ]);
     ok(res, {
       userCount,

@@ -33,6 +33,13 @@ vi.mock('stripe', async () => {
   class MockStripe {
     webhooks = real.webhooks;
     paymentIntents = { create: vi.fn(async () => intent), retrieve: vi.fn(async () => intent) };
+    transfers = { create: vi.fn(async () => ({ id: 'tr_test_authz' })) };
+    refunds = { create: vi.fn(async () => ({ id: 're_test_authz' })) };
+    accounts = {
+      create: vi.fn(async () => ({ id: 'acct_test_authz' })),
+      retrieve: vi.fn(async () => ({ id: 'acct_test_authz', charges_enabled: true, payouts_enabled: true })),
+    };
+    accountLinks = { create: vi.fn(async () => ({ url: 'https://connect.stripe.com/setup/test_authz' })) };
   }
   return { ...actual, default: MockStripe };
 });
@@ -121,8 +128,19 @@ const OPERATIONS: Op[] = [
   // ---- payments -------------------------------------------------------------------------
   { method: 'get', contractPath: '/payments/my-wins', url: () => '/payments/my-wins', allow: ['BUYER'] },
   { method: 'get', contractPath: '/payments/seller-stats', url: () => '/payments/seller-stats', allow: ['SELLER'] },
+  { method: 'get', contractPath: '/payments/my-sales', url: () => '/payments/my-sales', allow: ['SELLER'] },
   { method: 'post', contractPath: '/payments/create-intent', url: () => '/payments/create-intent',
-    allow: ['BUYER'], body: (w) => ({ transactionId: w.transactionId }) },
+    allow: ['BUYER'],
+    body: (w) => ({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }) },
+  { method: 'patch', contractPath: '/payments/{transactionId}/ship',
+    url: (w) => `/payments/${w.transactionId}/ship`, allow: ['SELLER'] },
+  { method: 'post', contractPath: '/payments/{transactionId}/confirm-receipt',
+    url: (w) => `/payments/${w.transactionId}/confirm-receipt`, allow: ['BUYER'] },
+  { method: 'post', contractPath: '/payments/{transactionId}/dispute',
+    url: (w) => `/payments/${w.transactionId}/dispute`, allow: ['BUYER'],
+    body: () => ({ reason: 'Authz probe dispute reason.' }) },
+  { method: 'post', contractPath: '/payments/connect/onboard', url: () => '/payments/connect/onboard', allow: ['SELLER'] },
+  { method: 'get', contractPath: '/payments/connect/status', url: () => '/payments/connect/status', allow: ['SELLER'] },
 
   // ---- admin ----------------------------------------------------------------------------
   { method: 'get', contractPath: '/admin/analytics', url: () => '/admin/analytics', allow: ['ADMIN'] },
@@ -130,6 +148,10 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/admin/transactions/{transactionId}/void',
     url: (w) => `/admin/transactions/${w.transactionId}/void`, allow: ['ADMIN'],
     body: () => ({ reason: 'Buyer unreachable after repeated attempts.' }) },
+  { method: 'get', contractPath: '/admin/disputes', url: () => '/admin/disputes', allow: ['ADMIN'] },
+  { method: 'post', contractPath: '/admin/disputes/{disputeId}/resolve',
+    url: () => '/admin/disputes/placeholder-dispute-id/resolve', allow: ['ADMIN'],
+    body: () => ({ resolution: 'RELEASE', note: 'Authz probe' }) },
   { method: 'get', contractPath: '/admin/users', url: () => '/admin/users?email=test', allow: ['ADMIN'] },
   { method: 'post', contractPath: '/admin/users/{userId}/anonymize',
     url: (w) => `/admin/users/${w.otherBuyer.id}/anonymize`, allow: ['ADMIN'],
@@ -235,8 +257,53 @@ describe('one user cannot reach another user\'s data', () => {
     const res = await request(app)
       .post(api('/payments/create-intent'))
       .set(bearer(w.buyer.token))
-      .send({ transactionId: w.otherBuyerTransactionId });
+      .send({
+        transactionId: w.otherBuyerTransactionId,
+        deliveryAddress: '123 Test Street, Karachi',
+        deliveryPhone: '03001234567',
+      });
     expect(res.status).toBe(403);
+  });
+
+  it('cannot mark another seller\'s transaction shipped', async () => {
+    await prisma.auctionTransaction.update({
+      where: { id: w.otherBuyerTransactionId },
+      data: { status: 'COMPLETED', deliveryAddress: '123 Test Street', deliveryPhone: '03001234567' },
+    });
+    await prisma.user.update({ where: { id: w.otherSeller.id }, data: { stripeOnboardingComplete: true } });
+    const res = await request(app)
+      .patch(api(`/payments/${w.otherBuyerTransactionId}/ship`))
+      .set(bearer(w.seller.token));
+    expect(res.status).toBe(403);
+  });
+
+  it('cannot confirm receipt on another buyer\'s transaction', async () => {
+    await prisma.auctionTransaction.update({
+      where: { id: w.otherBuyerTransactionId },
+      data: { status: 'SHIPPED', shippedAt: new Date() },
+    });
+    const res = await request(app)
+      .post(api(`/payments/${w.otherBuyerTransactionId}/confirm-receipt`))
+      .set(bearer(w.buyer.token));
+    expect(res.status).toBe(403);
+
+    const tx = await prisma.auctionTransaction.findUniqueOrThrow({ where: { id: w.otherBuyerTransactionId } });
+    expect(tx.status).toBe('SHIPPED');
+  });
+
+  it('cannot raise a dispute on another buyer\'s transaction', async () => {
+    await prisma.auctionTransaction.update({
+      where: { id: w.otherBuyerTransactionId },
+      data: { status: 'SHIPPED', shippedAt: new Date() },
+    });
+    const res = await request(app)
+      .post(api(`/payments/${w.otherBuyerTransactionId}/dispute`))
+      .set(bearer(w.buyer.token))
+      .send({ reason: 'Trying to dispute a sale that is not mine.' });
+    expect(res.status).toBe(403);
+
+    const dispute = await prisma.dispute.findUnique({ where: { transactionId: w.otherBuyerTransactionId } });
+    expect(dispute).toBeNull();
   });
 
   it('cannot review another buyer\'s completed purchase', async () => {

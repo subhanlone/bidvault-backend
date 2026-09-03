@@ -1,46 +1,33 @@
 import { Router } from 'express';
-import Stripe from 'stripe';
-import type { TransactionStatus } from '@prisma/client';
+import type Stripe from 'stripe';
+import type { Prisma, TransactionStatus } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { env } from '../../config/env.js';
 import { validateBody } from '../../middleware/validate.js';
-import { createIntentSchema } from '../../openapi/requests.js';
+import { createIntentSchema, raiseDisputeSchema } from '../../openapi/requests.js';
 import { dispatchEmail, sendPaymentCompletedEmail } from '../../services/email.service.js';
+import { stripe, CURRENCY, toMinorUnits } from '../../services/stripe.service.js';
+import { getPlatformSettings } from '../../services/settings.service.js';
+import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
+import {
+  markShipped,
+  confirmDelivery,
+  raiseDispute,
+  createConnectOnboardingLink,
+  getConnectAccountStatus,
+  REVENUE_STATUSES,
+} from '../../services/fulfillment.service.js';
 
 const router = Router();
 
-// The API version is pinned rather than left to whatever the installed SDK defaults to.
-// `stripe` is declared as ^22.1.1, so a routine `npm install` could otherwise move the
-// version this payment path talks to with no code change — and the webhook handler reads
-// `event.data.object`, whose shape is exactly what an API version governs.
-// Pinned to the version the installed SDK's own types describe, so the runtime API and the
-// compile-time shapes cannot disagree. Changing it is a deliberate act: bump both together.
-const stripe = new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2026-07-29.dahlia' });
-
-/**
- * Money, at the Stripe boundary.
- *
- * The domain stores whole rupees everywhere -- Bid.amount, Auction.currentBid,
- * AuctionTransaction.finalAmount are all integer PKR, which is the right choice. Stripe
- * expects the smallest unit of the currency, and PKR is two-decimal, so the two disagree by
- * a factor of 100.
- *
- * That disagreement was the audit's one Critical finding: `amount: tx.finalAmount` charged
- * PKR 50 for a PKR 5,000 sale while the books recorded the full 5,000. Stripe's own error
- * settled it, formatting the unconverted integer back as "₨50.00".
- *
- * Named, and used on both sides of the round trip -- the webhook checks what actually
- * arrived against the same conversion -- so the two can never drift apart again.
- */
-const CURRENCY = 'pkr';
-const MINOR_UNITS_PER_RUPEE = 100;
-
-function toMinorUnits(wholeRupees: number): number {
-  return wholeRupees * MINOR_UNITS_PER_RUPEE;
-}
+// A sale is "paid for" from create-intent's point of view in every one of these states — the
+// charge succeeded at COMPLETED and nothing after that ever un-succeeds it except a dispute
+// resolving to REFUNDED, which is its own terminal state, not a reason to accept a second
+// payment.
+const PAID_STATUSES: TransactionStatus[] = ['COMPLETED', 'SHIPPED', 'DELIVERED', 'DISPUTED', 'REFUNDED'];
 
 router.get(
   '/my-wins',
@@ -54,9 +41,12 @@ router.get(
         auction: true,
         seller: { select: { name: true, email: true } },
         review: { select: { id: true } },
+        dispute: { select: { reason: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    const { reviewTimeoutHours } = await getPlatformSettings();
 
     ok(res, transactions.map((tx) => ({
       transactionId: tx.id,
@@ -71,6 +61,14 @@ router.get(
       // a buyer whose card was declined needs to know it was declined and can be retried,
       // which is the whole point of not writing FAILED into `status` any more.
       lastPaymentError: tx.lastPaymentError ?? undefined,
+      // BV-047: when the item shipped, and the deadline (computed server-side so the frontend
+      // never needs reviewTimeoutHours separately) to either confirm receipt or dispute before
+      // it is assumed received automatically.
+      shippedAt: tx.shippedAt?.toISOString(),
+      reviewDeadlineAt: tx.shippedAt
+        ? new Date(tx.shippedAt.getTime() + reviewTimeoutHours * 60 * 60 * 1000).toISOString()
+        : undefined,
+      disputeReason: tx.dispute?.reason,
       createdAt: tx.createdAt.toISOString(),
       reviewed: tx.review !== null,
     })));
@@ -86,13 +84,73 @@ router.get(
     // doesn't apply to it. Its actual defect (BV-008's shape: every completed row fetched
     // to sum in JS) gets BV-008's fix instead -- the aggregate in Postgres.
     const { _sum, _count } = await prisma.auctionTransaction.aggregate({
-      where: { sellerId: req.auth!.userId, status: 'COMPLETED' },
+      where: { sellerId: req.auth!.userId, status: { in: REVENUE_STATUSES } },
       _sum: { finalAmount: true },
       _count: { id: true },
     });
     ok(res, {
       totalRevenue: _sum.finalAmount ?? 0,
       itemsSold: _count.id,
+    });
+  }),
+);
+
+// BV-047 / B2: sellers previously had no way to see their own sales at all -- not even that
+// one existed, let alone which need shipping or carry the buyer's delivery address. Cursor
+// paginated the same way BV-029 did the other six list endpoints, for the same reason: a
+// prolific seller's history is unbounded.
+router.get(
+  '/my-sales',
+  requireAuth(['SELLER']),
+  asyncHandler(async (req, res) => {
+    const sellerId = req.auth!.userId;
+    const limit = parseLimit(req.query.limit);
+    const cursor = decodeCursor(req.query.cursor);
+
+    const where: Prisma.AuctionTransactionWhereInput = cursor
+      ? {
+          sellerId,
+          OR: [
+            { createdAt: { lt: new Date(cursor.sortValue) } },
+            { createdAt: new Date(cursor.sortValue), id: { lt: cursor.id } },
+          ],
+        }
+      : { sellerId };
+
+    const rows = await prisma.auctionTransaction.findMany({
+      where,
+      include: {
+        auction: { select: { title: true, emoji: true, imageUrl: true } },
+        winner: { select: { name: true } },
+        dispute: { select: { reason: true } },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+    });
+
+    const { reviewTimeoutHours } = await getPlatformSettings();
+    const { pageRows, nextCursor } = slicePage(rows, limit, (t) => t.createdAt, (t) => t.id);
+
+    ok(res, {
+      items: pageRows.map((t) => ({
+        transactionId: t.id,
+        auctionId: t.auctionId,
+        auctionTitle: t.auction.title,
+        auctionEmoji: t.auction.emoji ?? '📦',
+        auctionImageUrl: t.auction.imageUrl ?? '',
+        buyerName: t.winner.name,
+        finalAmount: t.finalAmount,
+        status: t.status,
+        deliveryAddress: t.deliveryAddress ?? undefined,
+        deliveryPhone: t.deliveryPhone ?? undefined,
+        shippedAt: t.shippedAt?.toISOString(),
+        reviewDeadlineAt: t.shippedAt
+          ? new Date(t.shippedAt.getTime() + reviewTimeoutHours * 60 * 60 * 1000).toISOString()
+          : undefined,
+        disputeReason: t.dispute?.reason,
+        createdAt: t.createdAt.toISOString(),
+      })),
+      nextCursor,
     });
   }),
 );
@@ -107,7 +165,7 @@ router.post(
   validateBody(createIntentSchema),
   asyncHandler(async (req, res) => {
     const winnerId = req.auth!.userId;
-    const { transactionId } = req.body;
+    const { transactionId, deliveryAddress, deliveryPhone } = req.body;
 
     let outcome: { kind: 'ok'; clientSecret: string | null } | { kind: 'fail'; message: string; status: number };
 
@@ -139,10 +197,18 @@ router.post(
 
         // FAILED is retryable. A declined card is an ordinary event, and refusing it here was
         // what made one decline permanent — see BV-006 and the lastPaymentError column.
-        // COMPLETED is genuinely terminal.
-        if (row.status === 'COMPLETED') {
+        // Everything from COMPLETED onward (BV-047) means the charge already succeeded once.
+        if (PAID_STATUSES.includes(row.status)) {
           return { kind: 'fail' as const, message: 'This purchase has already been paid for.', status: 409 };
         }
+
+        // Written on every call, including a retry that reuses an existing intent (below) — a
+        // buyer who mistyped the first time should be able to correct it without cancelling
+        // the payment.
+        await dbTx.auctionTransaction.update({
+          where: { id: row.id },
+          data: { deliveryAddress, deliveryPhone },
+        });
 
         if (row.stripePaymentIntentId) {
           const existing = await stripe.paymentIntents.retrieve(row.stripePaymentIntentId);
@@ -238,6 +304,81 @@ router.post(
       return;
     }
     ok(res, { clientSecret: outcome.clientSecret });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Fulfilment (BV-047) — see services/fulfillment.service.ts for the state machine and every
+// Stripe call. Routes here only authenticate, translate the result kind to a status code, and
+// respond.
+// ---------------------------------------------------------------------------
+
+const FULFILLMENT_ERROR_STATUS: Record<string, [string, number]> = {
+  'not-found': ['Transaction not found.', 404],
+  forbidden: ['Forbidden.', 403],
+  'wrong-state': ['This action is not available for the transaction in its current state.', 409],
+  'no-address': ['A delivery address is required before an item can be marked shipped.', 409],
+  'payout-not-ready': ['Complete your payout setup before marking an item as shipped.', 409],
+};
+
+router.patch(
+  '/:transactionId/ship',
+  requireAuth(['SELLER']),
+  asyncHandler(async (req, res) => {
+    const result = await markShipped(req.params.transactionId, req.auth!.userId);
+    if (result.kind !== 'ok') {
+      const [message, status] = FULFILLMENT_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { transactionId: req.params.transactionId, status: 'SHIPPED' });
+  }),
+);
+
+router.post(
+  '/:transactionId/confirm-receipt',
+  requireAuth(['BUYER']),
+  asyncHandler(async (req, res) => {
+    const result = await confirmDelivery(req.params.transactionId, { requireWinnerId: req.auth!.userId });
+    if (result.kind !== 'ok') {
+      const [message, status] = FULFILLMENT_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { transactionId: req.params.transactionId, status: 'DELIVERED' });
+  }),
+);
+
+router.post(
+  '/:transactionId/dispute',
+  requireAuth(['BUYER']),
+  validateBody(raiseDisputeSchema),
+  asyncHandler(async (req, res) => {
+    const result = await raiseDispute(req.params.transactionId, req.auth!.userId, req.body.reason);
+    if (result.kind !== 'ok') {
+      const [message, status] = FULFILLMENT_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { transactionId: req.params.transactionId, status: 'DISPUTED' });
+  }),
+);
+
+router.post(
+  '/connect/onboard',
+  requireAuth(['SELLER']),
+  asyncHandler(async (req, res) => {
+    const { url } = await createConnectOnboardingLink(req.auth!.userId);
+    ok(res, { url });
+  }),
+);
+
+router.get(
+  '/connect/status',
+  requireAuth(['SELLER']),
+  asyncHandler(async (req, res) => {
+    const status = await getConnectAccountStatus(req.auth!.userId);
+    ok(res, status);
   }),
 );
 

@@ -28,8 +28,11 @@ router.post(
       fail(res, 'Forbidden.', 403);
       return;
     }
-    if (tx.status !== 'COMPLETED') {
-      fail(res, 'Complete payment before rating the seller.', 422);
+    // BV-047: gated on DELIVERED, not COMPLETED (paid) — a review is about the item and the
+    // seller's handling of the sale, neither of which the buyer can honestly rate before they
+    // have actually received it. COMPLETED only means the card charged (A4).
+    if (tx.status !== 'DELIVERED') {
+      fail(res, 'Confirm receipt of the item before rating the seller.', 422);
       return;
     }
 

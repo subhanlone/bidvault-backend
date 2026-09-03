@@ -10,6 +10,7 @@ import {
 import { closeAuction } from './close-auction.js';
 import { WORKER_HEARTBEAT_KEY, WORKER_HEARTBEAT_INTERVAL_MS } from '../infra/worker-heartbeat.js';
 import { subscribeToSettingsInvalidation } from '../services/settings.service.js';
+import { findTimedOutShipments, confirmDelivery } from '../services/fulfillment.service.js';
 
 // BV-025: close-auction.ts sends email through email.service.ts, which reads
 // emailNotifsEnabled via getPlatformSettings() -- this process needs the same cross-process
@@ -113,11 +114,50 @@ async function reconcileOverdueAuctions(): Promise<void> {
 const reconcileTimer = setInterval(() => void reconcileOverdueAuctions(), RECONCILE_INTERVAL_MS);
 reconcileTimer.unref();
 
+/**
+ * BV-040 / BV-047: the confirm-or-dispute window a SHIPPED transaction gets before receipt is
+ * assumed. Same interval as the auction-close sweep above — reviewTimeoutHours is measured in
+ * hours, so checking it every 5 minutes is more than fine-grained enough, and reusing the
+ * interval means no second timer to reason about.
+ *
+ * confirmDelivery() is the same function the buyer's own confirm-receipt route calls; a
+ * transaction this sweep picks up twice (a slow run overlapping the next tick) simply finds
+ * the row already DELIVERED on the second pass and returns 'wrong-state', doing nothing.
+ */
+let fulfillmentSweepInFlight = false;
+
+async function autoConfirmTimedOutShipments(): Promise<void> {
+  if (fulfillmentSweepInFlight) return;
+  fulfillmentSweepInFlight = true;
+
+  try {
+    const overdue = await findTimedOutShipments();
+    if (overdue.length === 0) return;
+
+    for (const transactionId of overdue) {
+      const result = await confirmDelivery(transactionId, { auto: true });
+      if (result.kind !== 'ok') {
+        console.error(`[fulfillment-sweep] auto-confirm failed for ${transactionId}: ${result.kind}`);
+      }
+    }
+
+    console.log(`[fulfillment-sweep] auto-confirmed ${overdue.length} timed-out shipment(s).`);
+  } catch (error) {
+    console.error('[fulfillment-sweep] Sweep failed:', error);
+  } finally {
+    fulfillmentSweepInFlight = false;
+  }
+}
+
+const fulfillmentSweepTimer = setInterval(() => void autoConfirmTimedOutShipments(), RECONCILE_INTERVAL_MS);
+fulfillmentSweepTimer.unref();
+
 const heartbeatTimer = setInterval(writeHeartbeat, WORKER_HEARTBEAT_INTERVAL_MS);
 heartbeatTimer.unref();
 
 async function shutdown() {
   clearInterval(reconcileTimer);
+  clearInterval(fulfillmentSweepTimer);
   clearInterval(heartbeatTimer);
   await worker.close();
   await prisma.$disconnect();
@@ -131,3 +171,4 @@ process.on('SIGTERM', () => void shutdown());
 console.log(`Auction lifecycle worker started (queue prefix: ${env.QUEUE_PREFIX}).`);
 writeHeartbeat();
 void reconcileOverdueAuctions();
+void autoConfirmTimedOutShipments();

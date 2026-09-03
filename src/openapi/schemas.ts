@@ -36,7 +36,7 @@ export const AuctionStatus = z
   .enum(['SCHEDULED', 'ACTIVE', 'CLOSED'])
   .meta({ id: 'AuctionStatus' });
 export const TransactionStatus = z
-  .enum(['PENDING', 'COMPLETED', 'FAILED', 'VOIDED'])
+  .enum(['PENDING', 'COMPLETED', 'FAILED', 'VOIDED', 'SHIPPED', 'DELIVERED', 'DISPUTED', 'REFUNDED'])
   .meta({ id: 'TransactionStatus' });
 export const NotificationType = z
   .enum([
@@ -266,6 +266,12 @@ export const WonTransactionDto = z
      * Cleared when a fresh attempt starts.
      */
     lastPaymentError: z.string().optional(),
+    // BV-047: present once the seller has marked the item shipped. reviewDeadlineAt is
+    // computed server-side (shippedAt + reviewTimeoutHours) so the frontend never needs the
+    // platform setting itself just to render a countdown.
+    shippedAt: isoDateTime.optional(),
+    reviewDeadlineAt: isoDateTime.optional(),
+    disputeReason: z.string().optional(),
     createdAt: isoDateTime,
     reviewed: z.boolean(),
   })
@@ -274,6 +280,55 @@ export const WonTransactionDto = z
 export const SellerStatsDto = z
   .object({ totalRevenue: z.number().int(), itemsSold: z.number().int() })
   .meta({ id: 'SellerStats' });
+
+/** A seller's own sale — GET /payments/my-sales. Carries what BV-047 added: the buyer's
+ * delivery details and the fulfilment state, neither of which existed before. */
+export const SellerSaleDto = z
+  .object({
+    transactionId: z.string(),
+    auctionId: z.string(),
+    auctionTitle: z.string(),
+    auctionEmoji: z.string(),
+    auctionImageUrl: z.string(),
+    buyerName: z.string(),
+    finalAmount: z.number().int(),
+    status: TransactionStatus,
+    deliveryAddress: z.string().optional(),
+    deliveryPhone: z.string().optional(),
+    shippedAt: isoDateTime.optional(),
+    reviewDeadlineAt: isoDateTime.optional(),
+    disputeReason: z.string().optional(),
+    createdAt: isoDateTime,
+  })
+  .meta({ id: 'SellerSale' });
+
+export const PaginatedSellerSales = z
+  .object({ items: z.array(SellerSaleDto), nextCursor: z.string().nullable() })
+  .meta({ id: 'PaginatedSellerSales' });
+
+export const ConnectOnboardingLinkDto = z
+  .object({ url: z.string() })
+  .meta({ id: 'ConnectOnboardingLink' });
+
+export const ConnectStatusDto = z
+  .object({ connected: z.boolean(), onboardingComplete: z.boolean() })
+  .meta({ id: 'ConnectStatus' });
+
+/** GET /admin/disputes — one open dispute a buyer has raised, awaiting resolution. */
+export const AdminDisputeDto = z
+  .object({
+    disputeId: z.string(),
+    transactionId: z.string(),
+    auctionTitle: z.string(),
+    buyerId: z.string(),
+    buyerName: z.string(),
+    sellerId: z.string(),
+    sellerName: z.string(),
+    finalAmount: z.number().int(),
+    reason: z.string(),
+    createdAt: isoDateTime,
+  })
+  .meta({ id: 'AdminDispute' });
 
 /** A PENDING transaction an admin can void — see POST /admin/transactions/{transactionId}/void. */
 export const AdminTransactionDto = z
