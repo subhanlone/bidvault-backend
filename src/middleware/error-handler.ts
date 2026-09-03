@@ -8,16 +8,8 @@ export function notFound(_req: Request, res: Response): void {
   res.status(404).json({ success: false, error: 'Route not found' });
 }
 
-function stripeType(error: unknown): string | undefined {
-  if (!error || typeof error !== 'object' || !('type' in error)) return undefined;
-  return typeof error.type === 'string' ? error.type : undefined;
-}
-
 function redact(text: string): string {
-  return text
-    .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer [REDACTED]')
-    .replace(/\b(?:sk|rk|pk|whsec)_(?:test|live)?_?[A-Za-z0-9]+\b/g, '[REDACTED_SECRET]')
-    .replace(/\bpi_[A-Za-z0-9]+_secret_[A-Za-z0-9]+\b/g, '[REDACTED_CLIENT_SECRET]');
+  return text.replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer [REDACTED]');
 }
 
 function safeLogError(error: unknown): Record<string, unknown> {
@@ -59,16 +51,6 @@ export function errorHandler(error: unknown, req: Request, res: Response, _next:
       res.status(404).json({ success: false, error: 'Resource not found.' });
       return;
     }
-  }
-
-  const type = stripeType(error);
-  if (type === 'StripeCardError') {
-    res.status(402).json({ success: false, error: 'Payment was declined.' });
-    return;
-  }
-  if (type === 'StripeConnectionError' || type === 'StripeRateLimitError') {
-    res.status(503).json({ success: false, error: 'Payment service temporarily unavailable.' });
-    return;
   }
 
   const requestId = crypto.randomUUID();

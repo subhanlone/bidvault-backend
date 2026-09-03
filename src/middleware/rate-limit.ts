@@ -97,11 +97,6 @@ export const globalRateLimit = makeLimiter({
   limit: 300,
   keyGenerator: keyByIp,
   message: 'Too many requests. Please try again shortly.',
-  // Stripe delivers webhooks from a small pool of addresses, so every event for every seller
-  // shares one key. A 429 is retried, so nothing is lost, but the retry storm would arrive
-  // while the original burst is still counted — and payment completion is the one path where
-  // delay is least acceptable. The endpoint authenticates by signature, so it is not open.
-  skip: (req) => req.path === '/api/v1/payments/webhook',
 });
 
 // Both login limiters count only FAILED attempts.

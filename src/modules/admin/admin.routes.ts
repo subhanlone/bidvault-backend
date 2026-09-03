@@ -259,8 +259,8 @@ router.post(
 );
 
 // BV-047 / E6: the admin side of the dispute the platform previously had no way to express at
-// all. Every state transition and every Stripe call lives in fulfillment.service.ts -- this
-// route only authenticates and translates the result.
+// all. Every state transition lives in fulfillment.service.ts -- this route only authenticates
+// and translates the result.
 router.get(
   '/disputes',
   requireAuth(['ADMIN']),

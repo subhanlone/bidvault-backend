@@ -1,7 +1,5 @@
 import type { Prisma, TransactionStatus } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
-import { clientOrigins } from '../config/env.js';
-import { stripe, CURRENCY, toMinorUnits } from './stripe.service.js';
 import { getPlatformSettings } from './settings.service.js';
 import {
   dispatchEmail,
@@ -17,12 +15,15 @@ import {
  * DISPUTED -> REFUNDED/DELIVERED) — see the TransactionStatus enum in schema.prisma for the
  * full state diagram.
  *
- * This module holds every state transition and every call to Stripe for it, because each one
- * has more than one caller that must behave identically: confirmDelivery() is reached from the
- * buyer's own route, the worker's timeout sweep, and an admin releasing a dispute; refund is
- * reached only from dispute resolution today but is kept separate from that orchestration for
- * the same reason. Routes and the worker stay thin callers, matching close-auction.ts's split
- * from auction-lifecycle.worker.ts.
+ * This module holds every state transition, because each one has more than one caller that
+ * must behave identically: confirmDelivery() is reached from the buyer's own route, the
+ * worker's timeout sweep, and an admin releasing a dispute. Routes and the worker stay thin
+ * callers, matching close-auction.ts's split from auction-lifecycle.worker.ts.
+ *
+ * The payment gateway is fully self-built (see payment-gateway.service.ts) — a seller's payout
+ * is a local ledger write, not a network call, so it lives inside the same transaction as the
+ * state change it accompanies rather than after it. There is no external failure mode to
+ * handle here any more.
  */
 
 /**
@@ -41,7 +42,6 @@ type LockedTransactionRow = {
   winnerId: string;
   sellerId: string;
   finalAmount: number;
-  stripePaymentIntentId: string | null;
 };
 
 async function lockTransaction(
@@ -49,77 +49,12 @@ async function lockTransaction(
   transactionId: string,
 ): Promise<LockedTransactionRow | undefined> {
   const [row] = await tx.$queryRaw<LockedTransactionRow[]>`
-    SELECT id, status, "winnerId", "sellerId", "finalAmount", "stripePaymentIntentId"
+    SELECT id, status, "winnerId", "sellerId", "finalAmount"
     FROM "AuctionTransaction"
     WHERE id = ${transactionId}
     FOR UPDATE
   `;
   return row;
-}
-
-// ---------------------------------------------------------------------------
-// Seller payout onboarding (C5)
-// ---------------------------------------------------------------------------
-
-export async function createConnectOnboardingLink(sellerId: string): Promise<{ url: string }> {
-  const seller = await prisma.user.findUniqueOrThrow({ where: { id: sellerId } });
-
-  let accountId = seller.stripeAccountId;
-  if (!accountId) {
-    const account = await stripe.accounts.create({
-      type: 'express',
-      email: seller.email,
-      capabilities: { transfers: { requested: true } },
-    });
-    accountId = account.id;
-    await prisma.user.update({ where: { id: sellerId }, data: { stripeAccountId: accountId } });
-  }
-
-  // Stripe-hosted: identity and bank details are collected on Stripe's own page, never by
-  // this app. The base URL is whichever CLIENT_ORIGIN this deployment serves the frontend
-  // from — the same value CORS already trusts, reused rather than adding a second env var.
-  const base = clientOrigins[0];
-  const link = await stripe.accountLinks.create({
-    account: accountId,
-    refresh_url: `${base}/seller/profile?connect=refresh`,
-    return_url: `${base}/seller/profile?connect=complete`,
-    type: 'account_onboarding',
-  });
-
-  return { url: link.url };
-}
-
-export async function getConnectAccountStatus(
-  sellerId: string,
-): Promise<{ connected: boolean; onboardingComplete: boolean }> {
-  const seller = await prisma.user.findUniqueOrThrow({ where: { id: sellerId } });
-  if (!seller.stripeAccountId) return { connected: false, onboardingComplete: false };
-
-  let account: Awaited<ReturnType<typeof stripe.accounts.retrieve>>;
-  try {
-    account = await stripe.accounts.retrieve(seller.stripeAccountId);
-  } catch (err) {
-    // A stored id Stripe can no longer resolve (revoked access, account deleted on Stripe's
-    // side) must not 500 this route — it's read on every visit to Seller Profile and My
-    // Sales. Reported as connected-but-unconfirmed rather than silently claiming the cached
-    // value is still accurate.
-    console.error('[fulfillment] could not retrieve Connect account status', {
-      sellerId,
-      stripeAccountId: seller.stripeAccountId,
-      error: err instanceof Error ? err.message : err,
-    });
-    return { connected: true, onboardingComplete: false };
-  }
-
-  const onboardingComplete = Boolean(account.charges_enabled && account.payouts_enabled);
-
-  // Cached on the row so "mark shipped" doesn't need a Stripe round trip on every call — only
-  // this status check and the onboarding link do.
-  if (onboardingComplete !== seller.stripeOnboardingComplete) {
-    await prisma.user.update({ where: { id: sellerId }, data: { stripeOnboardingComplete: onboardingComplete } });
-  }
-
-  return { connected: true, onboardingComplete };
 }
 
 // ---------------------------------------------------------------------------
@@ -131,8 +66,7 @@ export type MarkShippedResult =
   | { kind: 'not-found' }
   | { kind: 'forbidden' }
   | { kind: 'wrong-state' }
-  | { kind: 'no-address' }
-  | { kind: 'payout-not-ready' };
+  | { kind: 'no-address' };
 
 export async function markShipped(transactionId: string, sellerId: string): Promise<MarkShippedResult> {
   const outcome = await prisma.$transaction(async (tx) => {
@@ -141,19 +75,15 @@ export async function markShipped(transactionId: string, sellerId: string): Prom
     if (row.sellerId !== sellerId) return { kind: 'forbidden' as const };
     if (row.status !== 'COMPLETED') return { kind: 'wrong-state' as const };
 
-    const [full, seller] = await Promise.all([
-      tx.auctionTransaction.findUniqueOrThrow({
-        where: { id: row.id },
-        select: {
-          deliveryAddress: true,
-          auction: { select: { title: true } },
-          winner: { select: { email: true, name: true } },
-        },
-      }),
-      tx.user.findUniqueOrThrow({ where: { id: sellerId }, select: { stripeOnboardingComplete: true } }),
-    ]);
+    const full = await tx.auctionTransaction.findUniqueOrThrow({
+      where: { id: row.id },
+      select: {
+        deliveryAddress: true,
+        auction: { select: { title: true } },
+        winner: { select: { email: true, name: true } },
+      },
+    });
     if (!full.deliveryAddress) return { kind: 'no-address' as const };
-    if (!seller.stripeOnboardingComplete) return { kind: 'payout-not-ready' as const };
 
     await tx.auctionTransaction.update({
       where: { id: row.id },
@@ -201,10 +131,21 @@ export async function confirmDelivery(
 
     const full = await tx.auctionTransaction.findUniqueOrThrow({
       where: { id: row.id },
-      select: { auction: { select: { title: true } }, seller: true },
+      select: { auction: { select: { title: true } }, seller: { select: { id: true, email: true, name: true } } },
     });
 
     await tx.auctionTransaction.update({ where: { id: row.id }, data: { status: 'DELIVERED' } });
+
+    // The payout, in the same transaction as the state change — the gateway is local, so
+    // there is no external latency or failure mode to keep off the row lock for any more.
+    // Either both happen or neither does.
+    await tx.ledgerEntry.create({
+      data: { sellerId: row.sellerId, transactionId: row.id, amount: row.finalAmount },
+    });
+    await tx.user.update({
+      where: { id: row.sellerId },
+      data: { ledgerBalance: { increment: row.finalAmount } },
+    });
 
     return {
       kind: 'ok' as const,
@@ -215,32 +156,6 @@ export async function confirmDelivery(
   });
 
   if (outcome.kind !== 'ok') return { kind: outcome.kind };
-
-  // Outside the transaction, same reasoning as close-auction.ts's dispatchEmail: neither the
-  // Stripe call nor the email should hold the row lock, and a retried job would find the row
-  // already DELIVERED and never reach here a second time (BV-012's pattern).
-  if (outcome.seller.stripeAccountId) {
-    try {
-      await stripe.transfers.create({
-        amount: toMinorUnits(outcome.finalAmount),
-        currency: CURRENCY,
-        destination: outcome.seller.stripeAccountId,
-        transfer_group: transactionId,
-      });
-    } catch (err) {
-      // The buyer-facing fact (item received) is true regardless of whether Stripe's side
-      // succeeds, so the state transition above is not rolled back for this — but a failed
-      // transfer means the seller is owed money with nothing paid, which needs a human, not a
-      // silent retry. Logged loudly, matching the existing amount-mismatch webhook case.
-      console.error('[fulfillment] transfer failed after delivery confirmed', {
-        transactionId,
-        sellerId: outcome.seller.id,
-        error: err instanceof Error ? err.message : err,
-      });
-    }
-  } else {
-    console.error('[fulfillment] delivery confirmed with no seller Stripe account on file', { transactionId });
-  }
 
   dispatchEmail(
     sendDeliveryConfirmedEmail(
@@ -314,8 +229,8 @@ export async function resolveDispute(
 ): Promise<ResolveDisputeResult> {
   const outcome = await prisma.$transaction(async (tx) => {
     // Locked the same way every other admin decision on a financial row is (void-transaction,
-    // create-intent): two admins resolving the same dispute at once must not both pass the
-    // OPEN check before either write commits.
+    // pay): two admins resolving the same dispute at once must not both pass the OPEN check
+    // before either write commits.
     const [locked] = await tx.$queryRaw<Array<{ id: string; status: string }>>`
       SELECT id, status FROM "Dispute" WHERE id = ${disputeId} FOR UPDATE
     `;
@@ -356,16 +271,15 @@ export async function resolveDispute(
     });
 
     if (resolution === 'REFUND') {
-      // REFUNDED here, not left to confirmDelivery/transfer — a dispute is only reachable
-      // from SHIPPED, so no transfer has ever fired for this transaction. A plain refund
-      // against the original charge is the whole cost; there is nothing to reverse.
+      // A pure status flip — a dispute is only reachable from SHIPPED, so no payout has ever
+      // fired for this transaction, and the gateway never actually moved money to begin with.
+      // There is nothing to reverse.
       await tx.auctionTransaction.update({ where: { id: dispute.transactionId }, data: { status: 'REFUNDED' } });
     }
 
     return {
       kind: 'ok' as const,
       transactionId: dispute.transactionId,
-      stripePaymentIntentId: dispute.transaction.stripePaymentIntentId,
       auctionTitle: dispute.transaction.auction.title,
       buyer: dispute.transaction.winner,
       seller: dispute.transaction.seller,
@@ -375,16 +289,6 @@ export async function resolveDispute(
   if (outcome.kind !== 'ok') return outcome;
 
   if (resolution === 'REFUND') {
-    if (outcome.stripePaymentIntentId) {
-      try {
-        await stripe.refunds.create({ payment_intent: outcome.stripePaymentIntentId });
-      } catch (err) {
-        console.error('[fulfillment] refund failed after dispute resolved REFUNDED', {
-          transactionId: outcome.transactionId,
-          error: err instanceof Error ? err.message : err,
-        });
-      }
-    }
     dispatchEmail(
       sendDisputeResolvedEmail(outcome.buyer, outcome.seller, {
         auctionTitle: outcome.auctionTitle,
@@ -398,7 +302,7 @@ export async function resolveDispute(
 
   // RELEASE: reuse confirmDelivery for the exact same SHIPPED-was-never-true-here transition
   // it does for everyone else — the dispute row is already resolved above, so this only needs
-  // to move the transaction itself and fire the transfer.
+  // to move the transaction itself and credit the seller's ledger.
   await confirmDelivery(outcome.transactionId, { fromDisputed: true });
   dispatchEmail(
     sendDisputeResolvedEmail(outcome.buyer, outcome.seller, {

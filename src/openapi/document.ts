@@ -153,7 +153,18 @@ const documentInput = {
     // paginated /payments/my-sales for a seller's own sales, and two new /admin/disputes
     // operations — all additive on their own, bundled into the same bump as the breaking
     // change rather than split out, since they ship in the same deploy.
-    version: '4.0.0',
+    //
+    // 5.0.0, 2026-09-03, major: Stripe replaced end to end with a self-built, fully-simulated
+    // gateway (Stripe is UAE-registered and does not support Pakistan; no real money ever
+    // moved through it). Breaking: POST /payments/create-intent removed, replaced by
+    // POST /payments/{transactionId}/pay (path-param shape matching ship/confirm-receipt/
+    // dispute, request body swaps deliveryAddress/deliveryPhone-only for cardNumber alongside
+    // them, response drops clientSecret for a synchronous status). POST /payments/webhook
+    // removed outright — nothing external to receive a webhook from any more. GET/POST
+    // /payments/connect/onboard and /connect/status removed — no seller onboarding step at
+    // all. Additive: GET /payments/earnings (a seller's dummy-ledger balance) and
+    // GET /payments/{transactionId}/invoice (LIFECYCLE-GAPS.md E3).
+    version: '5.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -568,26 +579,43 @@ const documentInput = {
         responses: { 200: okBody(S.PaginatedSellerSales, 'A page of your sales'), 401: unauthorized },
       },
     },
-    '/payments/create-intent': {
+    '/payments/{transactionId}/pay': {
       post: {
         tags: ['Payments'],
         security: [{ bearerAuth: [] }],
-        summary: 'PKR is zero-decimal, so amounts are not multiplied by 100',
-        requestBody: jsonRequest(R.createIntentSchema),
+        summary: 'Resolves synchronously against the self-built dummy gateway — see payment-gateway.service.ts for the test-card convention. A decline is a 200 with status PENDING, not an error.',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        requestBody: jsonRequest(R.payTransactionSchema),
         responses: {
-          200: okBody(S.PaymentIntentDto, 'Stripe client secret'),
+          200: okBody(S.PayResultDto, 'Charged, or declined'),
           400: badRequest,
           401: unauthorized,
+          403: forbidden,
           404: notFound,
           409: errBody('The transaction is already paid'),
         },
       },
     },
-    '/payments/webhook': {
-      post: {
+    '/payments/earnings': {
+      get: {
         tags: ['Payments'],
-        summary: 'Stripe webhook. Needs the raw body, so it is mounted before express.json.',
-        responses: { 200: okBody(S.WebhookAckDto, 'Acknowledged'), 400: errBody('Bad signature') },
+        security: [{ bearerAuth: [] }],
+        summary: 'A seller\'s dummy-ledger balance and the sales that built it',
+        responses: { 200: okBody(S.EarningsDto, 'Ledger balance and entries'), 401: unauthorized, 403: forbidden },
+      },
+    },
+    '/payments/{transactionId}/invoice': {
+      get: {
+        tags: ['Payments'],
+        security: [{ bearerAuth: [] }],
+        summary: 'The buyer, the seller, or an admin — LIFECYCLE-GAPS.md E3',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        responses: {
+          200: okBody(S.InvoiceDto, 'Invoice'),
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+        },
       },
     },
     '/payments/{transactionId}/ship': {
@@ -601,7 +629,7 @@ const documentInput = {
           401: unauthorized,
           403: forbidden,
           404: notFound,
-          409: errBody('Not in the COMPLETED state, no delivery address on file, or payout setup incomplete'),
+          409: errBody('Not in the COMPLETED state, or no delivery address on file'),
         },
       },
     },
@@ -635,22 +663,6 @@ const documentInput = {
           404: notFound,
           409: errBody('The transaction is not SHIPPED'),
         },
-      },
-    },
-    '/payments/connect/onboard': {
-      post: {
-        tags: ['Payments'],
-        security: [{ bearerAuth: [] }],
-        summary: 'Creates (or reuses) a Stripe Express account and returns a Stripe-hosted onboarding link',
-        responses: { 200: okBody(S.ConnectOnboardingLinkDto, 'Onboarding link'), 401: unauthorized, 403: forbidden },
-      },
-    },
-    '/payments/connect/status': {
-      get: {
-        tags: ['Payments'],
-        security: [{ bearerAuth: [] }],
-        summary: 'Whether this seller has a connected payout account, and whether it can receive transfers yet',
-        responses: { 200: okBody(S.ConnectStatusDto, 'Connect account status'), 401: unauthorized, 403: forbidden },
       },
     },
 

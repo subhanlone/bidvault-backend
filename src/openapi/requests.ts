@@ -152,16 +152,18 @@ export const placeBidSchema = z
 
 // ---- payments ---------------------------------------------------------------------
 
-export const createIntentSchema = z
+export const payTransactionSchema = z
   .object({
-    transactionId: z.string().min(1).max(128),
+    // Never stored — services/payment-gateway.service.ts reads it once to decide success/
+    // decline and discards it, the same as a real processor would.
+    cardNumber: z.string().trim().min(12).max(24),
     // BV-047 / E4: the platform held no delivery contact data at all before this. Collected
     // alongside payment rather than as a separate step, since the buyer is already filling in
-    // the PaymentModal at that point.
+    // the checkout form at that point.
     deliveryAddress: z.string().trim().min(10).max(300),
     deliveryPhone: z.string().trim().min(7).max(20),
   })
-  .meta({ id: 'CreateIntentRequest' });
+  .meta({ id: 'PayTransactionRequest' });
 
 export const raiseDisputeSchema = z
   .object({ reason: z.string().trim().min(10).max(1000) })

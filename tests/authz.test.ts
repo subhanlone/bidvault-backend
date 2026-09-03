@@ -21,28 +21,8 @@
  * file does not cover, so the gap cannot quietly reopen.
  */
 import { readFileSync } from 'node:fs';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
-
-// Same treatment as the conformance suite: only the PaymentIntent calls are replaced, so no
-// test here reaches the network. Signature verification keeps its real implementation.
-vi.mock('stripe', async () => {
-  const actual = await vi.importActual<typeof import('stripe')>('stripe');
-  const real = new actual.default('sk_test_placeholder_for_signature_verification_only');
-  const intent = { id: 'pi_test_authz', client_secret: 'pi_test_authz_secret', status: 'requires_payment_method' };
-  class MockStripe {
-    webhooks = real.webhooks;
-    paymentIntents = { create: vi.fn(async () => intent), retrieve: vi.fn(async () => intent) };
-    transfers = { create: vi.fn(async () => ({ id: 'tr_test_authz' })) };
-    refunds = { create: vi.fn(async () => ({ id: 're_test_authz' })) };
-    accounts = {
-      create: vi.fn(async () => ({ id: 'acct_test_authz' })),
-      retrieve: vi.fn(async () => ({ id: 'acct_test_authz', charges_enabled: true, payouts_enabled: true })),
-    };
-    accountLinks = { create: vi.fn(async () => ({ url: 'https://connect.stripe.com/setup/test_authz' })) };
-  }
-  return { ...actual, default: MockStripe };
-});
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
@@ -129,9 +109,12 @@ const OPERATIONS: Op[] = [
   { method: 'get', contractPath: '/payments/my-wins', url: () => '/payments/my-wins', allow: ['BUYER'] },
   { method: 'get', contractPath: '/payments/seller-stats', url: () => '/payments/seller-stats', allow: ['SELLER'] },
   { method: 'get', contractPath: '/payments/my-sales', url: () => '/payments/my-sales', allow: ['SELLER'] },
-  { method: 'post', contractPath: '/payments/create-intent', url: () => '/payments/create-intent',
-    allow: ['BUYER'],
-    body: (w) => ({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }) },
+  { method: 'get', contractPath: '/payments/earnings', url: () => '/payments/earnings', allow: ['SELLER'] },
+  { method: 'get', contractPath: '/payments/{transactionId}/invoice',
+    url: (w) => `/payments/${w.transactionId}/invoice`, allow: ['BUYER', 'SELLER', 'ADMIN'] },
+  { method: 'post', contractPath: '/payments/{transactionId}/pay',
+    url: (w) => `/payments/${w.transactionId}/pay`, allow: ['BUYER'],
+    body: () => ({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }) },
   { method: 'patch', contractPath: '/payments/{transactionId}/ship',
     url: (w) => `/payments/${w.transactionId}/ship`, allow: ['SELLER'] },
   { method: 'post', contractPath: '/payments/{transactionId}/confirm-receipt',
@@ -139,8 +122,6 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/payments/{transactionId}/dispute',
     url: (w) => `/payments/${w.transactionId}/dispute`, allow: ['BUYER'],
     body: () => ({ reason: 'Authz probe dispute reason.' }) },
-  { method: 'post', contractPath: '/payments/connect/onboard', url: () => '/payments/connect/onboard', allow: ['SELLER'] },
-  { method: 'get', contractPath: '/payments/connect/status', url: () => '/payments/connect/status', allow: ['SELLER'] },
 
   // ---- admin ----------------------------------------------------------------------------
   { method: 'get', contractPath: '/admin/analytics', url: () => '/admin/analytics', allow: ['ADMIN'] },
@@ -253,12 +234,12 @@ describe('one user cannot reach another user\'s data', () => {
     expect(ids).not.toContain(w.otherBuyerNotificationId);
   });
 
-  it('cannot create a payment intent for another buyer\'s transaction', async () => {
+  it('cannot pay for another buyer\'s transaction', async () => {
     const res = await request(app)
-      .post(api('/payments/create-intent'))
+      .post(api(`/payments/${w.otherBuyerTransactionId}/pay`))
       .set(bearer(w.buyer.token))
       .send({
-        transactionId: w.otherBuyerTransactionId,
+        cardNumber: '4242424242424242',
         deliveryAddress: '123 Test Street, Karachi',
         deliveryPhone: '03001234567',
       });
@@ -270,7 +251,6 @@ describe('one user cannot reach another user\'s data', () => {
       where: { id: w.otherBuyerTransactionId },
       data: { status: 'COMPLETED', deliveryAddress: '123 Test Street', deliveryPhone: '03001234567' },
     });
-    await prisma.user.update({ where: { id: w.otherSeller.id }, data: { stripeOnboardingComplete: true } });
     const res = await request(app)
       .patch(api(`/payments/${w.otherBuyerTransactionId}/ship`))
       .set(bearer(w.seller.token));

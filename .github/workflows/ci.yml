@@ -23,8 +23,6 @@ env:
   # Prisma resolves the datasource URL when it reads the schema, so the
   # variable has to exist even though nothing here opens a connection.
   DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
-  STRIPE_SECRET_KEY: sk_test_ci_placeholder_not_a_real_key
-  STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder_not_a_real_key
   CLOUDINARY_CLOUD_NAME: ci-placeholder
   CLOUDINARY_API_KEY: ci-placeholder
   CLOUDINARY_API_SECRET: ci-placeholder

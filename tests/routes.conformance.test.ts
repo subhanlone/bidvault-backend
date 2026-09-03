@@ -13,43 +13,8 @@
  * not touch, so the two cannot drift apart silently.
  */
 import { readFileSync } from 'node:fs';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
-
-// Stripe is the one dependency here that would otherwise make a network call. Only the
-// PaymentIntent methods are replaced; webhooks keeps the real implementation so signature
-// verification is genuinely exercised rather than waved through. Constructing a Stripe
-// instance opens no connection.
-vi.mock('stripe', async () => {
-  const actual = await vi.importActual<typeof import('stripe')>('stripe');
-  const real = new actual.default('sk_test_placeholder_for_signature_verification_only');
-  const intent = {
-    id: 'pi_test_conformance',
-    client_secret: 'pi_test_conformance_secret_abc',
-    status: 'requires_payment_method',
-  };
-  class MockStripe {
-    webhooks = real.webhooks;
-    paymentIntents = {
-      create: vi.fn(async () => intent),
-      retrieve: vi.fn(async () => intent),
-    };
-    // BV-047: transfers (confirm-receipt / dispute-resolve RELEASE), refunds (dispute-resolve
-    // REFUND), and accounts/accountLinks (Connect onboarding) — same "replace the network
-    // call, keep everything else real" reasoning as paymentIntents above.
-    transfers = { create: vi.fn(async () => ({ id: 'tr_test_conformance' })) };
-    refunds = { create: vi.fn(async () => ({ id: 're_test_conformance' })) };
-    accounts = {
-      create: vi.fn(async () => ({ id: 'acct_test_conformance' })),
-      retrieve: vi.fn(async () => ({ id: 'acct_test_conformance', charges_enabled: true, payouts_enabled: true })),
-    };
-    accountLinks = {
-      create: vi.fn(async () => ({ url: 'https://connect.stripe.com/setup/test_conformance' })),
-    };
-  }
-  // Spread first: `actual` carries its own `default`, which would otherwise replace the mock.
-  return { ...actual, default: MockStripe };
-});
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
@@ -467,44 +432,57 @@ describe('payments', () => {
     expect(res.status).toBe(200);
   });
 
-  it('POST /payments/create-intent', async () => {
-    hit('post', '/payments/create-intent');
+  it('POST /payments/{transactionId}/pay', async () => {
+    hit('post', '/payments/{transactionId}/pay');
     const res = await request(app)
-      .post(api('/payments/create-intent'))
+      .post(api(`/payments/${w.transactionId}/pay`))
       .set(auth(w.buyer.token))
-      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
+      .send({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveProperty('clientSecret');
+    expect(res.body.data.status).toBe('COMPLETED');
   });
 
-  // create-intent was the one route validating its body by hand, so its 400 was an
-  // ErrorResponse while the contract documented a ValidationError. Now it goes through
-  // validateBody like everything else; this covers the branch that was mis-described.
-  it('POST /payments/create-intent — rejects a missing body as a ValidationError', async () => {
+  // Now goes through validateBody like everything else, so a malformed body is a
+  // ValidationError, not an ErrorResponse.
+  it('POST /payments/{transactionId}/pay — rejects a missing body as a ValidationError', async () => {
     const res = await request(app)
-      .post(api('/payments/create-intent'))
+      .post(api(`/payments/${w.transactionId}/pay`))
       .set(auth(w.buyer.token))
       .send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Validation error');
-    expect(res.body.details).toHaveProperty('transactionId');
+    expect(res.body.details).toHaveProperty('cardNumber');
   });
 
   // BV-065: the outcome.status branch in the handler can answer 409 for a transaction that
   // is already COMPLETED — a business rule, not a validateBody failure — on the same 400
   // slot ValidationErrorBody had claimed. The afterEach above turns "no violation recorded"
   // into an assertion for free.
-  it('POST /payments/create-intent — an already-paid transaction answers 409, not 400', async () => {
+  it('POST /payments/{transactionId}/pay — an already-paid transaction answers 409, not 400', async () => {
     await prisma.auctionTransaction.update({
       where: { id: w.transactionId },
       data: { status: 'COMPLETED' },
     });
     const res = await request(app)
-      .post(api('/payments/create-intent'))
+      .post(api(`/payments/${w.transactionId}/pay`))
       .set(auth(w.buyer.token))
-      .send({ transactionId: w.transactionId, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
+      .send({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({ success: false, error: expect.stringContaining('already') });
+  });
+
+  it('GET /payments/earnings', async () => {
+    hit('get', '/payments/earnings');
+    const res = await request(app).get(api('/payments/earnings')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveProperty('ledgerBalance');
+  });
+
+  it('GET /payments/{transactionId}/invoice', async () => {
+    hit('get', '/payments/{transactionId}/invoice');
+    const res = await request(app).get(api(`/payments/${w.transactionId}/invoice`)).set(auth(w.buyer.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.transactionId).toBe(w.transactionId);
   });
 
   it('GET /payments/my-sales', async () => {
@@ -520,7 +498,6 @@ describe('payments', () => {
       where: { id: w.transactionId },
       data: { status: 'COMPLETED', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' },
     });
-    await prisma.user.update({ where: { id: w.seller.id }, data: { stripeOnboardingComplete: true } });
     const res = await request(app)
       .patch(api(`/payments/${w.transactionId}/ship`))
       .set(auth(w.seller.token));
@@ -530,10 +507,6 @@ describe('payments', () => {
 
   it('POST /payments/{transactionId}/confirm-receipt', async () => {
     hit('post', '/payments/{transactionId}/confirm-receipt');
-    await prisma.user.update({
-      where: { id: w.seller.id },
-      data: { stripeAccountId: 'acct_test_conformance', stripeOnboardingComplete: true },
-    });
     await prisma.auctionTransaction.update({
       where: { id: w.transactionId },
       data: { status: 'SHIPPED', shippedAt: new Date() },
@@ -561,47 +534,6 @@ describe('payments', () => {
     expect(res.body.data.status).toBe('DISPUTED');
   });
 
-  it('POST /payments/connect/onboard', async () => {
-    hit('post', '/payments/connect/onboard');
-    const res = await request(app).post(api('/payments/connect/onboard')).set(auth(w.seller.token));
-    expect(res.status).toBe(200);
-    expect(res.body.data).toHaveProperty('url');
-  });
-
-  it('GET /payments/connect/status', async () => {
-    hit('get', '/payments/connect/status');
-    const res = await request(app).get(api('/payments/connect/status')).set(auth(w.seller.token));
-    expect(res.status).toBe(200);
-    expect(res.body.data).toHaveProperty('connected');
-  });
-
-  it('POST /payments/webhook', async () => {
-    hit('post', '/payments/webhook');
-    // Attach the intent id the handler looks the transaction up by.
-    await prisma.auctionTransaction.update({
-      where: { id: w.transactionId },
-      data: { stripePaymentIntentId: 'pi_test_conformance' },
-    });
-
-    const { default: Stripe } = await vi.importActual<typeof import('stripe')>('stripe');
-    const payload = JSON.stringify({
-      id: 'evt_test_conformance',
-      object: 'event',
-      type: 'payment_intent.succeeded',
-      data: { object: { id: 'pi_test_conformance', object: 'payment_intent' } },
-    });
-    const signature = Stripe.webhooks.generateTestHeaderString({
-      payload,
-      secret: process.env.STRIPE_WEBHOOK_SECRET!,
-    });
-
-    const res = await request(app)
-      .post(api('/payments/webhook'))
-      .set('stripe-signature', signature)
-      .set('Content-Type', 'application/json')
-      .send(payload);
-    expect(res.status).toBe(200);
-  });
 });
 
 // ---- notifications ----------------------------------------------------------------
@@ -757,10 +689,6 @@ describe('admin', () => {
 
   it('POST /admin/disputes/{disputeId}/resolve', async () => {
     hit('post', '/admin/disputes/{disputeId}/resolve');
-    await prisma.user.update({
-      where: { id: w.seller.id },
-      data: { stripeAccountId: 'acct_test_conformance', stripeOnboardingComplete: true },
-    });
     await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'DISPUTED' } });
     const dispute = await prisma.dispute.create({
       data: { transactionId: w.transactionId, raisedByUserId: w.buyer.id, reason: 'Item never arrived.' },

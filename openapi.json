@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "4.0.0",
+    "version": "5.0.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually."
   },
   "servers": [
@@ -2255,7 +2255,7 @@
         }
       }
     },
-    "/payments/create-intent": {
+    "/payments/{transactionId}/pay": {
       "post": {
         "tags": [
           "Payments"
@@ -2265,19 +2265,29 @@
             "bearerAuth": []
           }
         ],
-        "summary": "PKR is zero-decimal, so amounts are not multiplied by 100",
+        "summary": "Resolves synchronously against the self-built dummy gateway — see payment-gateway.service.ts for the test-card convention. A decline is a 200 with status PENDING, not an error.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateIntentRequest"
+                "$ref": "#/components/schemas/PayTransactionRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Stripe client secret",
+            "description": "Charged, or declined",
             "content": {
               "application/json": {
                 "schema": {
@@ -2288,7 +2298,7 @@
                       "const": true
                     },
                     "data": {
-                      "$ref": "#/components/schemas/PaymentIntent"
+                      "$ref": "#/components/schemas/PayResult"
                     }
                   },
                   "required": [
@@ -2320,6 +2330,16 @@
               }
             }
           },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found",
             "content": {
@@ -2343,15 +2363,20 @@
         }
       }
     },
-    "/payments/webhook": {
-      "post": {
+    "/payments/earnings": {
+      "get": {
         "tags": [
           "Payments"
         ],
-        "summary": "Stripe webhook. Needs the raw body, so it is mounted before express.json.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "A seller's dummy-ledger balance and the sales that built it",
         "responses": {
           "200": {
-            "description": "Acknowledged",
+            "description": "Ledger balance and entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -2362,7 +2387,7 @@
                       "const": true
                     },
                     "data": {
-                      "$ref": "#/components/schemas/WebhookAck"
+                      "$ref": "#/components/schemas/Earnings"
                     }
                   },
                   "required": [
@@ -2374,8 +2399,97 @@
               }
             }
           },
-          "400": {
-            "description": "Bad signature",
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments/{transactionId}/invoice": {
+      "get": {
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "The buyer, the seller, or an admin — LIFECYCLE-GAPS.md E3",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Invoice"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -2478,7 +2592,7 @@
             }
           },
           "409": {
-            "description": "Not in the COMPLETED state, no delivery address on file, or payout setup incomplete",
+            "description": "Not in the COMPLETED state, or no delivery address on file",
             "content": {
               "application/json": {
                 "schema": {
@@ -2704,124 +2818,6 @@
           },
           "409": {
             "description": "The transaction is not SHIPPED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/payments/connect/onboard": {
-      "post": {
-        "tags": [
-          "Payments"
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "summary": "Creates (or reuses) a Stripe Express account and returns a Stripe-hosted onboarding link",
-        "responses": {
-          "200": {
-            "description": "Onboarding link",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "const": true
-                    },
-                    "data": {
-                      "$ref": "#/components/schemas/ConnectOnboardingLink"
-                    }
-                  },
-                  "required": [
-                    "success",
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing, invalid or expired access token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Authenticated but the wrong role for this route",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/payments/connect/status": {
-      "get": {
-        "tags": [
-          "Payments"
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "summary": "Whether this seller has a connected payout account, and whether it can receive transfers yet",
-        "responses": {
-          "200": {
-            "description": "Connect account status",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "const": true
-                    },
-                    "data": {
-                      "$ref": "#/components/schemas/ConnectStatus"
-                    }
-                  },
-                  "required": [
-                    "success",
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing, invalid or expired access token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Authenticated but the wrong role for this route",
             "content": {
               "application/json": {
                 "schema": {
@@ -4241,13 +4237,13 @@
           "reason"
         ]
       },
-      "CreateIntentRequest": {
+      "PayTransactionRequest": {
         "type": "object",
         "properties": {
-          "transactionId": {
+          "cardNumber": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 128
+            "minLength": 12,
+            "maxLength": 24
           },
           "deliveryAddress": {
             "type": "string",
@@ -4261,7 +4257,7 @@
           }
         },
         "required": [
-          "transactionId",
+          "cardNumber",
           "deliveryAddress",
           "deliveryPhone"
         ]
@@ -5524,63 +5520,156 @@
         ],
         "additionalProperties": false
       },
-      "PaymentIntent": {
+      "PayResult": {
         "type": "object",
         "properties": {
-          "clientSecret": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+          "transactionId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "COMPLETED",
+              "PENDING"
             ]
-          }
-        },
-        "required": [
-          "clientSecret"
-        ],
-        "additionalProperties": false
-      },
-      "WebhookAck": {
-        "type": "object",
-        "properties": {
-          "received": {
-            "type": "boolean",
-            "const": true
-          }
-        },
-        "required": [
-          "received"
-        ],
-        "additionalProperties": false
-      },
-      "ConnectOnboardingLink": {
-        "type": "object",
-        "properties": {
-          "url": {
+          },
+          "lastPaymentError": {
             "type": "string"
           }
         },
         "required": [
-          "url"
+          "transactionId",
+          "status"
         ],
         "additionalProperties": false
       },
-      "ConnectStatus": {
+      "Earnings": {
         "type": "object",
         "properties": {
-          "connected": {
-            "type": "boolean"
+          "ledgerBalance": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
           },
-          "onboardingComplete": {
-            "type": "boolean"
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "transactionId": {
+                  "type": "string"
+                },
+                "auctionTitle": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              },
+              "required": [
+                "transactionId",
+                "auctionTitle",
+                "amount",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
-          "connected",
-          "onboardingComplete"
+          "ledgerBalance",
+          "entries"
+        ],
+        "additionalProperties": false
+      },
+      "Invoice": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "type": "string"
+          },
+          "invoiceNumber": {
+            "type": "string"
+          },
+          "auctionTitle": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "buyerName": {
+            "type": "string"
+          },
+          "buyerEmail": {
+            "type": "string"
+          },
+          "sellerName": {
+            "type": "string"
+          },
+          "sellerEmail": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "status": {
+            "$ref": "#/components/schemas/TransactionStatus"
+          },
+          "paymentReference": {
+            "type": "string"
+          },
+          "deliveryAddress": {
+            "type": "string"
+          },
+          "deliveryPhone": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "shippedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "disputeStatus": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "RESOLVED_REFUNDED",
+              "RESOLVED_RELEASED"
+            ]
+          },
+          "disputeReason": {
+            "type": "string"
+          },
+          "disputeResolutionNote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "transactionId",
+          "invoiceNumber",
+          "auctionTitle",
+          "category",
+          "buyerName",
+          "buyerEmail",
+          "sellerName",
+          "sellerEmail",
+          "amount",
+          "status",
+          "createdAt"
         ],
         "additionalProperties": false
       },

@@ -306,13 +306,45 @@ export const PaginatedSellerSales = z
   .object({ items: z.array(SellerSaleDto), nextCursor: z.string().nullable() })
   .meta({ id: 'PaginatedSellerSales' });
 
-export const ConnectOnboardingLinkDto = z
-  .object({ url: z.string() })
-  .meta({ id: 'ConnectOnboardingLink' });
+/** GET /payments/earnings — a seller's dummy-ledger balance and the sales that built it. */
+export const EarningsDto = z
+  .object({
+    ledgerBalance: z.number().int(),
+    entries: z.array(
+      z.object({
+        transactionId: z.string(),
+        auctionTitle: z.string(),
+        amount: z.number().int(),
+        createdAt: isoDateTime,
+      }),
+    ),
+  })
+  .meta({ id: 'Earnings' });
 
-export const ConnectStatusDto = z
-  .object({ connected: z.boolean(), onboardingComplete: z.boolean() })
-  .meta({ id: 'ConnectStatus' });
+/** LIFECYCLE-GAPS.md E3 — GET /payments/{transactionId}/invoice, derived from the transaction
+ * row rather than a separately stored document. */
+export const InvoiceDto = z
+  .object({
+    transactionId: z.string(),
+    invoiceNumber: z.string(),
+    auctionTitle: z.string(),
+    category: z.string(),
+    buyerName: z.string(),
+    buyerEmail: z.string(),
+    sellerName: z.string(),
+    sellerEmail: z.string(),
+    amount: z.number().int(),
+    status: TransactionStatus,
+    paymentReference: z.string().optional(),
+    deliveryAddress: z.string().optional(),
+    deliveryPhone: z.string().optional(),
+    createdAt: isoDateTime,
+    shippedAt: isoDateTime.optional(),
+    disputeStatus: z.enum(['OPEN', 'RESOLVED_REFUNDED', 'RESOLVED_RELEASED']).optional(),
+    disputeReason: z.string().optional(),
+    disputeResolutionNote: z.string().optional(),
+  })
+  .meta({ id: 'Invoice' });
 
 /** GET /admin/disputes — one open dispute a buyer has raised, awaiting resolution. */
 export const AdminDisputeDto = z
@@ -487,11 +519,15 @@ export const NotificationReadDto = z
   .object({ id: z.string(), isRead: z.literal(true) })
   .meta({ id: 'NotificationRead' });
 
-export const PaymentIntentDto = z
-  .object({ clientSecret: z.string().nullable() })
-  .meta({ id: 'PaymentIntent' });
-
-export const WebhookAckDto = z.object({ received: z.literal(true) }).meta({ id: 'WebhookAck' });
+/** POST /payments/{transactionId}/pay — resolves synchronously; a decline is an ordinary
+ * outcome (BV-006), not a request error, so it is a 200 with status PENDING, not a 4xx. */
+export const PayResultDto = z
+  .object({
+    transactionId: z.string(),
+    status: z.enum(['COMPLETED', 'PENDING']),
+    lastPaymentError: z.string().optional(),
+  })
+  .meta({ id: 'PayResult' });
 
 // BV-029: cursor-paginated list responses. One per endpoint's item shape, not one shared
 // generic $ref -- zod-openapi needs a distinct schema id per named type, and each of these

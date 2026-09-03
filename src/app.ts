@@ -24,6 +24,30 @@ import { document } from './openapi/document.js';
 import { AppError } from './errors/app-error.js';
 import { globalRateLimit } from './middleware/rate-limit.js';
 
+/**
+ * Every module router, paired with the prefix it mounts under.
+ *
+ * Exported so scripts/verify-routes.ts can build the served-route list from this explicit
+ * mapping plus each router's own flat `.stack` (still a literal `route.path` per route in
+ * Express 5) instead of reverse-engineering the mount prefix from the router layer's own
+ * internals. Express 5's path-to-regexp v8 rewrite replaced the old layer.regexp (a real
+ * RegExp whose source could be parsed back into a literal prefix) with an opaque compiled
+ * matcher function that exposes no string form at all — there is no longer anything to parse.
+ * The prefix was always known statically here; this just stops asking the router to hand back
+ * information it no longer carries.
+ */
+export const routeMounts: Array<[string, express.Router]> = [
+  ['/api/v1/auth', authRoutes],
+  ['/api/v1/auctions', auctionRoutes],
+  ['/api/v1/listings', listingRoutes],
+  ['/api/v1/watchlist', watchlistRoutes],
+  ['/api/v1/payments', paymentRoutes],
+  ['/api/v1/admin', adminRoutes],
+  ['/api/v1/notifications', notificationRoutes],
+  ['/api/v1/reviews', reviewRoutes],
+  ['/api/v1/settings', settingsRoutes],
+];
+
 export function createApp() {
   const app = express();
 
@@ -49,7 +73,6 @@ export function createApp() {
   );
   app.use(helmet());
   app.use(globalRateLimit);
-  app.use('/api/v1/payments/webhook', express.raw({ type: 'application/json' }));
   app.use(express.json({ limit: '1mb' }));
   // Silent under test: the conformance suite makes a few hundred requests and the access
   // log buries the actual assertion output, in CI especially.
@@ -122,15 +145,7 @@ export function createApp() {
     });
   }));
 
-  app.use('/api/v1/auth', authRoutes);
-  app.use('/api/v1/auctions', auctionRoutes);
-  app.use('/api/v1/listings', listingRoutes);
-  app.use('/api/v1/watchlist', watchlistRoutes);
-  app.use('/api/v1/payments', paymentRoutes);
-  app.use('/api/v1/admin', adminRoutes);
-  app.use('/api/v1/notifications', notificationRoutes);
-  app.use('/api/v1/reviews', reviewRoutes);
-  app.use('/api/v1/settings', settingsRoutes);
+  for (const [prefix, router] of routeMounts) app.use(prefix, router);
 
   app.use(notFound);
   app.use(errorHandler);
