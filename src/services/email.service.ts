@@ -466,14 +466,14 @@ export async function sendBidPlacedEmail(
 export async function sendPaymentCompletedEmail(
   winner: { email: string; name: string },
   seller: { email: string; name: string },
-  details: { auctionTitle: string; finalAmount: number },
+  details: { auctionTitle: string; finalAmount: number; deliveryAddress: string; deliveryPhone: string },
 ): Promise<void> {
   if (!(await alertsEnabled())) return;
   const pkr = (n: number) => `PKR ${n.toLocaleString()}`;
 
   const winnerBody = `
     ${h1('Payment confirmed')}
-    ${p(`Hi ${winner.name}, your payment has been received. The seller will now arrange delivery.`)}
+    ${p(`Hi ${winner.name}, your payment has been received. We'll email you again once the seller marks it shipped.`)}
     ${divider()}
     <table width="100%" cellpadding="0" cellspacing="0">
       ${infoRow('Item', details.auctionTitle)}
@@ -481,20 +481,24 @@ export async function sendPaymentCompletedEmail(
       ${infoRow('Seller', seller.name)}
     </table>
     ${divider()}
-    ${p('Thank you for using BidVault. Keep an eye on your email for delivery updates from the seller.')}
+    ${p('Thank you for using BidVault.')}
   `;
 
+  // E4/A4: the platform previously collected no delivery contact data at all, so this email
+  // could only say "arrange delivery" and leave the two parties to find each other off-platform.
+  // deliveryAddress/deliveryPhone are collected at payment time now (BV-047) -- give the seller
+  // the actual address here rather than the old hollow instruction.
   const sellerBody = `
     ${h1('Payment received')}
-    ${p(`Hi ${seller.name}, the buyer has completed payment for your item.`)}
+    ${p(`Hi ${seller.name}, the buyer has completed payment for your item. Ship it to the address below, then mark it shipped from My Sales.`)}
     ${divider()}
     <table width="100%" cellpadding="0" cellspacing="0">
       ${infoRow('Item', details.auctionTitle)}
       ${infoRow('Amount', pkr(details.finalAmount))}
       ${infoRow('Buyer', winner.name)}
+      ${infoRow('Ship to', details.deliveryAddress)}
+      ${infoRow('Phone', details.deliveryPhone)}
     </table>
-    ${divider()}
-    ${p('Please arrange delivery or handover with the buyer at your earliest convenience.')}
   `;
 
   await Promise.all([

@@ -90,6 +90,15 @@ export async function markShipped(transactionId: string, sellerId: string): Prom
       data: { status: 'SHIPPED', shippedAt: new Date() },
     });
 
+    await tx.notification.create({
+      data: {
+        userId: row.winnerId,
+        type: 'ITEM_SHIPPED',
+        title: 'Your item has shipped',
+        message: `"${full.auction.title}" is on its way. Confirm receipt once it arrives, or report a problem if something's wrong.`,
+      },
+    });
+
     return { kind: 'ok' as const, auctionTitle: full.auction.title, buyer: full.winner };
   });
 
@@ -147,6 +156,15 @@ export async function confirmDelivery(
       data: { ledgerBalance: { increment: row.finalAmount } },
     });
 
+    await tx.notification.create({
+      data: {
+        userId: row.sellerId,
+        type: 'PAYOUT_RECEIVED',
+        title: "You've been paid",
+        message: `PKR ${row.finalAmount.toLocaleString()} for "${full.auction.title}" has been added to your earnings.`,
+      },
+    });
+
     return {
       kind: 'ok' as const,
       finalAmount: row.finalAmount,
@@ -197,6 +215,15 @@ export async function raiseDispute(
     await tx.auctionTransaction.update({ where: { id: row.id }, data: { status: 'DISPUTED' } });
     await tx.dispute.create({
       data: { transactionId: row.id, raisedByUserId: buyerId, reason },
+    });
+
+    await tx.notification.create({
+      data: {
+        userId: row.sellerId,
+        type: 'DISPUTE_RAISED',
+        title: 'A dispute was raised',
+        message: `The buyer reported a problem with "${full.auction.title}": "${reason}"`,
+      },
     });
 
     return { kind: 'ok' as const, auctionTitle: full.auction.title, seller: full.seller };
@@ -276,6 +303,36 @@ export async function resolveDispute(
       // There is nothing to reverse.
       await tx.auctionTransaction.update({ where: { id: dispute.transactionId }, data: { status: 'REFUNDED' } });
     }
+
+    const title = dispute.transaction.auction.title;
+    await tx.notification.createMany({
+      data:
+        resolution === 'REFUND'
+          ? [
+              {
+                userId: dispute.transaction.winnerId,
+                type: 'DISPUTE_RESOLVED',
+                title: 'Dispute resolved — refunded',
+                message: `Your dispute for "${title}" was resolved. You've been refunded.`,
+              },
+              {
+                userId: dispute.transaction.sellerId,
+                type: 'DISPUTE_RESOLVED',
+                title: 'Dispute resolved — refunded',
+                message: `The dispute for "${title}" was resolved in the buyer's favour. No payout will be issued.`,
+              },
+            ]
+          : [
+              {
+                userId: dispute.transaction.winnerId,
+                type: 'DISPUTE_RESOLVED',
+                title: 'Dispute resolved',
+                message: `Your dispute for "${title}" was resolved in the seller's favour.`,
+              },
+            ],
+      // RELEASE's seller-facing notification comes from confirmDelivery() below (the same
+      // payout notification any non-disputed delivery gets) rather than a second one here.
+    });
 
     return {
       kind: 'ok' as const,

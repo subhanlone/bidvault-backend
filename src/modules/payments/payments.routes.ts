@@ -266,7 +266,12 @@ router.post(
     dispatchEmail(sendPaymentCompletedEmail(
       { email: outcome.full.winner.email, name: outcome.full.winner.name },
       { email: outcome.full.seller.email, name: outcome.full.seller.name },
-      { auctionTitle: outcome.full.auction.title, finalAmount: outcome.full.finalAmount },
+      {
+        auctionTitle: outcome.full.auction.title,
+        finalAmount: outcome.full.finalAmount,
+        deliveryAddress: outcome.full.deliveryAddress!,
+        deliveryPhone: outcome.full.deliveryPhone!,
+      },
     ), `payment completed (${transactionId})`);
 
     ok(res, { transactionId, status: 'COMPLETED' });
