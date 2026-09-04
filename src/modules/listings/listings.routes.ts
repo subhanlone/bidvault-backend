@@ -407,6 +407,15 @@ router.post(
   }),
 );
 
+// BV-049: a few hundred pending listings (plausible after a holiday or an outage, and made
+// more likely by the absence of any review SLA -- see D1/BV-040) turned this into hundreds of
+// serial transactions inside one HTTP request, long enough for Railway's request timeout or
+// the client's own fetch to cut the connection partway through. The work already done commits
+// regardless (each approval is its own transaction), but the admin had no way to tell how far
+// it got, and no way to resume without guessing. Capped per call; the client loops on
+// `remaining` for a full backlog.
+const APPROVE_ALL_BATCH_SIZE = 50;
+
 router.post(
   '/approve-all',
   requireAuth(['ADMIN']),
@@ -414,6 +423,8 @@ router.post(
     const pending = await prisma.listing.findMany({
       where: { status: 'PENDING' },
       include: { seller: true },
+      orderBy: { submittedAt: 'asc' },
+      take: APPROVE_ALL_BATCH_SIZE,
     });
 
     const io = req.app.get('io') as Server | undefined;
@@ -433,7 +444,12 @@ router.post(
       }
     }
 
-    ok(res, { approved, failed: failures.length, failures });
+    // Queried fresh rather than derived from pending.length - approved - failures.length: a
+    // ListingStateError means the row's status changed under us (a concurrent single approve/
+    // reject), not that it is still sitting PENDING, so subtraction would double-count it.
+    const remaining = await prisma.listing.count({ where: { status: 'PENDING' } });
+
+    ok(res, { approved, failed: failures.length, failures, remaining });
   }),
 );
 

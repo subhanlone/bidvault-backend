@@ -520,6 +520,9 @@ export const BulkApprovalDto = z
     approved: z.number().int(),
     failed: z.number().int(),
     failures: z.array(z.object({ listingId: z.string(), error: z.string() })),
+    // BV-049: one call processes at most 50 -- still-PENDING count after this batch, so the
+    // caller knows whether to loop again rather than guessing from a cut-off connection.
+    remaining: z.number().int(),
   })
   .meta({ id: 'BulkApproval' });
 
