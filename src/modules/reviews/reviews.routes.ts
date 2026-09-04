@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
@@ -44,16 +45,28 @@ router.post(
       return;
     }
 
-    const review = await prisma.sellerReview.create({
-      data: {
-        transactionId,
-        auctionId: tx.auctionId,
-        buyerId,
-        sellerId: tx.sellerId,
-        stars,
-        comment: comment ?? null,
-      },
-    });
+    // BV-043: the pre-check above gives the good message on the common path, but a concurrent
+    // duplicate submit (a double-click on a slow connection) can still win the race between
+    // that read and this write -- this is the authoritative fallback for it.
+    let review;
+    try {
+      review = await prisma.sellerReview.create({
+        data: {
+          transactionId,
+          auctionId: tx.auctionId,
+          buyerId,
+          sellerId: tx.sellerId,
+          stars,
+          comment: comment ?? null,
+        },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        fail(res, "You've already reviewed this seller for this purchase.", 409);
+        return;
+      }
+      throw err;
+    }
 
     const buyer = await prisma.user.findUnique({ where: { id: buyerId }, select: { name: true } });
 
