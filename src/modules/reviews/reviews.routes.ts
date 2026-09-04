@@ -101,11 +101,19 @@ router.get(
       }),
       prisma.sellerReview.findMany({
         where: { sellerId },
-        include: { buyer: { select: { name: true } } },
         orderBy: { createdAt: 'desc' },
         take: 50,
       }),
     ]);
+
+    // BV-039: this route is unauthenticated, same problem as the public bid feed -- mask to a
+    // stable per-seller pseudonym rather than the reviewer's real name. Not paginated (a fixed
+    // top-50), so a rank computed from just this page stays stable for as long as this same
+    // window is being shown.
+    const rank = new Map<string, number>();
+    for (const r of [...reviews].reverse()) {
+      if (!rank.has(r.buyerId)) rank.set(r.buyerId, rank.size + 1);
+    }
 
     ok(res, {
       sellerId,
@@ -115,7 +123,7 @@ router.get(
         reviewId: r.id,
         stars: r.stars,
         comment: r.comment,
-        buyerName: r.buyer.name,
+        buyerName: `Reviewer ${rank.get(r.buyerId)}`,
         createdAt: r.createdAt.toISOString(),
       })),
     });

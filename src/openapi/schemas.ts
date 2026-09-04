@@ -147,6 +147,24 @@ export const BidDto = z
   })
   .meta({ id: 'Bid' });
 
+// BV-039: GET /:auctionId/bids is unauthenticated and reaches anonymous visitors, who could
+// otherwise enumerate exactly who bid, how much and when, and correlate one person's bidding
+// across the whole platform via buyerId. Unlike BidDto (used by the bidder's own POST response
+// and by GET /auctions/mine/bids, both already scoped to the caller's own identity), the public
+// feed carries no buyerId at all and masks the name to a stable per-auction pseudonym --
+// `isMine` is computed server-side from the caller's own token, when one is present, so the
+// live-bidding screen can still tell the viewer's own bids apart without needing their real id.
+export const PublicBidDto = z
+  .object({
+    bidId: z.string(),
+    auctionId: z.string(),
+    isMine: z.boolean(),
+    buyerName: z.string(),
+    amount: z.number().int(),
+    timestamp: isoDateTime,
+  })
+  .meta({ id: 'PublicBid' });
+
 export const PlatformStatsDto = z
   .object({
     userCount: z.number().int(),
@@ -243,6 +261,8 @@ export const SellerReviewsDto = z
     /** Mean stars to one decimal, or null when the seller has no reviews. */
     average: z.number().nullable(),
     count: z.number().int(),
+    // BV-039: this route is unauthenticated too — buyerName is a stable per-seller pseudonym
+    // ("Reviewer N"), not the reviewer's real name.
     reviews: z.array(ReviewDto.extend({ buyerName: z.string() })),
   })
   .meta({ id: 'SellerReviews' });
@@ -534,7 +554,7 @@ export const PayResultDto = z
 // really is a different item shape.
 export const PaginatedAuctionsDto = paginated('PaginatedAuctions', AuctionDto);
 export const PaginatedBidsWithAuctionDto = paginated('PaginatedBidsWithAuction', BidWithAuctionDto);
-export const PaginatedBidsDto = paginated('PaginatedBids', BidDto);
+export const PaginatedBidsDto = paginated('PaginatedBids', PublicBidDto);
 export const PaginatedListingsDto = paginated('PaginatedListings', ListingDto);
 
 export type UserDtoType = z.infer<typeof UserDto>;

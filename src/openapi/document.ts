@@ -167,7 +167,13 @@ const documentInput = {
     // BV-015: POST /listings' `category` narrowed from free text to an enum of the seven keys
     // validateCategoryAttributes recognises -- previously an unrecognised category silently
     // discarded every attribute the seller entered instead of being rejected.
-    version: '6.0.0',
+    // BV-039: GET /auctions/{id}/bids and GET /reviews/seller/{id} are both unauthenticated and
+    // were publishing full bidder/reviewer identity to anonymous visitors. buyerId dropped from
+    // the bids response; buyerName on both routes is now a stable pseudonym ("Bidder N" /
+    // "Reviewer N") instead of the real name; the bids response gains `isMine`, computed
+    // server-side from the caller's own token when one is present. Full identity is unaffected
+    // on GET /auctions/mine/bids (the caller's own bids only) and the bid-placement response.
+    version: '7.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
