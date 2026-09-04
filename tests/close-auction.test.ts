@@ -136,6 +136,26 @@ describe('closeAuction', () => {
     });
   });
 
+  // ---- BV-037 -----------------------------------------------------------------------------
+
+  it('breaks a tie between equal bids by awarding the earliest one', async () => {
+    // The increment rule alone cannot produce equal amounts, but a seeded/admin-corrected bid
+    // can (prisma/seed.ts and scripts/seed-demo-auctions.ts both write bids directly) -- so
+    // this constructs the tie explicitly rather than relying on a timing race.
+    const id = await endingAuction({ reservePrice: null, topBid: null });
+    await prisma.bid.create({
+      data: { auctionId: id, buyerId: w.buyer.id, amount: 5_000, createdAt: new Date(Date.now() - 60_000) },
+    });
+    await prisma.bid.create({
+      data: { auctionId: id, buyerId: w.otherBuyer.id, amount: 5_000, createdAt: new Date(Date.now() - 30_000) },
+    });
+
+    const result = await closeAuction(id);
+
+    expect(result.sold).toBe(true);
+    expect(await transactionFor(id)).toMatchObject({ winnerId: w.buyer.id, finalAmount: 5_000 });
+  });
+
   it('sells at exactly the reserve — the floor is inclusive', async () => {
     // The copy says "won't close below this amount", so equal must sell. An off-by-one here
     // would refuse a sale the seller agreed to.

@@ -326,7 +326,7 @@ export async function sendListingRejectedEmail(
 
 export async function sendAuctionEndedEmail(
   seller: { email: string; name: string },
-  auction: { title: string; finalBid: number; bidCount: number },
+  auction: { title: string; bidCount: number },
   winner: { email: string; name: string; amount: number } | null,
   notifyWinner = true,
 ): Promise<void> {
@@ -354,7 +354,6 @@ export async function sendAuctionEndedEmail(
       ${divider()}
       <table width="100%" cellpadding="0" cellspacing="0">
         ${infoRow('Item', auction.title)}
-        ${infoRow('Final bid', pkr(auction.finalBid))}
         ${infoRow('Total bids', String(auction.bidCount))}
         ${infoRow('Result', 'No bids received')}
       </table>
