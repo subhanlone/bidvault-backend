@@ -221,7 +221,12 @@ router.post(
         if (row.status !== 'ACTIVE') throw new BidError(422, 'Bidding is closed for this auction.');
         if (new Date(row.endTime).getTime() <= Date.now()) throw new BidError(422, 'Auction has already ended.');
 
-        const minAllowed = row.currentBid + row.minIncrement;
+        // BV-013: currentBid is seeded to startPrice at creation, so "+ minIncrement" made the
+        // advertised starting price itself unbiddable -- the real floor was one increment above
+        // what both the seller set and the buyer was shown. The first bid is now allowed at the
+        // start price, exactly like eBay; every bid after that must clear the previous one by a
+        // full increment as before.
+        const minAllowed = row.bidCount === 0 ? row.currentBid : row.currentBid + row.minIncrement;
         if (amount < minAllowed) {
           throw new BidError(422, `Bid must be at least PKR ${minAllowed.toLocaleString()}.`);
         }
