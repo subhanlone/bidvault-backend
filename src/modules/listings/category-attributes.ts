@@ -64,6 +64,13 @@ function buildCategoryAttributeSchemas(): Record<string, z.ZodTypeAny> {
   };
 }
 
+// BV-015: the request schema's `category` enum is sourced from these same seven keys (see
+// requests.ts) so the two cannot drift -- previously category was free text and anything not
+// an exact, case-sensitive match silently fell through validateCategoryAttributes to `{}`,
+// discarding every attribute the seller entered with a 201 and no error.
+const CATEGORY_KEYS = Object.keys(buildCategoryAttributeSchemas());
+export const CATEGORIES = CATEGORY_KEYS as [string, ...string[]];
+
 export type CategoryAttributeValidationResult =
   | { success: true; data: Record<string, unknown> }
   | { success: false; error: string };

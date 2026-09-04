@@ -164,7 +164,10 @@ const documentInput = {
     // /payments/connect/onboard and /connect/status removed — no seller onboarding step at
     // all. Additive: GET /payments/earnings (a seller's dummy-ledger balance) and
     // GET /payments/{transactionId}/invoice (LIFECYCLE-GAPS.md E3).
-    version: '5.0.0',
+    // BV-015: POST /listings' `category` narrowed from free text to an enum of the seven keys
+    // validateCategoryAttributes recognises -- previously an unrecognised category silently
+    // discarded every attribute the seller entered instead of being rejected.
+    version: '6.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +

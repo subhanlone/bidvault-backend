@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { strictEmail, lookupEmail } from '../config/email.js';
 import { isAcceptablePassword } from '../security/password-policy.js';
+// Side-effect-free (only imports zod), same as this module -- safe for api:contract codegen.
+import { CATEGORIES } from '../modules/listings/category-attributes.js';
 
 /**
  * Every request body the API accepts.
@@ -120,7 +122,10 @@ export const deleteAccountSchema = z
 export const submitListingSchema = z
   .object({
     title: z.string().trim().min(3).max(150),
-    category: z.string().trim().min(2).max(100),
+    // BV-015: was free text, so an unrecognised category (a typo, a rename, a direct API
+    // call) silently discarded every attribute the seller entered. Sourced from the same
+    // constant validateCategoryAttributes uses, so the two cannot drift apart.
+    category: z.enum(CATEGORIES),
     condition: z.enum(['NEW', 'LIKE_NEW', 'USED']),
     description: z.string().trim().min(10).max(5000),
     startPrice: z.coerce.number().int().positive().max(MAX_MONEY),
