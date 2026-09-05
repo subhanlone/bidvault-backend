@@ -5,6 +5,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import type { Server } from 'socket.io';
 
 const mail = vi.hoisted(() => ({ send: vi.fn(async () => ({ data: { id: 'email_test' }, error: null })) }));
 
@@ -19,6 +20,14 @@ const { prisma } = await import('../src/db/prisma.js');
 const { redisConnection } = await import('../src/infra/redis.js');
 const { takeViolations } = await import('../src/middleware/response-contract.js');
 const { seedWorld } = await import('./helpers/world.js');
+const { takedownListing } = await import('../src/services/auction-control.service.js');
+
+/** Same minimal shape cancelAuction needs -- see auction-cancellation.test.ts. */
+function mockIo() {
+  const emit = vi.fn();
+  const to = vi.fn(() => ({ emit }));
+  return { io: { to } as unknown as Server, to, emit };
+}
 
 type World = Awaited<ReturnType<typeof seedWorld>>;
 
@@ -104,5 +113,19 @@ describe('admin takedown', () => {
       .set(auth(w.seller.token))
       .send({ reason: 'Trying anyway.' });
     expect(res.status).toBe(403);
+  });
+
+  // The HTTP route above doesn't set `io` on the test app, so it can't observe the socket side
+  // of cancelAuction()'s fix (see auction-cancellation.test.ts) -- calling takedownListing()
+  // directly with a mock Server confirms it forwards io through to the cancel it triggers.
+  it('forwards io through to the underlying cancelAuction(), which emits auction:cancelled', async () => {
+    const listingId = (await prisma.auction.findUniqueOrThrow({ where: { id: w.liveAuctionId } })).listingId;
+    const { io, to, emit } = mockIo();
+
+    const result = await takedownListing(listingId, w.admin.id, 'Counterfeit item reported.', io);
+
+    expect(result.kind).toBe('ok');
+    expect(to).toHaveBeenCalledWith(`auction:${w.liveAuctionId}`);
+    expect(emit).toHaveBeenCalledWith('auction:cancelled', expect.objectContaining({ auctionId: w.liveAuctionId }));
   });
 });

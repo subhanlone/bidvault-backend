@@ -31,6 +31,14 @@ export function invalidateUserStatusCache(userId: string): void {
 
 export type SuspendUserResult = { kind: 'ok' } | { kind: 'not-found' } | { kind: 'self' } | { kind: 'already-suspended' };
 
+/**
+ * Deliberately does not touch this seller's live auctions -- LIFECYCLE-IMPLEMENTATION-PLAN.md's
+ * C2 section calls this out explicitly as "a judgment call worth a comment, not a silent side
+ * effect." Auto-cancelling on suspend would be a surprising, hard-to-reverse side effect bundled
+ * into an otherwise-reversible action (reinstate undoes the suspension, but not an auction it
+ * triggered cancelling and notifying bidders about). An admin who judges a specific live auction
+ * needs stopping too can still cancel it separately via cancelAuction()'s admin path (C4).
+ */
 export async function suspendUser(
   userId: string,
   adminUserId: string,

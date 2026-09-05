@@ -1,4 +1,5 @@
 import { Prisma, type Listing } from '@prisma/client';
+import type { Server } from 'socket.io';
 import { prisma } from '../db/prisma.js';
 import { getPlatformSettings } from './settings.service.js';
 import { generateListingCode } from '../modules/listings/listings.routes.js';
@@ -36,6 +37,7 @@ export type CancelAuctionResult =
 export async function cancelAuction(
   auctionId: string,
   actor: { userId: string; isAdmin: boolean; reason: string },
+  io?: Server,
 ): Promise<CancelAuctionResult> {
   const outcome = await prisma.$transaction(async (tx) => {
     const [row] = await tx.$queryRaw<Array<{ id: string; sellerId: string; status: string; bidCount: number; title: string }>>`
@@ -107,6 +109,18 @@ export async function cancelAuction(
   if (outcome.kind !== 'ok') return { kind: outcome.kind };
 
   await cancelScheduledJob(auctionId);
+  // LIFECYCLE-IMPLEMENTATION-PLAN.md's B4/C4 section calls for a live socket notification
+  // ("bid:cancelled socket event") alongside the DB notification + email above -- named
+  // `auction:cancelled` here instead, matching this codebase's own convention of naming
+  // real-time events after the entity that changed (listing:approved, listing:submitted), not
+  // literally following the plan's shorthand. Reaches anyone actively subscribed to this
+  // auction's room (BuyerLiveBidding, AdminAuctionMonitor) regardless of which path cancelled
+  // it -- a bid-free auction can still have a viewer with the page open.
+  io?.to(`auction:${auctionId}`).emit('auction:cancelled', {
+    auctionId,
+    title: outcome.title,
+    reason: actor.reason,
+  });
   dispatchEmail(
     sendAuctionCancelledEmail(
       outcome.seller,
@@ -145,6 +159,19 @@ export async function voidOverduePayment(transactionId: string): Promise<VoidOve
     if (row.status !== 'PENDING') return { kind: 'wrong-state' as const };
 
     await tx.auctionTransaction.update({ where: { id: row.id }, data: { status: 'VOIDED', lastPaymentError: null } });
+
+    // LIFECYCLE-IMPLEMENTATION-PLAN.md's A3 section: "writes an AuditLog row" -- system-initiated
+    // (actorUserId null, same as any worker sweep), distinct action from the admin's own manual
+    // TRANSACTION_VOIDED so the two can be told apart later.
+    await tx.auditLog.create({
+      data: {
+        actorUserId: null,
+        action: 'TRANSACTION_VOIDED_OVERDUE',
+        entityType: 'AuctionTransaction',
+        entityId: row.id,
+        metadata: { reason: 'Payment deadline exceeded' },
+      },
+    });
 
     const full = await tx.auctionTransaction.findUniqueOrThrow({
       where: { id: row.id },
@@ -377,6 +404,7 @@ export async function takedownListing(
   listingId: string,
   adminUserId: string,
   reason: string,
+  io?: Server,
 ): Promise<TakedownListingResult> {
   const listing = await prisma.listing.findUnique({
     where: { id: listingId },
@@ -407,7 +435,7 @@ export async function takedownListing(
   });
 
   if (listing.auction?.status === 'ACTIVE') {
-    await cancelAuction(listing.auction.id, { userId: adminUserId, isAdmin: true, reason: `Listing removed: ${reason}` });
+    await cancelAuction(listing.auction.id, { userId: adminUserId, isAdmin: true, reason: `Listing removed: ${reason}` }, io);
   }
 
   dispatchEmail(

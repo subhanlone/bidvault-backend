@@ -4,6 +4,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import type { Server } from 'socket.io';
 
 const mail = vi.hoisted(() => ({ send: vi.fn(async () => ({ data: { id: 'email_test' }, error: null })) }));
 
@@ -18,6 +19,15 @@ const { prisma } = await import('../src/db/prisma.js');
 const { redisConnection } = await import('../src/infra/redis.js');
 const { takeViolations } = await import('../src/middleware/response-contract.js');
 const { seedWorld } = await import('./helpers/world.js');
+const { cancelAuction } = await import('../src/services/auction-control.service.js');
+
+/** cancelAuction only ever calls `.to(room).emit(event, payload)` — this is the whole surface
+ * it needs from a real Socket.IO server, so the mock only needs to cover that shape. */
+function mockIo() {
+  const emit = vi.fn();
+  const to = vi.fn(() => ({ emit }));
+  return { io: { to } as unknown as Server, to, emit };
+}
 
 type World = Awaited<ReturnType<typeof seedWorld>>;
 
@@ -166,5 +176,45 @@ describe('admin cancels any auction (C4)', () => {
       .set(auth(w.admin.token))
       .send({ reason: 'Too late.' });
     expect(res.status).toBe(409);
+  });
+});
+
+// The HTTP routes above don't set `io` on the test app, so they can't observe the socket side
+// of the fix -- these call cancelAuction() directly with a mock Server instead. Real-time
+// notice to anyone with the auction open (LIFECYCLE-IMPLEMENTATION-PLAN.md's B4/C4 section).
+describe('real-time cancellation notice', () => {
+  it('emits auction:cancelled to the auction room on the seller path', async () => {
+    const { auction } = await bidFreeAuction(w.seller.id, 'TEST-CANCEL-SOCKET-1');
+    const { io, to, emit } = mockIo();
+
+    const result = await cancelAuction(
+      auction.id,
+      { userId: w.seller.id, isAdmin: false, reason: 'Testing the socket notice.' },
+      io,
+    );
+
+    expect(result.kind).toBe('ok');
+    expect(to).toHaveBeenCalledWith(`auction:${auction.id}`);
+    expect(emit).toHaveBeenCalledWith('auction:cancelled', expect.objectContaining({ auctionId: auction.id }));
+  });
+
+  it('emits auction:cancelled to the auction room on the admin path', async () => {
+    const { io, to, emit } = mockIo();
+
+    const result = await cancelAuction(
+      w.liveAuctionId,
+      { userId: w.admin.id, isAdmin: true, reason: 'Testing the socket notice.' },
+      io,
+    );
+
+    expect(result.kind).toBe('ok');
+    expect(to).toHaveBeenCalledWith(`auction:${w.liveAuctionId}`);
+    expect(emit).toHaveBeenCalledWith('auction:cancelled', expect.objectContaining({ auctionId: w.liveAuctionId }));
+  });
+
+  it('does not throw when no io is supplied (e.g. a caller that never wires one up)', async () => {
+    const { auction } = await bidFreeAuction(w.seller.id, 'TEST-CANCEL-SOCKET-2');
+    const result = await cancelAuction(auction.id, { userId: w.seller.id, isAdmin: false, reason: 'No io supplied.' });
+    expect(result.kind).toBe('ok');
   });
 });

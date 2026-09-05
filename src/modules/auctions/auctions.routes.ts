@@ -379,11 +379,12 @@ router.post(
   requireAuth(['SELLER']),
   validateBody(cancelAuctionSchema),
   asyncHandler(async (req, res) => {
+    const io = req.app.get('io') as Server | undefined;
     const result = await cancelAuction(req.params.auctionId, {
       userId: req.auth!.userId,
       isAdmin: false,
       reason: req.body.reason,
-    });
+    }, io);
     if (result.kind !== 'ok') {
       const [message, status] = CANCEL_ERROR_STATUS[result.kind];
       fail(res, message, status);

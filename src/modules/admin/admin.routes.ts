@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Server } from 'socket.io';
 import { Prisma, type TransactionStatus } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
@@ -288,11 +289,12 @@ router.post(
   requireAuth(['ADMIN']),
   validateBody(cancelAuctionSchema),
   asyncHandler(async (req, res) => {
+    const io = req.app.get('io') as Server | undefined;
     const result = await cancelAuction(req.params.auctionId, {
       userId: req.auth!.userId,
       isAdmin: true,
       reason: req.body.reason,
-    });
+    }, io);
     if (result.kind !== 'ok') {
       const [message, status] = ADMIN_CANCEL_ERROR_STATUS[result.kind];
       fail(res, message, status);
@@ -315,7 +317,8 @@ router.post(
   requireAuth(['ADMIN']),
   validateBody(takedownListingSchema),
   asyncHandler(async (req, res) => {
-    const result = await takedownListing(req.params.listingId, req.auth!.userId, req.body.reason);
+    const io = req.app.get('io') as Server | undefined;
+    const result = await takedownListing(req.params.listingId, req.auth!.userId, req.body.reason, io);
     if (result.kind !== 'ok') {
       const [message, status] = TAKEDOWN_ERROR_STATUS[result.kind];
       fail(res, message, status);
