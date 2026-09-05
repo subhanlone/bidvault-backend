@@ -173,7 +173,19 @@ const documentInput = {
     // "Reviewer N") instead of the real name; the bids response gains `isMine`, computed
     // server-side from the caller's own token when one is present. Full identity is unaffected
     // on GET /auctions/mine/bids (the caller's own bids only) and the bid-placement response.
-    version: '7.0.0',
+    //
+    // 8.0.0, 2026-09-05, major: Phase 6 (LIFECYCLE-IMPLEMENTATION-PLAN.md) state-machine and
+    // auction-control work. Breaking: AuctionStatus drops SCHEDULED (D3 -- never reachable,
+    // production confirmed empty) and gains CANCELLED (B4/C4). ListingDto gains a required
+    // isLive field (A1). Additive: PATCH /listings/{id} (A2, resubmit a REJECTED listing),
+    // DELETE /listings/{id} (B4, withdraw a PENDING listing), POST /auctions/{id}/cancel (B4,
+    // seller withdraws a bid-free live auction), POST /admin/auctions/{id}/cancel (C4, admin
+    // stops any auction), POST /payments/{id}/offer-next-bidder and
+    // POST /payments/{id}/relist (A5, non-payment recovery). Also fixed in passing: NotificationType
+    // was missing four values fulfillment.service.ts (BV-047) had already been writing since
+    // before this phase (ITEM_SHIPPED/PAYOUT_RECEIVED/DISPUTE_RAISED/DISPUTE_RESOLVED) -- a
+    // pre-existing contract violation, not something this phase introduced.
+    version: '8.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -435,6 +447,23 @@ const documentInput = {
         },
       },
     },
+    '/auctions/{auctionId}/cancel': {
+      post: {
+        tags: ['Auctions'],
+        security: [{ bearerAuth: [] }],
+        summary: 'B4, Phase 6 — seller withdraws their own bid-free live auction',
+        requestParams: { path: z.object({ auctionId: z.string() }) },
+        requestBody: jsonRequest(R.cancelAuctionSchema),
+        responses: {
+          200: okBody(z.object({ auctionId: z.string(), status: z.literal('CANCELLED') }), 'Cancelled'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Not ACTIVE, or bids already exist (an admin can cancel those instead)'),
+        },
+      },
+    },
 
     // ---- listings ------------------------------------------------------------------
     '/listings': {
@@ -451,6 +480,40 @@ const documentInput = {
             'A business rule was violated: price floor, increment ceiling, image ownership, ' +
             'or category attributes',
           ),
+        },
+      },
+    },
+    '/listings/{listingId}': {
+      patch: {
+        tags: ['Listings'],
+        security: [{ bearerAuth: [] }],
+        summary: 'A2, Phase 6 — edit and resubmit a REJECTED listing, re-validated exactly like a fresh submission',
+        requestParams: { path: z.object({ listingId: z.string() }) },
+        requestBody: jsonRequest(R.submitListingSchema),
+        responses: {
+          200: okBody(S.ListingDto, 'Resubmitted for review'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Only a rejected listing can be edited and resubmitted'),
+          422: unprocessable(
+            'A business rule was violated: price floor, increment ceiling, image ownership, ' +
+            'or category attributes',
+          ),
+        },
+      },
+      delete: {
+        tags: ['Listings'],
+        security: [{ bearerAuth: [] }],
+        summary: 'B4, Phase 6 — withdraw a listing before it has ever been auctioned',
+        requestParams: { path: z.object({ listingId: z.string() }) },
+        responses: {
+          200: okBody(z.object({ listingId: z.string(), status: z.literal('WITHDRAWN') }), 'Withdrawn'),
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Only a listing awaiting review can be withdrawn'),
         },
       },
     },
@@ -611,6 +674,36 @@ const documentInput = {
         security: [{ bearerAuth: [] }],
         summary: 'A seller\'s dummy-ledger balance and the sales that built it',
         responses: { 200: okBody(S.EarningsDto, 'Ledger balance and entries'), 401: unauthorized, 403: forbidden },
+      },
+    },
+    '/payments/{transactionId}/offer-next-bidder': {
+      post: {
+        tags: ['Payments'],
+        security: [{ bearerAuth: [] }],
+        summary: 'A5, Phase 6 — re-targets a VOIDED transaction at the next-highest bidder, at their own last bid',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        responses: {
+          200: okBody(z.object({ transactionId: z.string(), status: z.literal('PENDING') }), 'Re-offered'),
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Not VOIDED, or there is no other bidder to offer it to'),
+        },
+      },
+    },
+    '/payments/{transactionId}/relist': {
+      post: {
+        tags: ['Payments'],
+        security: [{ bearerAuth: [] }],
+        summary: 'A5, Phase 6 — creates a fresh Listing + Auction pair for a VOIDED transaction\'s item',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        responses: {
+          200: okBody(z.object({ listingId: z.string(), auctionId: z.string() }), 'Relisted'),
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The transaction is not VOIDED'),
+        },
       },
     },
     '/payments/{transactionId}/invoice': {
@@ -793,6 +886,23 @@ const documentInput = {
           403: forbidden,
           404: notFound,
           409: errBody('The transaction is not pending'),
+        },
+      },
+    },
+    '/admin/auctions/{auctionId}/cancel': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'C4, Phase 6 — stops any auction regardless of bid count; notifies every bidder',
+        requestParams: { path: z.object({ auctionId: z.string() }) },
+        requestBody: jsonRequest(R.cancelAuctionSchema),
+        responses: {
+          200: okBody(z.object({ auctionId: z.string(), status: z.literal('CANCELLED') }), 'Cancelled'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The auction is not ACTIVE'),
         },
       },
     },

@@ -5,12 +5,20 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
-import { voidTransactionSchema, anonymizeUserSchema, resolveDisputeSchema } from '../../openapi/requests.js';
+import { voidTransactionSchema, anonymizeUserSchema, resolveDisputeSchema, cancelAuctionSchema } from '../../openapi/requests.js';
 import { checkAccountDeletable, anonymizeUser } from '../../services/account.service.js';
 import { dispatchEmail, sendAccountDeletedEmail } from '../../services/email.service.js';
 import { resolveDispute, REVENUE_STATUSES } from '../../services/fulfillment.service.js';
+import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
 
 const router = Router();
+
+const ADMIN_CANCEL_ERROR_STATUS: Record<Exclude<CancelAuctionResult['kind'], 'ok'>, [string, number]> = {
+  'not-found': ['Auction not found.', 404],
+  forbidden: ['Forbidden.', 403],
+  'wrong-state': ['Only an active auction can be cancelled.', 409],
+  'has-bids': ['Forbidden.', 403],
+};
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -255,6 +263,28 @@ router.post(
       return;
     }
     ok(res, { transactionId, status: 'VOIDED' });
+  }),
+);
+
+// C4, Phase 6: unlike the seller's own POST /auctions/{id}/cancel, this works regardless of bid
+// count -- a pricing error or shill-bidding suspicion is exactly the case with bids already on
+// it. Every bidder gets notified (email + in-app); see auction-control.service.ts.
+router.post(
+  '/auctions/:auctionId/cancel',
+  requireAuth(['ADMIN']),
+  validateBody(cancelAuctionSchema),
+  asyncHandler(async (req, res) => {
+    const result = await cancelAuction(req.params.auctionId, {
+      userId: req.auth!.userId,
+      isAdmin: true,
+      reason: req.body.reason,
+    });
+    if (result.kind !== 'ok') {
+      const [message, status] = ADMIN_CANCEL_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { auctionId: req.params.auctionId, status: 'CANCELLED' });
   }),
 );
 

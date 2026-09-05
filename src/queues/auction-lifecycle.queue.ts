@@ -65,3 +65,14 @@ export async function enqueueAuctionEndNow(auctionId: string): Promise<boolean> 
   await auctionLifecycleQueue.add('auction:end', { auctionId }, { jobId });
   return true;
 }
+
+/**
+ * B4/C4, Phase 6: removes a scheduled close job for an auction being cancelled, so it doesn't
+ * fire and try to settle an auction that no longer exists in an active state. Safe to call for
+ * an auction whose job has already run or was never scheduled -- BullMQ's own getJob/remove
+ * simply no-op on a missing id, same as enqueueAuctionEndNow's removal branch above.
+ */
+export async function cancelScheduledJob(auctionId: string): Promise<void> {
+  const job = await auctionLifecycleQueue.getJob(`auction:end:${auctionId}`);
+  if (job) await job.remove();
+}

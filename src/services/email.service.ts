@@ -436,6 +436,98 @@ export async function sendReserveNotMetEmail(
   );
 }
 
+// B4/C4, Phase 6: one function for both cancel paths (seller withdrawing a bid-free auction,
+// admin stopping any auction) — `bidders` is empty for the seller path by construction (that
+// route only allows cancelling before a first bid lands), so the loop below is simply a no-op
+// there rather than needing its own branch.
+export async function sendAuctionCancelledEmail(
+  seller: { email: string; name: string },
+  auction: { title: string },
+  opts: { reason: string; cancelledByAdmin: boolean; bidders: { email: string; name: string }[] },
+): Promise<void> {
+  if (!(await alertsEnabled())) return;
+  const sellerBody = `
+    ${h1('Your auction was cancelled')}
+    ${p(`Hi ${seller.name}, ${opts.cancelledByAdmin ? 'an administrator has cancelled' : "you've cancelled"} this auction.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Item', auction.title)}
+      ${infoRow('Reason', opts.reason)}
+    </table>
+    ${divider()}
+    ${p('No sale or charge will result from this auction. You can submit a new listing to auction the item again.')}
+  `;
+  await send(seller.email, `Auction cancelled — "${auction.title}"`, base('Auction cancelled', sellerBody));
+
+  for (const bidder of opts.bidders) {
+    const bidderBody = `
+      ${h1('An auction you bid on was cancelled')}
+      ${p(`Hi ${bidder.name}, an administrator has cancelled this auction. Your bid is void and nothing has been charged.`)}
+      ${divider()}
+      <table width="100%" cellpadding="0" cellspacing="0">
+        ${infoRow('Item', auction.title)}
+        ${infoRow('Reason', opts.reason)}
+      </table>
+    `;
+    await send(bidder.email, `Auction cancelled — "${auction.title}"`, base('Auction cancelled', bidderBody));
+  }
+}
+
+// A3, Phase 6: the worker's payment-deadline sweep auto-voids a transaction whose winner never
+// paid — both sides need to hear why the sale disappeared before the seller decides what to do
+// next (offer-next-bidder or relist, see payments.routes.ts).
+export async function sendPaymentDeadlineVoidedEmail(
+  buyer: { email: string; name: string },
+  seller: { email: string; name: string },
+  auction: { title: string; finalAmount: number },
+): Promise<void> {
+  if (!(await alertsEnabled())) return;
+  const pkr = `PKR ${auction.finalAmount.toLocaleString()}`;
+
+  await send(buyer.email, `Payment window expired — "${auction.title}"`, base('Sale cancelled', `
+    ${h1('This sale has been cancelled')}
+    ${p(`Hi ${buyer.name}, you won this auction but the payment window closed before a successful payment was made.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Item', auction.title)}
+      ${infoRow('Amount owed', pkr)}
+      ${infoRow('Result', 'Sale cancelled — not paid in time')}
+    </table>
+  `));
+
+  await send(seller.email, `Buyer didn't pay in time — "${auction.title}"`, base('Sale cancelled', `
+    ${h1('The winning bidder did not pay in time')}
+    ${p(`Hi ${seller.name}, the payment window for this sale has closed without payment.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Item', auction.title)}
+      ${infoRow('Winning bid', pkr)}
+    </table>
+    ${divider()}
+    ${p("You can offer the item to the next-highest bidder at their own bid, or relist it, from My Sales.")}
+  `));
+}
+
+// A5, Phase 6: the underbidder eBay's Second Chance Offer model reaches — offered their own
+// last bid, not the defaulter's, since the seller never legitimately sold to them for more.
+export async function sendSecondChanceOfferEmail(
+  to: { email: string; name: string },
+  auction: { title: string; amount: number },
+): Promise<void> {
+  if (!(await alertsEnabled())) return;
+  await send(to.email, `You're being offered "${auction.title}"`, base('Second chance offer', `
+    ${h1("You've been offered this item")}
+    ${p(`Hi ${to.name}, the original winner of this auction did not complete payment. As the next-highest bidder, the seller is offering the item to you at your own last bid.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Item', auction.title)}
+      ${infoRow('Your price', `PKR ${auction.amount.toLocaleString()}`)}
+    </table>
+    ${divider()}
+    ${p('Complete payment from My Wins to claim it.')}
+  `));
+}
+
 export async function sendBidPlacedEmail(
   to: { email: string; name: string },
   bid: { title: string; amount: number; auctionId: string },

@@ -46,6 +46,7 @@ describe('getPlatformSettings', () => {
       maxBidIncrement: 500_000,
       minListingPrice: 1_000,
       reviewTimeoutHours: 48,
+      paymentDeadlineHours: 48,
       supportEmail: 'support@bidvault.tech',
     });
 

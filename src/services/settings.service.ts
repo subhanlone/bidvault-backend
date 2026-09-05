@@ -14,6 +14,8 @@ export interface PlatformSettingsData {
   maxBidIncrement: number;
   minListingPrice: number;
   reviewTimeoutHours: number;
+  // A3, Phase 6: how long a winner has to pay before the worker's sweep auto-voids the sale.
+  paymentDeadlineHours: number;
   supportEmail: string;
 }
 
@@ -26,6 +28,7 @@ const DEFAULTS: PlatformSettingsData = {
   maxBidIncrement: 500_000,
   minListingPrice: 1_000,
   reviewTimeoutHours: 48,
+  paymentDeadlineHours: 48,
   supportEmail: 'support@bidvault.tech',
 };
 
@@ -43,6 +46,7 @@ type SettingRow = {
   maxBidIncrement: number;
   minListingPrice: number;
   reviewTimeoutHours: number;
+  paymentDeadlineHours: number;
   supportEmail: string;
 };
 
@@ -53,6 +57,7 @@ function toData(row: SettingRow): PlatformSettingsData {
     maxBidIncrement: row.maxBidIncrement,
     minListingPrice: row.minListingPrice,
     reviewTimeoutHours: row.reviewTimeoutHours,
+    paymentDeadlineHours: row.paymentDeadlineHours,
     supportEmail: row.supportEmail,
   };
 }

@@ -7,9 +7,17 @@ import { fail, ok } from '../../utils/response.js';
 import { optionalAuth, requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
-import { placeBidSchema } from '../../openapi/requests.js';
+import { placeBidSchema, cancelAuctionSchema } from '../../openapi/requests.js';
 import { buildSellerStatsMap, toAuctionDto } from './auction-dto.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
+import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
+
+const CANCEL_ERROR_STATUS: Record<Exclude<CancelAuctionResult['kind'], 'ok'>, [string, number]> = {
+  'not-found': ['Auction not found.', 404],
+  forbidden: ['You can only cancel your own auctions.', 403],
+  'wrong-state': ['Only an active auction can be cancelled.', 409],
+  'has-bids': ['An auction with bids can only be cancelled by an admin.', 409],
+};
 
 const router = Router();
 const MAX_STORED_MONEY = 2_000_000_000;
@@ -29,7 +37,7 @@ router.get(
     // read this finding is about. The one current caller already asks for ?status=ACTIVE
     // explicitly (useActiveAuctions), so this default serves no one today and only narrows
     // what a direct API call returns by default. Still overridable: ?status=CLOSED etc. works.
-    filters.status = status && ['SCHEDULED', 'ACTIVE', 'CLOSED'].includes(status) ? status : 'ACTIVE';
+    filters.status = status && ['ACTIVE', 'CLOSED', 'CANCELLED'].includes(status) ? status : 'ACTIVE';
     if (category) {
       filters.category = { contains: category, mode: 'insensitive' };
     }
@@ -359,6 +367,29 @@ router.post(
       amount: bid.amount,
       timestamp: bid.createdAt.toISOString(),
     }, 201);
+  }),
+);
+
+// B4, Phase 6: withdrawing a live auction the seller no longer wants to run. Scoped to no bids
+// yet -- pulling an auction out from under an active bidder is a buyer-protection problem this
+// route deliberately doesn't try to solve; see LIFECYCLE-IMPLEMENTATION-PLAN.md. An admin can
+// cancel regardless of bid count via POST /admin/auctions/{id}/cancel instead.
+router.post(
+  '/:auctionId/cancel',
+  requireAuth(['SELLER']),
+  validateBody(cancelAuctionSchema),
+  asyncHandler(async (req, res) => {
+    const result = await cancelAuction(req.params.auctionId, {
+      userId: req.auth!.userId,
+      isAdmin: false,
+      reason: req.body.reason,
+    });
+    if (result.kind !== 'ok') {
+      const [message, status] = CANCEL_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { auctionId: req.params.auctionId, status: 'CANCELLED' });
   }),
 );
 

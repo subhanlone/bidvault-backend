@@ -80,6 +80,12 @@ const OPERATIONS: Op[] = [
   { method: 'get', contractPath: '/auctions/mine/bids', url: () => '/auctions/mine/bids', allow: ['BUYER'] },
   { method: 'post', contractPath: '/auctions/{auctionId}/bids',
     url: (w) => `/auctions/${w.liveAuctionId}/bids`, allow: ['BUYER'], body: () => ({ amount: 30_000 }) },
+  // Phase 6 (B4): w.liveAuctionId already has a bid, so the 403/401 checks below (which never
+  // reach the has-bids business rule) are what this table needs — the bid-free happy path and
+  // the ownership check both live in tests/auction-cancellation.test.ts instead.
+  { method: 'post', contractPath: '/auctions/{auctionId}/cancel',
+    url: (w) => `/auctions/${w.liveAuctionId}/cancel`, allow: ['SELLER'],
+    body: () => ({ reason: 'Authz probe' }) },
 
   // ---- listings -------------------------------------------------------------------------
   { method: 'post', contractPath: '/listings/upload-signature', url: () => '/listings/upload-signature', allow: ['SELLER'] },
@@ -97,6 +103,19 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/listings/approve-all', url: () => '/listings/approve-all', allow: ['ADMIN'] },
   { method: 'post', contractPath: '/listings/{listingId}/reject',
     url: (w) => `/listings/${w.pendingListingId}/reject`, allow: ['ADMIN'], body: () => ({ reason: 'Authz probe' }) },
+  // Phase 6 (A2/B4): w.pendingListingId is PENDING, not REJECTED, so the PATCH's happy path
+  // never fires here either — same reasoning as the auction-cancel entry above; the real
+  // behaviour is in tests/listing-lifecycle.test.ts.
+  { method: 'patch', contractPath: '/listings/{listingId}',
+    url: (w) => `/listings/${w.pendingListingId}`, allow: ['SELLER'],
+    body: () => ({
+      title: 'Authz probe resubmit', category: 'Electronics & Gadgets', condition: 'NEW',
+      description: 'Submitted by the authorization suite to check the role gate.',
+      startPrice: 15_000, minIncrement: 500, durationDays: 3,
+      attributes: { brand: 'Probe', model: 'X1' },
+    }) },
+  { method: 'delete', contractPath: '/listings/{listingId}',
+    url: (w) => `/listings/${w.pendingListingId}`, allow: ['SELLER'] },
 
   // ---- watchlist ------------------------------------------------------------------------
   { method: 'get', contractPath: '/watchlist', url: () => '/watchlist', allow: ['BUYER', 'ADMIN'] },
@@ -122,9 +141,18 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/payments/{transactionId}/dispute',
     url: (w) => `/payments/${w.transactionId}/dispute`, allow: ['BUYER'],
     body: () => ({ reason: 'Authz probe dispute reason.' }) },
+  // Phase 6 (A5): w.transactionId is PENDING, not VOIDED, so neither route's happy path fires
+  // here — see tests/payment-deadline-recovery.test.ts for that and the ownership check.
+  { method: 'post', contractPath: '/payments/{transactionId}/offer-next-bidder',
+    url: (w) => `/payments/${w.transactionId}/offer-next-bidder`, allow: ['SELLER'] },
+  { method: 'post', contractPath: '/payments/{transactionId}/relist',
+    url: (w) => `/payments/${w.transactionId}/relist`, allow: ['SELLER'] },
 
   // ---- admin ----------------------------------------------------------------------------
   { method: 'get', contractPath: '/admin/analytics', url: () => '/admin/analytics', allow: ['ADMIN'] },
+  { method: 'post', contractPath: '/admin/auctions/{auctionId}/cancel',
+    url: (w) => `/admin/auctions/${w.liveAuctionId}/cancel`, allow: ['ADMIN'],
+    body: () => ({ reason: 'Authz probe' }) },
   { method: 'get', contractPath: '/admin/transactions', url: () => '/admin/transactions', allow: ['ADMIN'] },
   { method: 'post', contractPath: '/admin/transactions/{transactionId}/void',
     url: (w) => `/admin/transactions/${w.transactionId}/void`, allow: ['ADMIN'],
