@@ -1,4 +1,23 @@
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { z } from 'zod';
+
+// There is no dotenv dependency here — .env has only ever reached process.env as a side
+// effect of importing @prisma/client, which bundles its own loader. That makes every
+// entrypoint's env validation depend on import order rather than on this file: server.ts
+// happens to import routes (and therefore @prisma/client) before this module runs, so it
+// works, but auction-lifecycle.worker.ts imports infra/redis.ts (which imports this file
+// directly) before anything touches Prisma — validation below then runs against an empty
+// process.env and exits 1 with no other symptom. Loading .env explicitly here removes the
+// dependency on that accident for every current and future entrypoint. Skipped under
+// NODE_ENV=test, which owns its own loading of .env.test in tests/setup.ts before this file
+// is ever reached — and in production there is no .env file to find, so this is a no-op there.
+if (process.env.NODE_ENV !== 'test') {
+  const envFile = resolve(import.meta.dirname, '..', '..', '.env');
+  if (existsSync(envFile)) {
+    process.loadEnvFile(envFile);
+  }
+}
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
