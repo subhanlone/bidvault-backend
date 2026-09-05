@@ -190,6 +190,19 @@ export const createReviewSchema = z
   })
   .meta({ id: 'CreateReviewRequest' });
 
+// C6, Phase 7: same fields as create, both optional -- a buyer editing a review is changing
+// either or both, not required to resend a field they aren't touching.
+export const updateReviewSchema = z
+  .object({
+    stars: z.coerce.number().int().min(1).max(5).optional(),
+    comment: z.string().max(500).optional(),
+  })
+  .meta({ id: 'UpdateReviewRequest' });
+
+export const replyToReviewSchema = z
+  .object({ reply: z.string().trim().min(1).max(500) })
+  .meta({ id: 'ReplyToReviewRequest' });
+
 // ---- settings ---------------------------------------------------------------------
 
 export const updateSettingsSchema = z
@@ -201,6 +214,8 @@ export const updateSettingsSchema = z
     reviewTimeoutHours: z.coerce.number().int().positive().optional(),
     // A3, Phase 6.
     paymentDeadlineHours: z.coerce.number().int().positive().optional(),
+    // C6, Phase 7.
+    reviewEditWindowHours: z.coerce.number().int().positive().optional(),
     // Stores an address, so it gets the strict rule — same one register uses.
     supportEmail: strictEmail.optional(),
   })
@@ -215,6 +230,17 @@ export const voidTransactionSchema = z
 export const anonymizeUserSchema = z
   .object({ reason: z.string().trim().min(3).max(500) })
   .meta({ id: 'AnonymizeUserRequest' });
+
+// C2, Phase 7. Reinstate takes no body -- same convention as /listings/{id}/approve (undoing a
+// state has no "why", only doing it does).
+export const suspendUserSchema = z
+  .object({ reason: z.string().trim().min(3).max(500) })
+  .meta({ id: 'SuspendUserRequest' });
+
+// C3, Phase 7.
+export const takedownListingSchema = z
+  .object({ reason: z.string().trim().min(3).max(500) })
+  .meta({ id: 'TakedownListingRequest' });
 
 export const resolveDisputeSchema = z
   .object({

@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { verifyAccessToken } from '../utils/jwt.js';
 import { fail } from '../utils/response.js';
+import { isSuspended } from '../services/user-status.service.js';
 
 export type Role = 'BUYER' | 'SELLER' | 'ADMIN';
 
@@ -27,7 +28,7 @@ export function optionalAuth() {
 }
 
 export function requireAuth(allowedRoles?: Role[]) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const authHeader = req.headers.authorization;
     const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
 
@@ -42,6 +43,14 @@ export function requireAuth(allowedRoles?: Role[]) {
 
       if (allowedRoles && !allowedRoles.includes(payload.role)) {
         fail(res, 'Forbidden', 403);
+        return;
+      }
+
+      // C2, Phase 7: checked after the role gate (a cheaper, synchronous check first) but
+      // before every route handler -- a suspended account loses every authenticated action,
+      // not just the ones a route author remembered to add a check to.
+      if (await isSuspended(payload.sub)) {
+        fail(res, 'This account has been suspended.', 403);
         return;
       }
 

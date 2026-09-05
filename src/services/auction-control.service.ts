@@ -8,15 +8,18 @@ import {
   sendAuctionCancelledEmail,
   sendPaymentDeadlineVoidedEmail,
   sendSecondChanceOfferEmail,
+  sendListingTakenDownEmail,
 } from './email.service.js';
 
 /**
  * Phase 6 (LIFECYCLE-IMPLEMENTATION-PLAN.md): auction cancellation (B4/C4), the payment-deadline
- * sweep and its recovery paths (A3/A5). Kept apart from fulfillment.service.ts, which is scoped
- * to the post-payment half of a sale — everything here runs either before payment or instead of
- * it. Same convention as that module: every state transition lives here once, because each has
- * more than one caller that must behave identically (the seller's own cancel route and the
- * admin's, the buyer's confirm-receipt and the worker's sweep elsewhere).
+ * sweep and its recovery paths (A3/A5). Phase 7's takedownListing() (C3) lives here too rather
+ * than in a fourth file, since it's a thin wrapper that reuses cancelAuction() directly. Kept
+ * apart from fulfillment.service.ts, which is scoped to the post-payment half of a sale —
+ * everything here runs either before payment or instead of it. Same convention as that module:
+ * every state transition lives here once, because each has more than one caller that must
+ * behave identically (the seller's own cancel route and the admin's, the buyer's
+ * confirm-receipt and the worker's sweep elsewhere).
  */
 
 // ---------------------------------------------------------------------------
@@ -354,4 +357,63 @@ export async function relistFromVoidedTransaction(
   }
 
   return { kind: 'ok', ...result };
+}
+
+// ---------------------------------------------------------------------------
+// Takedown (C3, Phase 7): an approved listing pulled for cause
+// ---------------------------------------------------------------------------
+
+export type TakedownListingResult = { kind: 'ok' } | { kind: 'not-found' } | { kind: 'wrong-state' };
+
+/**
+ * Scoped to APPROVED listings only -- a PENDING one goes through the existing /reject route
+ * instead, and there is nothing to take down from REJECTED/REMOVED/DRAFT. If the auction
+ * underneath is still ACTIVE, cancels it via the same cancelAuction() the admin's own cancel
+ * route uses (notifies every bidder) -- a CLOSED auction (already sold, or already cancelled)
+ * is left as history; unwinding a completed sale is the existing dispute/void machinery's job,
+ * not this one.
+ */
+export async function takedownListing(
+  listingId: string,
+  adminUserId: string,
+  reason: string,
+): Promise<TakedownListingResult> {
+  const listing = await prisma.listing.findUnique({
+    where: { id: listingId },
+    include: { seller: { select: { email: true, name: true } }, auction: { select: { id: true, status: true } } },
+  });
+  if (!listing) return { kind: 'not-found' };
+  if (listing.status !== 'APPROVED') return { kind: 'wrong-state' };
+
+  await prisma.$transaction(async (tx) => {
+    await tx.listing.update({ where: { id: listing.id }, data: { status: 'REMOVED' } });
+    await tx.auditLog.create({
+      data: {
+        actorUserId: adminUserId,
+        action: 'LISTING_REMOVED',
+        entityType: 'Listing',
+        entityId: listing.id,
+        metadata: { reason },
+      },
+    });
+    await tx.notification.create({
+      data: {
+        userId: listing.sellerId,
+        type: 'LISTING_REMOVED',
+        title: 'Listing removed',
+        message: `Your listing "${listing.title}" was removed by an admin: ${reason}`,
+      },
+    });
+  });
+
+  if (listing.auction?.status === 'ACTIVE') {
+    await cancelAuction(listing.auction.id, { userId: adminUserId, isAdmin: true, reason: `Listing removed: ${reason}` });
+  }
+
+  dispatchEmail(
+    sendListingTakenDownEmail(listing.seller, { title: listing.title, reason }),
+    `listing-taken-down (${listingId})`,
+  );
+
+  return { kind: 'ok' };
 }

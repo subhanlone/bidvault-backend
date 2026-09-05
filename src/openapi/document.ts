@@ -185,7 +185,15 @@ const documentInput = {
     // was missing four values fulfillment.service.ts (BV-047) had already been writing since
     // before this phase (ITEM_SHIPPED/PAYOUT_RECEIVED/DISPUTE_RAISED/DISPUTE_RESOLVED) -- a
     // pre-existing contract violation, not something this phase introduced.
-    version: '8.0.0',
+    //
+    // 8.1.0, 2026-09-05, minor: Phase 7 (LIFECYCLE-IMPLEMENTATION-PLAN.md) governance work.
+    // Nothing breaking -- ListingStatus gaining REMOVED (C3) and AdminUserDto gaining a status
+    // field (C2) are both enum/field additions, oasdiff reports them as warnings only, not
+    // breaking changes (a response gaining a field or an enum gaining a value can't fail an
+    // existing client's parse). New: POST /admin/users/{id}/suspend and .../reinstate (C2),
+    // POST /admin/listings/{id}/takedown (C3), PATCH/DELETE /reviews/{id} and
+    // POST /reviews/{id}/reply (C6). NotificationType gains REVIEW_REPLY and LISTING_REMOVED.
+    version: '8.1.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -816,6 +824,53 @@ const documentInput = {
         responses: { 200: okBody(S.SellerReviewsDto, 'Seller rating and reviews') },
       },
     },
+    '/reviews/{reviewId}': {
+      patch: {
+        tags: ['Reviews'],
+        security: [{ bearerAuth: [] }],
+        summary: 'C6, Phase 7 — the review author only, within reviewEditWindowHours of posting',
+        requestParams: { path: z.object({ reviewId: z.string() }) },
+        requestBody: jsonRequest(R.updateReviewSchema),
+        responses: {
+          200: okBody(S.ReviewDto, 'Updated'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The edit window for this review has passed'),
+        },
+      },
+      delete: {
+        tags: ['Reviews'],
+        security: [{ bearerAuth: [] }],
+        summary: 'C6, Phase 7 — the review author only, within reviewEditWindowHours of posting',
+        requestParams: { path: z.object({ reviewId: z.string() }) },
+        responses: {
+          200: okBody(z.object({ reviewId: z.string(), status: z.literal('DELETED') }), 'Deleted'),
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The delete window for this review has passed'),
+        },
+      },
+    },
+    '/reviews/{reviewId}/reply': {
+      post: {
+        tags: ['Reviews'],
+        security: [{ bearerAuth: [] }],
+        summary: 'C6, Phase 7 — the reviewed seller only, one reply per review',
+        requestParams: { path: z.object({ reviewId: z.string() }) },
+        requestBody: jsonRequest(R.replyToReviewSchema),
+        responses: {
+          200: okBody(z.object({ reviewId: z.string(), sellerReply: z.string(), sellerReplyAt: z.iso.datetime() }), 'Replied'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('This review already has a reply'),
+        },
+      },
+    },
 
     // ---- settings ------------------------------------------------------------------
     '/settings/public': {
@@ -963,6 +1018,55 @@ const documentInput = {
           403: forbidden,
           404: notFound,
           409: errBody('The user has an active auction or a pending transaction'),
+        },
+      },
+    },
+    '/admin/users/{userId}/suspend': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'C2, Phase 7 — reversible, unlike anonymize; does not touch the account\'s data',
+        requestParams: { path: z.object({ userId: z.string() }) },
+        requestBody: jsonRequest(R.suspendUserSchema),
+        responses: {
+          200: okBody(z.object({ userId: z.string(), status: z.literal('SUSPENDED') }), 'Suspended'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Already suspended, or the admin tried to suspend their own account'),
+        },
+      },
+    },
+    '/admin/users/{userId}/reinstate': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'C2, Phase 7',
+        requestParams: { path: z.object({ userId: z.string() }) },
+        responses: {
+          200: okBody(z.object({ userId: z.string(), status: z.literal('ACTIVE') }), 'Reinstated'),
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The account is not suspended'),
+        },
+      },
+    },
+    '/admin/listings/{listingId}/takedown': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'C3, Phase 7 — cancels the live auction underneath, if any, notifying every bidder',
+        requestParams: { path: z.object({ listingId: z.string() }) },
+        requestBody: jsonRequest(R.takedownListingSchema),
+        responses: {
+          200: okBody(z.object({ listingId: z.string(), status: z.literal('REMOVED') }), 'Removed'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Only an approved listing can be taken down'),
         },
       },
     },

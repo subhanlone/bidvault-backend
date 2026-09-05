@@ -26,9 +26,13 @@ function paginated<T extends z.ZodTypeAny>(id: string, item: T) {
  */
 
 export const UserRole = z.enum(['BUYER', 'SELLER', 'ADMIN']).meta({ id: 'UserRole' });
+// C2, Phase 7.
+export const UserStatus = z.enum(['ACTIVE', 'SUSPENDED']).meta({ id: 'UserStatus' });
 export const ItemCondition = z.enum(['NEW', 'LIKE_NEW', 'USED']).meta({ id: 'ItemCondition' });
+// REMOVED added C3, Phase 7 -- an approved listing pulled for cause. Distinct from REJECTED
+// (never approved) and only reachable from APPROVED.
 export const ListingStatus = z
-  .enum(['DRAFT', 'PENDING', 'APPROVED', 'REJECTED'])
+  .enum(['DRAFT', 'PENDING', 'APPROVED', 'REJECTED', 'REMOVED'])
   .meta({ id: 'ListingStatus' });
 // D3, Phase 6: SCHEDULED removed -- it was retained in the enum but never reachable (auctions
 // go straight to ACTIVE on approval) and was itself a lifecycle-gap finding: a client could
@@ -63,6 +67,9 @@ export const NotificationType = z
     'AUCTION_CANCELLED',
     'SECOND_CHANCE_OFFER',
     'LISTING_RELISTED',
+    // C6/C3, Phase 7.
+    'REVIEW_REPLY',
+    'LISTING_REMOVED',
   ])
   .meta({ id: 'NotificationType' });
 
@@ -278,6 +285,12 @@ export const ReviewDto = z
     stars: z.number().int(),
     comment: z.string().nullable(),
     createdAt: isoDateTime,
+    // C6, Phase 7: optional -- POST /reviews and PATCH /reviews/{id}'s own responses omit these
+    // (a fresh or just-edited review has no reply yet); GET /reviews/seller/{id} always fills
+    // updatedAt in (null until edited) and the reply fields when one exists.
+    updatedAt: isoDateTime.optional(),
+    sellerReply: z.string().optional(),
+    sellerReplyAt: isoDateTime.optional(),
   })
   .meta({ id: 'Review' });
 
@@ -425,13 +438,15 @@ export const AdminTransactionDto = z
   })
   .meta({ id: 'AdminTransaction' });
 
-/** A search result for GET /admin/users — used to find the account BV-018's anonymize route targets. */
+/** A search result for GET /admin/users — used to find the account BV-018's anonymize (or,
+ * since Phase 7, suspend/reinstate) routes target. */
 export const AdminUserDto = z
   .object({
     userId: z.string(),
     name: z.string(),
     email: z.string(),
     role: UserRole,
+    status: UserStatus,
     createdAt: isoDateTime,
   })
   .meta({ id: 'AdminUser' });
@@ -470,6 +485,8 @@ export const PlatformSettingsDto = z
     reviewTimeoutHours: z.number().int(),
     // A3, Phase 6.
     paymentDeadlineHours: z.number().int(),
+    // C6, Phase 7.
+    reviewEditWindowHours: z.number().int(),
     supportEmail: z.string(),
   })
   .meta({ id: 'PlatformSettings' });
