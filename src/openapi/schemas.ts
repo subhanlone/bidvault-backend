@@ -155,6 +155,10 @@ export const ListingDto = z
     // Decision 1. Always false for a listing with no auction yet or whose auction is
     // CLOSED/CANCELLED; true only while status is APPROVED and the auction is ACTIVE.
     isLive: z.boolean(),
+    // B4, Phase 6: lets the seller's own listing screen target POST /auctions/{id}/cancel
+    // without a separate lookup. Undefined until an auction exists (Listing.auction is
+    // optional 1:1) -- present whenever isLive could ever be true, and harmless otherwise.
+    auctionId: z.string().optional(),
   })
   .meta({ id: 'Listing' });
 

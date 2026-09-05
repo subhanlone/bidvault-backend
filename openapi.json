@@ -5854,6 +5854,9 @@
           },
           "isLive": {
             "type": "boolean"
+          },
+          "auctionId": {
+            "type": "string"
           }
         },
         "required": [

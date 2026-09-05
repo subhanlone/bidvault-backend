@@ -56,6 +56,7 @@ function toListingDto(
     // see LIFECYCLE-IMPLEMENTATION-PLAN.md Decision 1. No auction yet (brand new) or an
     // auction that's CLOSED/CANCELLED both read as not-live; only APPROVED + ACTIVE does.
     isLive: listing.status === 'APPROVED' && listing.auction?.status === 'ACTIVE',
+    auctionId: listing.auction?.id,
   };
 }
 
