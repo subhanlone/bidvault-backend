@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import type { Request } from 'express';
+import { Prisma } from '@prisma/client';
 import type { UserRole } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
@@ -140,15 +141,28 @@ router.post(
       return;
     }
 
-    const user = await prisma.user.create({
-      data: {
-        name,
-        email: normalizedEmail,
-        passwordHash: await hashPassword(password),
-        role,
-        isEmailVerified: false,
-      },
-    });
+    // BV-043: the pre-check above gives the good message on the common path, but a concurrent
+    // identical request can still win the race between that read and this write -- the loser
+    // hit the shared P2002 handler's generic "A record with these details already exists."
+    // instead of this route's own wording. This is the authoritative fallback for that race.
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: {
+          name,
+          email: normalizedEmail,
+          passwordHash: await hashPassword(password),
+          role,
+          isEmailVerified: false,
+        },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        fail(res, 'An account with this email already exists.', 409);
+        return;
+      }
+      throw err;
+    }
 
     const code = generateOtp();
     const codeExpiresAt = new Date(Date.now() + OTP_EXPIRY_MS);

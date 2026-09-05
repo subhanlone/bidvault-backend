@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "3.0.0",
+    "version": "7.0.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually."
   },
   "servers": [
@@ -2149,7 +2149,7 @@
             "bearerAuth": []
           }
         ],
-        "summary": "COMPLETED transactions only",
+        "summary": "Every paid status except REFUNDED",
         "responses": {
           "200": {
             "description": "Revenue and items sold",
@@ -2188,8 +2188,8 @@
         }
       }
     },
-    "/payments/create-intent": {
-      "post": {
+    "/payments/my-sales": {
+      "get": {
         "tags": [
           "Payments"
         ],
@@ -2198,19 +2198,28 @@
             "bearerAuth": []
           }
         ],
-        "summary": "PKR is zero-decimal, so amounts are not multiplied by 100",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateIntentRequest"
-              }
+        "summary": "Cursor-paginated, newest first — a seller's own sales, including the buyer's delivery details",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
             }
           }
-        },
+        ],
         "responses": {
           "200": {
-            "description": "Stripe client secret",
+            "description": "A page of your sales",
             "content": {
               "application/json": {
                 "schema": {
@@ -2221,7 +2230,75 @@
                       "const": true
                     },
                     "data": {
-                      "$ref": "#/components/schemas/PaymentIntent"
+                      "$ref": "#/components/schemas/PaginatedSellerSales"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments/{transactionId}/pay": {
+      "post": {
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Resolves synchronously against the self-built dummy gateway — see payment-gateway.service.ts for the test-card convention. A decline is a 200 with status PENDING, not an error.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayTransactionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Charged, or declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/PayResult"
                     }
                   },
                   "required": [
@@ -2253,6 +2330,16 @@
               }
             }
           },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found",
             "content": {
@@ -2276,15 +2363,20 @@
         }
       }
     },
-    "/payments/webhook": {
-      "post": {
+    "/payments/earnings": {
+      "get": {
         "tags": [
           "Payments"
         ],
-        "summary": "Stripe webhook. Needs the raw body, so it is mounted before express.json.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "A seller's dummy-ledger balance and the sales that built it",
         "responses": {
           "200": {
-            "description": "Acknowledged",
+            "description": "Ledger balance and entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -2295,7 +2387,384 @@
                       "const": true
                     },
                     "data": {
-                      "$ref": "#/components/schemas/WebhookAck"
+                      "$ref": "#/components/schemas/Earnings"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments/{transactionId}/invoice": {
+      "get": {
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "The buyer, the seller, or an admin — LIFECYCLE-GAPS.md E3",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Invoice"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments/{transactionId}/ship": {
+      "patch": {
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Seller marks a COMPLETED sale shipped — starts the confirm-or-dispute window",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shipped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "transactionId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "const": "SHIPPED"
+                        }
+                      },
+                      "required": [
+                        "transactionId",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not in the COMPLETED state, or no delivery address on file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments/{transactionId}/confirm-receipt": {
+      "post": {
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Buyer confirms receipt — releases the seller's payout",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delivered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "transactionId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "const": "DELIVERED"
+                        }
+                      },
+                      "required": [
+                        "transactionId",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The transaction is not SHIPPED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments/{transactionId}/dispute": {
+      "post": {
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Buyer reports not-received / not-as-described instead of confirming receipt — holds the payout for admin review",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RaiseDisputeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Disputed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "transactionId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "const": "DISPUTED"
+                        }
+                      },
+                      "required": [
+                        "transactionId",
+                        "status"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -2308,7 +2777,47 @@
             }
           },
           "400": {
-            "description": "Bad signature",
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The transaction is not SHIPPED",
             "content": {
               "application/json": {
                 "schema": {
@@ -3027,6 +3536,193 @@
         }
       }
     },
+    "/admin/disputes": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Every OPEN dispute, oldest first",
+        "responses": {
+          "200": {
+            "description": "Open disputes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdminDispute"
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/disputes/{disputeId}/resolve": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "REFUND (buyer) or RELEASE (seller) — the only two outcomes for an open dispute",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "disputeId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveDisputeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "disputeId": {
+                          "type": "string"
+                        },
+                        "resolution": {
+                          "type": "string",
+                          "enum": [
+                            "REFUND",
+                            "RELEASE"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "disputeId",
+                        "resolution"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This dispute has already been resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/users": {
       "get": {
         "tags": [
@@ -3465,8 +4161,15 @@
           },
           "category": {
             "type": "string",
-            "minLength": 2,
-            "maxLength": 100
+            "enum": [
+              "Electronics & Gadgets",
+              "Vehicles",
+              "Clothing & Fashion",
+              "Books & Education",
+              "Home & Furniture",
+              "Sports & Fitness",
+              "Art & Collectibles"
+            ]
           },
           "condition": {
             "type": "string",
@@ -3541,17 +4244,42 @@
           "reason"
         ]
       },
-      "CreateIntentRequest": {
+      "PayTransactionRequest": {
         "type": "object",
         "properties": {
-          "transactionId": {
+          "cardNumber": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 128
+            "minLength": 12,
+            "maxLength": 24
+          },
+          "deliveryAddress": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 300
+          },
+          "deliveryPhone": {
+            "type": "string",
+            "minLength": 7,
+            "maxLength": 20
           }
         },
         "required": [
-          "transactionId"
+          "cardNumber",
+          "deliveryAddress",
+          "deliveryPhone"
+        ]
+      },
+      "RaiseDisputeRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "reason"
         ]
       },
       "CreateReviewRequest": {
@@ -3618,6 +4346,27 @@
         },
         "required": [
           "reason"
+        ]
+      },
+      "ResolveDisputeRequest": {
+        "type": "object",
+        "properties": {
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "REFUND",
+              "RELEASE"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "resolution",
+          "note"
         ]
       },
       "AnonymizeUserRequest": {
@@ -4253,7 +5002,7 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Bid"
+              "$ref": "#/components/schemas/PublicBid"
             }
           },
           "nextCursor": {
@@ -4270,6 +5019,42 @@
         "required": [
           "items",
           "nextCursor"
+        ],
+        "additionalProperties": false
+      },
+      "PublicBid": {
+        "type": "object",
+        "properties": {
+          "bidId": {
+            "type": "string"
+          },
+          "auctionId": {
+            "type": "string"
+          },
+          "isMine": {
+            "type": "boolean"
+          },
+          "buyerName": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          }
+        },
+        "required": [
+          "bidId",
+          "auctionId",
+          "isMine",
+          "buyerName",
+          "amount",
+          "timestamp"
         ],
         "additionalProperties": false
       },
@@ -4532,12 +5317,18 @@
               ],
               "additionalProperties": false
             }
+          },
+          "remaining": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
           }
         },
         "required": [
           "approved",
           "failed",
-          "failures"
+          "failures",
+          "remaining"
         ],
         "additionalProperties": false
       },
@@ -4616,6 +5407,19 @@
           "lastPaymentError": {
             "type": "string"
           },
+          "shippedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "reviewDeadlineAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "disputeReason": {
+            "type": "string"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -4645,7 +5449,11 @@
           "PENDING",
           "COMPLETED",
           "FAILED",
-          "VOIDED"
+          "VOIDED",
+          "SHIPPED",
+          "DELIVERED",
+          "DISPUTED",
+          "REFUNDED"
         ]
       },
       "SellerStats": {
@@ -4668,10 +5476,16 @@
         ],
         "additionalProperties": false
       },
-      "PaymentIntent": {
+      "PaginatedSellerSales": {
         "type": "object",
         "properties": {
-          "clientSecret": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SellerSale"
+            }
+          },
+          "nextCursor": {
             "anyOf": [
               {
                 "type": "string"
@@ -4683,20 +5497,228 @@
           }
         },
         "required": [
-          "clientSecret"
+          "items",
+          "nextCursor"
         ],
         "additionalProperties": false
       },
-      "WebhookAck": {
+      "SellerSale": {
         "type": "object",
         "properties": {
-          "received": {
-            "type": "boolean",
-            "const": true
+          "transactionId": {
+            "type": "string"
+          },
+          "auctionId": {
+            "type": "string"
+          },
+          "auctionTitle": {
+            "type": "string"
+          },
+          "auctionEmoji": {
+            "type": "string"
+          },
+          "auctionImageUrl": {
+            "type": "string"
+          },
+          "buyerName": {
+            "type": "string"
+          },
+          "finalAmount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "status": {
+            "$ref": "#/components/schemas/TransactionStatus"
+          },
+          "deliveryAddress": {
+            "type": "string"
+          },
+          "deliveryPhone": {
+            "type": "string"
+          },
+          "shippedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "reviewDeadlineAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "disputeReason": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
           }
         },
         "required": [
-          "received"
+          "transactionId",
+          "auctionId",
+          "auctionTitle",
+          "auctionEmoji",
+          "auctionImageUrl",
+          "buyerName",
+          "finalAmount",
+          "status",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "PayResult": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "COMPLETED",
+              "PENDING"
+            ]
+          },
+          "lastPaymentError": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "transactionId",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "Earnings": {
+        "type": "object",
+        "properties": {
+          "ledgerBalance": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "transactionId": {
+                  "type": "string"
+                },
+                "auctionTitle": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              },
+              "required": [
+                "transactionId",
+                "auctionTitle",
+                "amount",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ledgerBalance",
+          "entries"
+        ],
+        "additionalProperties": false
+      },
+      "Invoice": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "type": "string"
+          },
+          "invoiceNumber": {
+            "type": "string"
+          },
+          "auctionTitle": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "buyerName": {
+            "type": "string"
+          },
+          "buyerEmail": {
+            "type": "string"
+          },
+          "sellerName": {
+            "type": "string"
+          },
+          "sellerEmail": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "status": {
+            "$ref": "#/components/schemas/TransactionStatus"
+          },
+          "paymentReference": {
+            "type": "string"
+          },
+          "deliveryAddress": {
+            "type": "string"
+          },
+          "deliveryPhone": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "shippedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "disputeStatus": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "RESOLVED_REFUNDED",
+              "RESOLVED_RELEASED"
+            ]
+          },
+          "disputeReason": {
+            "type": "string"
+          },
+          "disputeResolutionNote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "transactionId",
+          "invoiceNumber",
+          "auctionTitle",
+          "category",
+          "buyerName",
+          "buyerEmail",
+          "sellerName",
+          "sellerEmail",
+          "amount",
+          "status",
+          "createdAt"
         ],
         "additionalProperties": false
       },
@@ -5106,6 +6128,58 @@
           "sellerName",
           "finalAmount",
           "status",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "AdminDispute": {
+        "type": "object",
+        "properties": {
+          "disputeId": {
+            "type": "string"
+          },
+          "transactionId": {
+            "type": "string"
+          },
+          "auctionTitle": {
+            "type": "string"
+          },
+          "buyerId": {
+            "type": "string"
+          },
+          "buyerName": {
+            "type": "string"
+          },
+          "sellerId": {
+            "type": "string"
+          },
+          "sellerName": {
+            "type": "string"
+          },
+          "finalAmount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          }
+        },
+        "required": [
+          "disputeId",
+          "transactionId",
+          "auctionTitle",
+          "buyerId",
+          "buyerName",
+          "sellerId",
+          "sellerName",
+          "finalAmount",
+          "reason",
           "createdAt"
         ],
         "additionalProperties": false

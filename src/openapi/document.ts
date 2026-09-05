@@ -143,7 +143,37 @@ const documentInput = {
     //
     // 2.5.0, 2026-08-30, minor: GET /health gained workerHeartbeatAgeSeconds, so a dead
     // lifecycle worker is externally observable instead of silent. See BV-012.
-    version: '3.0.0',
+    //
+    // 4.0.0, 2026-08-31, major: BV-047 — the post-payment half of a sale, absent before this
+    // (LIFECYCLE-GAPS.md A4/C5/E6). Breaking: POST /payments/create-intent now requires
+    // deliveryAddress and deliveryPhone, which did not exist as fields at all before —
+    // "request: required property added" is COMPATIBILITY.md's own worked case for a major
+    // bump. TransactionStatus gained SHIPPED/DELIVERED/DISPUTED/REFUNDED. Five new /payments
+    // operations (ship, confirm-receipt, dispute, connect/onboard, connect/status), a new
+    // paginated /payments/my-sales for a seller's own sales, and two new /admin/disputes
+    // operations — all additive on their own, bundled into the same bump as the breaking
+    // change rather than split out, since they ship in the same deploy.
+    //
+    // 5.0.0, 2026-09-03, major: Stripe replaced end to end with a self-built, fully-simulated
+    // gateway (Stripe is UAE-registered and does not support Pakistan; no real money ever
+    // moved through it). Breaking: POST /payments/create-intent removed, replaced by
+    // POST /payments/{transactionId}/pay (path-param shape matching ship/confirm-receipt/
+    // dispute, request body swaps deliveryAddress/deliveryPhone-only for cardNumber alongside
+    // them, response drops clientSecret for a synchronous status). POST /payments/webhook
+    // removed outright — nothing external to receive a webhook from any more. GET/POST
+    // /payments/connect/onboard and /connect/status removed — no seller onboarding step at
+    // all. Additive: GET /payments/earnings (a seller's dummy-ledger balance) and
+    // GET /payments/{transactionId}/invoice (LIFECYCLE-GAPS.md E3).
+    // BV-015: POST /listings' `category` narrowed from free text to an enum of the seven keys
+    // validateCategoryAttributes recognises -- previously an unrecognised category silently
+    // discarded every attribute the seller entered instead of being rejected.
+    // BV-039: GET /auctions/{id}/bids and GET /reviews/seller/{id} are both unauthenticated and
+    // were publishing full bidder/reviewer identity to anonymous visitors. buyerId dropped from
+    // the bids response; buyerName on both routes is now a stable pseudonym ("Bidder N" /
+    // "Reviewer N") instead of the real name; the bids response gains `isMine`, computed
+    // server-side from the caller's own token when one is present. Full identity is unaffected
+    // on GET /auctions/mine/bids (the caller's own bids only) and the bid-placement response.
+    version: '7.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -545,30 +575,103 @@ const documentInput = {
       get: {
         tags: ['Payments'],
         security: [{ bearerAuth: [] }],
-        summary: 'COMPLETED transactions only',
+        summary: 'Every paid status except REFUNDED',
         responses: { 200: okBody(S.SellerStatsDto, 'Revenue and items sold'), 401: unauthorized },
       },
     },
-    '/payments/create-intent': {
+    '/payments/my-sales': {
+      get: {
+        tags: ['Payments'],
+        security: [{ bearerAuth: [] }],
+        summary: 'Cursor-paginated, newest first — a seller\'s own sales, including the buyer\'s delivery details',
+        requestParams: { query: R.paginationQuerySchema },
+        responses: { 200: okBody(S.PaginatedSellerSales, 'A page of your sales'), 401: unauthorized },
+      },
+    },
+    '/payments/{transactionId}/pay': {
       post: {
         tags: ['Payments'],
         security: [{ bearerAuth: [] }],
-        summary: 'PKR is zero-decimal, so amounts are not multiplied by 100',
-        requestBody: jsonRequest(R.createIntentSchema),
+        summary: 'Resolves synchronously against the self-built dummy gateway — see payment-gateway.service.ts for the test-card convention. A decline is a 200 with status PENDING, not an error.',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        requestBody: jsonRequest(R.payTransactionSchema),
         responses: {
-          200: okBody(S.PaymentIntentDto, 'Stripe client secret'),
+          200: okBody(S.PayResultDto, 'Charged, or declined'),
           400: badRequest,
           401: unauthorized,
+          403: forbidden,
           404: notFound,
           409: errBody('The transaction is already paid'),
         },
       },
     },
-    '/payments/webhook': {
+    '/payments/earnings': {
+      get: {
+        tags: ['Payments'],
+        security: [{ bearerAuth: [] }],
+        summary: 'A seller\'s dummy-ledger balance and the sales that built it',
+        responses: { 200: okBody(S.EarningsDto, 'Ledger balance and entries'), 401: unauthorized, 403: forbidden },
+      },
+    },
+    '/payments/{transactionId}/invoice': {
+      get: {
+        tags: ['Payments'],
+        security: [{ bearerAuth: [] }],
+        summary: 'The buyer, the seller, or an admin — LIFECYCLE-GAPS.md E3',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        responses: {
+          200: okBody(S.InvoiceDto, 'Invoice'),
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+        },
+      },
+    },
+    '/payments/{transactionId}/ship': {
+      patch: {
+        tags: ['Payments'],
+        security: [{ bearerAuth: [] }],
+        summary: 'Seller marks a COMPLETED sale shipped — starts the confirm-or-dispute window',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        responses: {
+          200: okBody(z.object({ transactionId: z.string(), status: z.literal('SHIPPED') }), 'Shipped'),
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Not in the COMPLETED state, or no delivery address on file'),
+        },
+      },
+    },
+    '/payments/{transactionId}/confirm-receipt': {
       post: {
         tags: ['Payments'],
-        summary: 'Stripe webhook. Needs the raw body, so it is mounted before express.json.',
-        responses: { 200: okBody(S.WebhookAckDto, 'Acknowledged'), 400: errBody('Bad signature') },
+        security: [{ bearerAuth: [] }],
+        summary: 'Buyer confirms receipt — releases the seller\'s payout',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        responses: {
+          200: okBody(z.object({ transactionId: z.string(), status: z.literal('DELIVERED') }), 'Delivered'),
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The transaction is not SHIPPED'),
+        },
+      },
+    },
+    '/payments/{transactionId}/dispute': {
+      post: {
+        tags: ['Payments'],
+        security: [{ bearerAuth: [] }],
+        summary: 'Buyer reports not-received / not-as-described instead of confirming receipt — holds the payout for admin review',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        requestBody: jsonRequest(R.raiseDisputeSchema),
+        responses: {
+          200: okBody(z.object({ transactionId: z.string(), status: z.literal('DISPUTED') }), 'Disputed'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The transaction is not SHIPPED'),
+        },
       },
     },
 
@@ -690,6 +793,35 @@ const documentInput = {
           403: forbidden,
           404: notFound,
           409: errBody('The transaction is not pending'),
+        },
+      },
+    },
+    '/admin/disputes': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'Every OPEN dispute, oldest first',
+        responses: {
+          200: okBody(z.array(S.AdminDisputeDto), 'Open disputes'),
+          401: unauthorized,
+          403: forbidden,
+        },
+      },
+    },
+    '/admin/disputes/{disputeId}/resolve': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'REFUND (buyer) or RELEASE (seller) — the only two outcomes for an open dispute',
+        requestParams: { path: z.object({ disputeId: z.string() }) },
+        requestBody: jsonRequest(R.resolveDisputeSchema),
+        responses: {
+          200: okBody(z.object({ disputeId: z.string(), resolution: z.enum(['REFUND', 'RELEASE']) }), 'Resolved'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('This dispute has already been resolved'),
         },
       },
     },

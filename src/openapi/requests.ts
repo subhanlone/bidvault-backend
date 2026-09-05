@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { strictEmail, lookupEmail } from '../config/email.js';
 import { isAcceptablePassword } from '../security/password-policy.js';
+// Side-effect-free (only imports zod), same as this module -- safe for api:contract codegen.
+import { CATEGORIES } from '../modules/listings/category-attributes.js';
 
 /**
  * Every request body the API accepts.
@@ -120,7 +122,10 @@ export const deleteAccountSchema = z
 export const submitListingSchema = z
   .object({
     title: z.string().trim().min(3).max(150),
-    category: z.string().trim().min(2).max(100),
+    // BV-015: was free text, so an unrecognised category (a typo, a rename, a direct API
+    // call) silently discarded every attribute the seller entered. Sourced from the same
+    // constant validateCategoryAttributes uses, so the two cannot drift apart.
+    category: z.enum(CATEGORIES),
     condition: z.enum(['NEW', 'LIKE_NEW', 'USED']),
     description: z.string().trim().min(10).max(5000),
     startPrice: z.coerce.number().int().positive().max(MAX_MONEY),
@@ -152,9 +157,22 @@ export const placeBidSchema = z
 
 // ---- payments ---------------------------------------------------------------------
 
-export const createIntentSchema = z
-  .object({ transactionId: z.string().min(1).max(128) })
-  .meta({ id: 'CreateIntentRequest' });
+export const payTransactionSchema = z
+  .object({
+    // Never stored — services/payment-gateway.service.ts reads it once to decide success/
+    // decline and discards it, the same as a real processor would.
+    cardNumber: z.string().trim().min(12).max(24),
+    // BV-047 / E4: the platform held no delivery contact data at all before this. Collected
+    // alongside payment rather than as a separate step, since the buyer is already filling in
+    // the checkout form at that point.
+    deliveryAddress: z.string().trim().min(10).max(300),
+    deliveryPhone: z.string().trim().min(7).max(20),
+  })
+  .meta({ id: 'PayTransactionRequest' });
+
+export const raiseDisputeSchema = z
+  .object({ reason: z.string().trim().min(10).max(1000) })
+  .meta({ id: 'RaiseDisputeRequest' });
 
 // ---- reviews ----------------------------------------------------------------------
 
@@ -189,6 +207,13 @@ export const voidTransactionSchema = z
 export const anonymizeUserSchema = z
   .object({ reason: z.string().trim().min(3).max(500) })
   .meta({ id: 'AnonymizeUserRequest' });
+
+export const resolveDisputeSchema = z
+  .object({
+    resolution: z.enum(['REFUND', 'RELEASE']),
+    note: z.string().trim().min(3).max(500),
+  })
+  .meta({ id: 'ResolveDisputeRequest' });
 
 // ---- pagination ---------------------------------------------------------------------
 

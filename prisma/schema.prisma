@@ -42,10 +42,28 @@ enum TransactionStatus {
   FAILED
   // BV-004 / BV-006: an admin's only way to give up on a transaction that will never be paid
   // (an uncapped-bid winner who vanishes, a buyer who never returns after a decline). Reachable
-  // only from PENDING -- a COMPLETED sale needs a refund (BV-047), not a void. Excluded from
-  // every revenue aggregate by construction: those all filter FOR status = 'COMPLETED' rather
-  // than excluding specific statuses, so a new one needs no separate exclusion list to stay out.
+  // only from PENDING -- a COMPLETED sale needs a refund, not a void.
   VOIDED
+  // BV-047: the post-payment fulfilment states A4 never had. Money is captured at COMPLETED,
+  // same as before -- everything below describes what happens to the *item*, not the charge.
+  //   COMPLETED -> SHIPPED   seller marks it sent; starts the reviewTimeoutHours clock (BV-040)
+  //   SHIPPED   -> DELIVERED buyer confirms receipt, or the clock runs out -- fires the seller payout
+  //   SHIPPED   -> DISPUTED  buyer reports not-received / not-as-described within the window
+  //   DISPUTED  -> DELIVERED admin sides with the seller -- releases the payout that was on hold
+  //   DISPUTED  -> REFUNDED  admin sides with the buyer -- refunds the charge, no payout ever fires
+  // Revenue aggregates now select every status below rather than just COMPLETED (the sale still
+  // happened), explicitly excluding REFUNDED (the money went back) -- see auction-dto.ts and
+  // admin.routes.ts.
+  SHIPPED
+  DELIVERED
+  DISPUTED
+  REFUNDED
+}
+
+enum DisputeStatus {
+  OPEN
+  RESOLVED_REFUNDED
+  RESOLVED_RELEASED
 }
 
 // BV-018: no route deletes a User today. When one is added it can only be anonymise-in-place
@@ -63,6 +81,10 @@ model User {
   notifyOutbid       Boolean                  @default(true)
   notifyWins         Boolean                  @default(true)
   notifyNews         Boolean                  @default(false)
+  // A seller's accumulated payout balance from the dummy gateway — no external account, no
+  // onboarding step. Credited by fulfillment.service.ts's creditSeller() when a sale reaches
+  // DELIVERED; each credit's own record lives in LedgerEntry below, this is the running total.
+  ledgerBalance      Int                      @default(0)
   createdAt          DateTime                 @default(now())
   updatedAt          DateTime                 @updatedAt
   listings           Listing[]                @relation("SellerListings")
@@ -78,6 +100,7 @@ model User {
   auditLogs          AuditLog[]               @relation("ActorAuditLogs")
   reviewsGiven       SellerReview[]           @relation("BuyerReviews")
   reviewsReceived    SellerReview[]           @relation("SellerReviews")
+  ledgerEntries      LedgerEntry[]
 }
 
 model Listing {
@@ -107,37 +130,37 @@ model Listing {
 }
 
 model Auction {
-  id            String        @id @default(cuid())
-  listingId     String        @unique
-  sellerId      String
-  title         String
-  category      String
-  condition     ItemCondition
-  description   String
-  imageUrl      String?
-  emoji         String?
-  startPrice    Int
-  reservePrice  Int?
+  id           String               @id @default(cuid())
+  listingId    String               @unique
+  sellerId     String
+  title        String
+  category     String
+  condition    ItemCondition
+  description  String
+  imageUrl     String?
+  emoji        String?
+  startPrice   Int
+  reservePrice Int?
   // Outcome of the reserve check, written once when the auction closes.
   // null  = no reserve was set, or the auction has not closed yet
   // true  = closed at or above reserve; an AuctionTransaction exists
   // false = closed below reserve; deliberately NO transaction, nothing owed
-  reserveMet    Boolean?
-  minIncrement  Int
-  currentBid    Int
-  bidCount      Int           @default(0)
-  attributes    Json?
-  status        AuctionStatus @default(ACTIVE)
-  startTime     DateTime
-  endTime       DateTime
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  listing       Listing       @relation(fields: [listingId], references: [id])
-  seller        User          @relation("SellerAuctions", fields: [sellerId], references: [id])
-  bids          Bid[]
-  watchlistBy   Watchlist[]
-  transactions  AuctionTransaction[]
-  reviews       SellerReview[]
+  reserveMet   Boolean?
+  minIncrement Int
+  currentBid   Int
+  bidCount     Int                  @default(0)
+  attributes   Json?
+  status       AuctionStatus        @default(ACTIVE)
+  startTime    DateTime
+  endTime      DateTime
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  listing      Listing              @relation(fields: [listingId], references: [id])
+  seller       User                 @relation("SellerAuctions", fields: [sellerId], references: [id])
+  bids         Bid[]
+  watchlistBy  Watchlist[]
+  transactions AuctionTransaction[]
+  reviews      SellerReview[]
 
   @@index([status, endTime])
   @@index([sellerId])
@@ -206,16 +229,16 @@ model PasswordResetToken {
 }
 
 model RefreshToken {
-  id                String       @id @default(cuid())
+  id                String    @id @default(cuid())
   userId            String
-  tokenHash         String       @unique
+  tokenHash         String    @unique
   expiresAt         DateTime
   revokedAt         DateTime?
   replacedByTokenId String?
-  createdAt         DateTime     @default(now())
+  createdAt         DateTime  @default(now())
   userAgent         String?
   ipAddress         String?
-  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
@@ -234,13 +257,16 @@ model Notification {
 }
 
 model AuctionTransaction {
-  id                   String            @id @default(cuid())
-  auctionId            String
-  winnerId             String
-  sellerId             String
-  finalAmount          Int
-  status               TransactionStatus @default(PENDING)
-  stripePaymentIntentId String?          @unique
+  id               String            @id @default(cuid())
+  auctionId        String
+  winnerId         String
+  sellerId         String
+  finalAmount      Int
+  status           TransactionStatus @default(PENDING)
+  // Set by the dummy payment gateway (services/payment-gateway.service.ts) on a successful
+  // charge. Format PAY-<random>, generated by this app -- nothing external to reconcile
+  // against.
+  paymentReference String?           @unique
   // Why the last payment attempt failed, in the buyer's language.
   //
   // The failure used to live in `status` alone: payment_intent.payment_failed wrote FAILED,
@@ -251,36 +277,81 @@ model AuctionTransaction {
   //
   // Cleared whenever a fresh intent is created, so it always describes the most recent
   // attempt rather than accumulating history.
-  lastPaymentError     String?
-  createdAt            DateTime          @default(now())
-  auction              Auction           @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  lastPaymentError String?
+  // BV-047 / E4: collected from the buyer alongside create-intent -- a per-sale snapshot rather
+  // than a User-profile field, since different sales can reasonably ship to different places.
+  // Both null until payment; deliveryAddress is required before the seller can mark SHIPPED.
+  deliveryAddress  String?
+  deliveryPhone    String?
+  // Set when the seller marks the item SHIPPED. The reviewTimeoutHours confirm-or-dispute
+  // window (BV-040) is measured from here, not from COMPLETED -- the buyer's clock should not
+  // run while the seller hasn't sent anything yet.
+  shippedAt        DateTime?
+  createdAt        DateTime          @default(now())
+  auction          Auction           @relation(fields: [auctionId], references: [id], onDelete: Cascade)
   // Restrict, not Cascade (BV-018): a financial record must not disappear because the row it
   // references did. There is no account-deletion route yet, so nothing currently exercises
   // this, but the moment one exists it can only be anonymise-in-place — clear the PII fields,
   // keep the row — because this constraint refuses to let the User row itself be removed
   // while it still has transaction history.
-  winner               User              @relation("WinnerTransactions", fields: [winnerId], references: [id], onDelete: Restrict)
-  seller               User              @relation("SellerTransactions", fields: [sellerId], references: [id], onDelete: Restrict)
-  review               SellerReview?
+  winner           User              @relation("WinnerTransactions", fields: [winnerId], references: [id], onDelete: Restrict)
+  seller           User              @relation("SellerTransactions", fields: [sellerId], references: [id], onDelete: Restrict)
+  review           SellerReview?
+  dispute          Dispute?
+  ledgerEntry      LedgerEntry?
 
   @@unique([auctionId])
   @@index([sellerId, status])
   @@index([winnerId])
 }
 
+// The dummy gateway's payout record — one per DELIVERED transaction, written by
+// creditSeller() alongside incrementing User.ledgerBalance. Kept as its own row (not just
+// the running total) so a seller's Earnings view can show individual sales, not just a number.
+model LedgerEntry {
+  id            String             @id @default(cuid())
+  sellerId      String
+  transactionId String             @unique
+  amount        Int
+  createdAt     DateTime           @default(now())
+  seller        User               @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  transaction   AuctionTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+
+  @@index([sellerId, createdAt])
+}
+
+// BV-047 / E6: the platform previously had no way to express "item never arrived", "arrived
+// broken" or "not as described" at all. One dispute per transaction -- reachable only from
+// SHIPPED (see TransactionStatus) -- is enough for a buyer-initiated report reviewed by an
+// admin; there is no need for a multi-message ticket thread on top of it yet.
+model Dispute {
+  id               String             @id @default(cuid())
+  transactionId    String             @unique
+  transaction      AuctionTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  raisedByUserId   String
+  reason           String
+  status           DisputeStatus      @default(OPEN)
+  resolvedByUserId String?
+  resolutionNote   String?
+  createdAt        DateTime           @default(now())
+  resolvedAt       DateTime?
+
+  @@index([status])
+}
+
 model SellerReview {
-  id            String   @id @default(cuid())
-  transactionId String   @unique
+  id            String             @id @default(cuid())
+  transactionId String             @unique
   auctionId     String
   buyerId       String
   sellerId      String
   stars         Int
   comment       String?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime           @default(now())
   transaction   AuctionTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  auction       Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
-  buyer         User     @relation("BuyerReviews", fields: [buyerId], references: [id], onDelete: Cascade)
-  seller        User     @relation("SellerReviews", fields: [sellerId], references: [id], onDelete: Cascade)
+  auction       Auction            @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  buyer         User               @relation("BuyerReviews", fields: [buyerId], references: [id], onDelete: Cascade)
+  seller        User               @relation("SellerReviews", fields: [sellerId], references: [id], onDelete: Cascade)
 
   @@index([sellerId, createdAt])
 }

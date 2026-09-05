@@ -57,7 +57,11 @@ function toListingDto(
 
 function generateListingCode(): string {
   const year = new Date().getFullYear();
-  const suffix = crypto.randomBytes(3).toString('hex').toUpperCase();
+  // BV-014: widened from randomBytes(3) (16.7M values -- ~50% collision odds by ~4,800
+  // listings sharing a year prefix) to randomBytes(5) (1.1 x 10^12 values), which makes a
+  // collision effectively impossible on its own. The retry below is the actual fix; this is
+  // just cheaper insurance against needing it.
+  const suffix = crypto.randomBytes(5).toString('hex').toUpperCase();
   return `BV-${year}-${suffix}`;
 }
 
@@ -259,27 +263,45 @@ router.post(
       return;
     }
 
-    const listingCode = generateListingCode();
-
-    const listing = await prisma.listing.create({
-      data: {
-        listingCode,
-        sellerId: req.auth!.userId,
-        title: req.body.title,
-        category: req.body.category,
-        condition: req.body.condition as ItemCondition,
-        description: req.body.description,
-        startPrice: req.body.startPrice,
-        reservePrice: req.body.reservePrice,
-        minIncrement: req.body.minIncrement,
-        durationDays: req.body.durationDays,
-        imageUrl: req.body.imageUrl,
-        emoji: req.body.emoji,
-        attributes: attributesResult.data as Prisma.InputJsonValue,
-        status: 'PENDING',
-      },
-      include: { seller: true },
-    });
+    // BV-014: listingCode is randomly generated and unique, so a collision -- rare, but not
+    // negligible at scale (see generateListingCode) -- is entirely internal and carries no
+    // information the seller did anything wrong. Re-rolling and retrying is the honest fix;
+    // surfacing it as a 409 (what the shared P2002 handler would otherwise turn it into) would
+    // blame the seller for something they never touched, after they just filled in a 3-step form.
+    let listing: Prisma.ListingGetPayload<{ include: { seller: true } }> | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        listing = await prisma.listing.create({
+          data: {
+            listingCode: generateListingCode(),
+            sellerId: req.auth!.userId,
+            title: req.body.title,
+            category: req.body.category,
+            condition: req.body.condition as ItemCondition,
+            description: req.body.description,
+            startPrice: req.body.startPrice,
+            reservePrice: req.body.reservePrice,
+            minIncrement: req.body.minIncrement,
+            durationDays: req.body.durationDays,
+            imageUrl: req.body.imageUrl,
+            emoji: req.body.emoji,
+            attributes: attributesResult.data as Prisma.InputJsonValue,
+            status: 'PENDING',
+          },
+          include: { seller: true },
+        });
+        break;
+      } catch (err) {
+        const isCodeCollision =
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002' &&
+          (err.meta?.target as string[] | undefined)?.includes('listingCode');
+        if (!isCodeCollision || attempt === 2) throw err;
+      }
+    }
+    // Unreachable except by construction: the loop above only exits via `break` (success) or
+    // `throw` (exhausted retries / a different error) -- listing is always assigned by here.
+    if (!listing) throw new Error('unreachable: listing creation loop exited without a result');
 
     dispatchEmail(sendListingSubmittedEmail(
       { email: listing.seller.email, name: listing.seller.name },
@@ -385,6 +407,15 @@ router.post(
   }),
 );
 
+// BV-049: a few hundred pending listings (plausible after a holiday or an outage, and made
+// more likely by the absence of any review SLA -- see D1/BV-040) turned this into hundreds of
+// serial transactions inside one HTTP request, long enough for Railway's request timeout or
+// the client's own fetch to cut the connection partway through. The work already done commits
+// regardless (each approval is its own transaction), but the admin had no way to tell how far
+// it got, and no way to resume without guessing. Capped per call; the client loops on
+// `remaining` for a full backlog.
+const APPROVE_ALL_BATCH_SIZE = 50;
+
 router.post(
   '/approve-all',
   requireAuth(['ADMIN']),
@@ -392,6 +423,8 @@ router.post(
     const pending = await prisma.listing.findMany({
       where: { status: 'PENDING' },
       include: { seller: true },
+      orderBy: { submittedAt: 'asc' },
+      take: APPROVE_ALL_BATCH_SIZE,
     });
 
     const io = req.app.get('io') as Server | undefined;
@@ -411,7 +444,12 @@ router.post(
       }
     }
 
-    ok(res, { approved, failed: failures.length, failures });
+    // Queried fresh rather than derived from pending.length - approved - failures.length: a
+    // ListingStateError means the row's status changed under us (a concurrent single approve/
+    // reject), not that it is still sitting PENDING, so subtraction would double-count it.
+    const remaining = await prisma.listing.count({ where: { status: 'PENDING' } });
+
+    ok(res, { approved, failed: failures.length, failures, remaining });
   }),
 );
 

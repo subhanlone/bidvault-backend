@@ -36,7 +36,7 @@ export const AuctionStatus = z
   .enum(['SCHEDULED', 'ACTIVE', 'CLOSED'])
   .meta({ id: 'AuctionStatus' });
 export const TransactionStatus = z
-  .enum(['PENDING', 'COMPLETED', 'FAILED', 'VOIDED'])
+  .enum(['PENDING', 'COMPLETED', 'FAILED', 'VOIDED', 'SHIPPED', 'DELIVERED', 'DISPUTED', 'REFUNDED'])
   .meta({ id: 'TransactionStatus' });
 export const NotificationType = z
   .enum([
@@ -147,6 +147,24 @@ export const BidDto = z
   })
   .meta({ id: 'Bid' });
 
+// BV-039: GET /:auctionId/bids is unauthenticated and reaches anonymous visitors, who could
+// otherwise enumerate exactly who bid, how much and when, and correlate one person's bidding
+// across the whole platform via buyerId. Unlike BidDto (used by the bidder's own POST response
+// and by GET /auctions/mine/bids, both already scoped to the caller's own identity), the public
+// feed carries no buyerId at all and masks the name to a stable per-auction pseudonym --
+// `isMine` is computed server-side from the caller's own token, when one is present, so the
+// live-bidding screen can still tell the viewer's own bids apart without needing their real id.
+export const PublicBidDto = z
+  .object({
+    bidId: z.string(),
+    auctionId: z.string(),
+    isMine: z.boolean(),
+    buyerName: z.string(),
+    amount: z.number().int(),
+    timestamp: isoDateTime,
+  })
+  .meta({ id: 'PublicBid' });
+
 export const PlatformStatsDto = z
   .object({
     userCount: z.number().int(),
@@ -243,6 +261,8 @@ export const SellerReviewsDto = z
     /** Mean stars to one decimal, or null when the seller has no reviews. */
     average: z.number().nullable(),
     count: z.number().int(),
+    // BV-039: this route is unauthenticated too — buyerName is a stable per-seller pseudonym
+    // ("Reviewer N"), not the reviewer's real name.
     reviews: z.array(ReviewDto.extend({ buyerName: z.string() })),
   })
   .meta({ id: 'SellerReviews' });
@@ -266,6 +286,12 @@ export const WonTransactionDto = z
      * Cleared when a fresh attempt starts.
      */
     lastPaymentError: z.string().optional(),
+    // BV-047: present once the seller has marked the item shipped. reviewDeadlineAt is
+    // computed server-side (shippedAt + reviewTimeoutHours) so the frontend never needs the
+    // platform setting itself just to render a countdown.
+    shippedAt: isoDateTime.optional(),
+    reviewDeadlineAt: isoDateTime.optional(),
+    disputeReason: z.string().optional(),
     createdAt: isoDateTime,
     reviewed: z.boolean(),
   })
@@ -274,6 +300,87 @@ export const WonTransactionDto = z
 export const SellerStatsDto = z
   .object({ totalRevenue: z.number().int(), itemsSold: z.number().int() })
   .meta({ id: 'SellerStats' });
+
+/** A seller's own sale — GET /payments/my-sales. Carries what BV-047 added: the buyer's
+ * delivery details and the fulfilment state, neither of which existed before. */
+export const SellerSaleDto = z
+  .object({
+    transactionId: z.string(),
+    auctionId: z.string(),
+    auctionTitle: z.string(),
+    auctionEmoji: z.string(),
+    auctionImageUrl: z.string(),
+    buyerName: z.string(),
+    finalAmount: z.number().int(),
+    status: TransactionStatus,
+    deliveryAddress: z.string().optional(),
+    deliveryPhone: z.string().optional(),
+    shippedAt: isoDateTime.optional(),
+    reviewDeadlineAt: isoDateTime.optional(),
+    disputeReason: z.string().optional(),
+    createdAt: isoDateTime,
+  })
+  .meta({ id: 'SellerSale' });
+
+export const PaginatedSellerSales = z
+  .object({ items: z.array(SellerSaleDto), nextCursor: z.string().nullable() })
+  .meta({ id: 'PaginatedSellerSales' });
+
+/** GET /payments/earnings — a seller's dummy-ledger balance and the sales that built it. */
+export const EarningsDto = z
+  .object({
+    ledgerBalance: z.number().int(),
+    entries: z.array(
+      z.object({
+        transactionId: z.string(),
+        auctionTitle: z.string(),
+        amount: z.number().int(),
+        createdAt: isoDateTime,
+      }),
+    ),
+  })
+  .meta({ id: 'Earnings' });
+
+/** LIFECYCLE-GAPS.md E3 — GET /payments/{transactionId}/invoice, derived from the transaction
+ * row rather than a separately stored document. */
+export const InvoiceDto = z
+  .object({
+    transactionId: z.string(),
+    invoiceNumber: z.string(),
+    auctionTitle: z.string(),
+    category: z.string(),
+    buyerName: z.string(),
+    buyerEmail: z.string(),
+    sellerName: z.string(),
+    sellerEmail: z.string(),
+    amount: z.number().int(),
+    status: TransactionStatus,
+    paymentReference: z.string().optional(),
+    deliveryAddress: z.string().optional(),
+    deliveryPhone: z.string().optional(),
+    createdAt: isoDateTime,
+    shippedAt: isoDateTime.optional(),
+    disputeStatus: z.enum(['OPEN', 'RESOLVED_REFUNDED', 'RESOLVED_RELEASED']).optional(),
+    disputeReason: z.string().optional(),
+    disputeResolutionNote: z.string().optional(),
+  })
+  .meta({ id: 'Invoice' });
+
+/** GET /admin/disputes — one open dispute a buyer has raised, awaiting resolution. */
+export const AdminDisputeDto = z
+  .object({
+    disputeId: z.string(),
+    transactionId: z.string(),
+    auctionTitle: z.string(),
+    buyerId: z.string(),
+    buyerName: z.string(),
+    sellerId: z.string(),
+    sellerName: z.string(),
+    finalAmount: z.number().int(),
+    reason: z.string(),
+    createdAt: isoDateTime,
+  })
+  .meta({ id: 'AdminDispute' });
 
 /** A PENDING transaction an admin can void — see POST /admin/transactions/{transactionId}/void. */
 export const AdminTransactionDto = z
@@ -413,6 +520,9 @@ export const BulkApprovalDto = z
     approved: z.number().int(),
     failed: z.number().int(),
     failures: z.array(z.object({ listingId: z.string(), error: z.string() })),
+    // BV-049: one call processes at most 50 -- still-PENDING count after this batch, so the
+    // caller knows whether to loop again rather than guessing from a cut-off connection.
+    remaining: z.number().int(),
   })
   .meta({ id: 'BulkApproval' });
 
@@ -432,18 +542,22 @@ export const NotificationReadDto = z
   .object({ id: z.string(), isRead: z.literal(true) })
   .meta({ id: 'NotificationRead' });
 
-export const PaymentIntentDto = z
-  .object({ clientSecret: z.string().nullable() })
-  .meta({ id: 'PaymentIntent' });
-
-export const WebhookAckDto = z.object({ received: z.literal(true) }).meta({ id: 'WebhookAck' });
+/** POST /payments/{transactionId}/pay — resolves synchronously; a decline is an ordinary
+ * outcome (BV-006), not a request error, so it is a 200 with status PENDING, not a 4xx. */
+export const PayResultDto = z
+  .object({
+    transactionId: z.string(),
+    status: z.enum(['COMPLETED', 'PENDING']),
+    lastPaymentError: z.string().optional(),
+  })
+  .meta({ id: 'PayResult' });
 
 // BV-029: cursor-paginated list responses. One per endpoint's item shape, not one shared
 // generic $ref -- zod-openapi needs a distinct schema id per named type, and each of these
 // really is a different item shape.
 export const PaginatedAuctionsDto = paginated('PaginatedAuctions', AuctionDto);
 export const PaginatedBidsWithAuctionDto = paginated('PaginatedBidsWithAuction', BidWithAuctionDto);
-export const PaginatedBidsDto = paginated('PaginatedBids', BidDto);
+export const PaginatedBidsDto = paginated('PaginatedBids', PublicBidDto);
 export const PaginatedListingsDto = paginated('PaginatedListings', ListingDto);
 
 export type UserDtoType = z.infer<typeof UserDto>;

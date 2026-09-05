@@ -13,31 +13,8 @@
  * not touch, so the two cannot drift apart silently.
  */
 import { readFileSync } from 'node:fs';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
-
-// Stripe is the one dependency here that would otherwise make a network call. Only the
-// PaymentIntent methods are replaced; webhooks keeps the real implementation so signature
-// verification is genuinely exercised rather than waved through. Constructing a Stripe
-// instance opens no connection.
-vi.mock('stripe', async () => {
-  const actual = await vi.importActual<typeof import('stripe')>('stripe');
-  const real = new actual.default('sk_test_placeholder_for_signature_verification_only');
-  const intent = {
-    id: 'pi_test_conformance',
-    client_secret: 'pi_test_conformance_secret_abc',
-    status: 'requires_payment_method',
-  };
-  class MockStripe {
-    webhooks = real.webhooks;
-    paymentIntents = {
-      create: vi.fn(async () => intent),
-      retrieve: vi.fn(async () => intent),
-    };
-  }
-  // Spread first: `actual` carries its own `default`, which would otherwise replace the mock.
-  return { ...actual, default: MockStripe };
-});
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
@@ -455,73 +432,108 @@ describe('payments', () => {
     expect(res.status).toBe(200);
   });
 
-  it('POST /payments/create-intent', async () => {
-    hit('post', '/payments/create-intent');
+  it('POST /payments/{transactionId}/pay', async () => {
+    hit('post', '/payments/{transactionId}/pay');
     const res = await request(app)
-      .post(api('/payments/create-intent'))
+      .post(api(`/payments/${w.transactionId}/pay`))
       .set(auth(w.buyer.token))
-      .send({ transactionId: w.transactionId });
+      .send({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveProperty('clientSecret');
+    expect(res.body.data.status).toBe('COMPLETED');
   });
 
-  // create-intent was the one route validating its body by hand, so its 400 was an
-  // ErrorResponse while the contract documented a ValidationError. Now it goes through
-  // validateBody like everything else; this covers the branch that was mis-described.
-  it('POST /payments/create-intent — rejects a missing body as a ValidationError', async () => {
+  // Now goes through validateBody like everything else, so a malformed body is a
+  // ValidationError, not an ErrorResponse.
+  it('POST /payments/{transactionId}/pay — rejects a missing body as a ValidationError', async () => {
     const res = await request(app)
-      .post(api('/payments/create-intent'))
+      .post(api(`/payments/${w.transactionId}/pay`))
       .set(auth(w.buyer.token))
       .send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Validation error');
-    expect(res.body.details).toHaveProperty('transactionId');
+    expect(res.body.details).toHaveProperty('cardNumber');
   });
 
   // BV-065: the outcome.status branch in the handler can answer 409 for a transaction that
   // is already COMPLETED — a business rule, not a validateBody failure — on the same 400
   // slot ValidationErrorBody had claimed. The afterEach above turns "no violation recorded"
   // into an assertion for free.
-  it('POST /payments/create-intent — an already-paid transaction answers 409, not 400', async () => {
+  it('POST /payments/{transactionId}/pay — an already-paid transaction answers 409, not 400', async () => {
     await prisma.auctionTransaction.update({
       where: { id: w.transactionId },
       data: { status: 'COMPLETED' },
     });
     const res = await request(app)
-      .post(api('/payments/create-intent'))
+      .post(api(`/payments/${w.transactionId}/pay`))
       .set(auth(w.buyer.token))
-      .send({ transactionId: w.transactionId });
+      .send({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({ success: false, error: expect.stringContaining('already') });
   });
 
-  it('POST /payments/webhook', async () => {
-    hit('post', '/payments/webhook');
-    // Attach the intent id the handler looks the transaction up by.
+  it('GET /payments/earnings', async () => {
+    hit('get', '/payments/earnings');
+    const res = await request(app).get(api('/payments/earnings')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveProperty('ledgerBalance');
+  });
+
+  it('GET /payments/{transactionId}/invoice', async () => {
+    hit('get', '/payments/{transactionId}/invoice');
+    const res = await request(app).get(api(`/payments/${w.transactionId}/invoice`)).set(auth(w.buyer.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.transactionId).toBe(w.transactionId);
+  });
+
+  it('GET /payments/my-sales', async () => {
+    hit('get', '/payments/my-sales');
+    const res = await request(app).get(api('/payments/my-sales')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.items.some((t: { transactionId: string }) => t.transactionId === w.transactionId)).toBe(true);
+  });
+
+  it('PATCH /payments/{transactionId}/ship', async () => {
+    hit('patch', '/payments/{transactionId}/ship');
     await prisma.auctionTransaction.update({
       where: { id: w.transactionId },
-      data: { stripePaymentIntentId: 'pi_test_conformance' },
+      data: { status: 'COMPLETED', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' },
     });
-
-    const { default: Stripe } = await vi.importActual<typeof import('stripe')>('stripe');
-    const payload = JSON.stringify({
-      id: 'evt_test_conformance',
-      object: 'event',
-      type: 'payment_intent.succeeded',
-      data: { object: { id: 'pi_test_conformance', object: 'payment_intent' } },
-    });
-    const signature = Stripe.webhooks.generateTestHeaderString({
-      payload,
-      secret: process.env.STRIPE_WEBHOOK_SECRET!,
-    });
-
     const res = await request(app)
-      .post(api('/payments/webhook'))
-      .set('stripe-signature', signature)
-      .set('Content-Type', 'application/json')
-      .send(payload);
+      .patch(api(`/payments/${w.transactionId}/ship`))
+      .set(auth(w.seller.token));
     expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('SHIPPED');
   });
+
+  it('POST /payments/{transactionId}/confirm-receipt', async () => {
+    hit('post', '/payments/{transactionId}/confirm-receipt');
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: { status: 'SHIPPED', shippedAt: new Date() },
+    });
+    const res = await request(app)
+      .post(api(`/payments/${w.transactionId}/confirm-receipt`))
+      .set(auth(w.buyer.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('DELIVERED');
+  });
+
+  it('POST /payments/{transactionId}/dispute', async () => {
+    hit('post', '/payments/{transactionId}/dispute');
+    // A separate transaction (the second seeded buyer's) so this does not collide with the
+    // confirm-receipt test's use of w.transactionId — both run against the same fresh world.
+    await prisma.auctionTransaction.update({
+      where: { id: w.otherBuyerTransactionId },
+      data: { status: 'SHIPPED', shippedAt: new Date() },
+    });
+    const res = await request(app)
+      .post(api(`/payments/${w.otherBuyerTransactionId}/dispute`))
+      .set(auth(w.otherBuyer.token))
+      .send({ reason: 'Item arrived damaged and unusable.' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('DISPUTED');
+  });
+
 });
 
 // ---- notifications ----------------------------------------------------------------
@@ -554,9 +566,10 @@ describe('notifications', () => {
 describe('reviews', () => {
   it('POST /reviews', async () => {
     hit('post', '/reviews');
+    // BV-047: a review requires DELIVERED (receipt confirmed), not just COMPLETED (paid).
     await prisma.auctionTransaction.update({
       where: { id: w.transactionId },
-      data: { status: 'COMPLETED' },
+      data: { status: 'DELIVERED' },
     });
     const res = await request(app)
       .post(api('/reviews'))
@@ -661,6 +674,31 @@ describe('admin', () => {
 
     // Restore PENDING so later tests in this file that depend on w.transactionId are unaffected.
     await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'PENDING' } });
+  });
+
+  it('GET /admin/disputes', async () => {
+    hit('get', '/admin/disputes');
+    await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'DISPUTED' } });
+    await prisma.dispute.create({
+      data: { transactionId: w.transactionId, raisedByUserId: w.buyer.id, reason: 'Item never arrived.' },
+    });
+    const res = await request(app).get(api('/admin/disputes')).set(auth(w.admin.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.some((d: { transactionId: string }) => d.transactionId === w.transactionId)).toBe(true);
+  });
+
+  it('POST /admin/disputes/{disputeId}/resolve', async () => {
+    hit('post', '/admin/disputes/{disputeId}/resolve');
+    await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'DISPUTED' } });
+    const dispute = await prisma.dispute.create({
+      data: { transactionId: w.transactionId, raisedByUserId: w.buyer.id, reason: 'Item never arrived.' },
+    });
+    const res = await request(app)
+      .post(api(`/admin/disputes/${dispute.id}/resolve`))
+      .set(auth(w.admin.token))
+      .send({ resolution: 'RELEASE', note: 'Seller provided proof of delivery.' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.resolution).toBe('RELEASE');
   });
 
   it('GET /admin/users', async () => {

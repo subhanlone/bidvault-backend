@@ -608,18 +608,6 @@ describe('availability of the controls themselves', () => {
     }
   });
 
-  it('exempts the Stripe webhook from the global limit', async () => {
-    // Every event for every seller arrives from Stripe's small address pool, so they share one
-    // key. The endpoint authenticates by signature, so skipping the counter does not open it —
-    // an unsigned request is still refused, which is what this asserts.
-    const res = await request(app)
-      .post(api('/payments/webhook'))
-      .set('Content-Type', 'application/json')
-      .send('{}');
-
-    expect(res.status).not.toBe(429);
-    expect(res.status).toBe(400);
-  });
 });
 
 describe('password hashes upgrade in place', () => {

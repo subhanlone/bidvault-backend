@@ -3,67 +3,51 @@
  *
  * `src/openapi/document.ts` lists paths and operations by hand. Everything else in the
  * contract chain is generated and guarded, but nothing stopped someone adding a route and
- * forgetting to document it, or leaving a path in the spec after deleting the route. This
- * closes that gap by walking the live Express router rather than parsing source, so it sees
- * exactly what is mounted.
+ * forgetting to document it, or leaving a path in the spec after deleting the route.
+ *
+ * Built from `app.ts`'s explicit `routeMounts` list plus each router's own flat `.stack`,
+ * rather than walking the live Express router's internals to recover a mount prefix. That
+ * used to work by parsing `layer.regexp.source` back into a literal string; Express 5's
+ * path-to-regexp v8 rewrite replaced `.regexp` with an opaque compiled matcher function that
+ * has no string form to parse at all. Every module router here is flat (no further nested
+ * `router.use()`), so each layer's own `route.path` is still a literal string in Express 5 —
+ * only the *mount* prefix stopped being recoverable, and that was always known statically in
+ * app.ts anyway.
  *
  *   npm run api:routes
  */
 import { readFileSync } from 'node:fs';
-import { createApp } from '../src/app.js';
+import { routeMounts } from '../src/app.js';
 
-type Layer = {
-  route?: { path: string; methods: Record<string, boolean> };
-  handle?: { stack?: Layer[] };
-  regexp?: RegExp;
-};
+type Layer = { route?: { path: string; methods: Record<string, boolean> } };
 
 const METHODS = ['get', 'post', 'put', 'patch', 'delete'];
 
-const app = createApp() as unknown as { _router?: { stack: Layer[] }; router?: { stack: Layer[] } };
-const rootStack = app._router?.stack ?? app.router?.stack;
-if (!rootStack) {
-  console.error('Could not reach the Express router stack — internals may have changed.');
-  process.exit(1);
-}
+// The two routes declared directly on the app rather than through a module router — see
+// app.ts. There are only two; listing them is simpler and more robust than walking `app`'s
+// own router internals for exactly the same reason the mounted ones no longer can be.
+const DIRECT_ROUTES = ['GET /api/v1/health', 'GET /api/v1/stats'];
 
-/** Recover a mount prefix such as /api/v1/auctions from a router layer's regexp. */
-function prefixFromRegexp(re: RegExp | undefined): string {
-  if (!re) return '';
-  const src = re.source;
-  if (src === '^\\/?(?=\\/|$)') return '';
-  return src
-    .replace('^\\/?', '/')
-    .replace('(?=\\/|$)', '')
-    .replace(/\\\//g, '/')
-    .replace(/\$$/, '')
-    .replace(/\/\?$/, '');
-}
-
-const live: string[] = [];
-(function walk(stack: Layer[], prefix: string) {
+const live: string[] = [...DIRECT_ROUTES];
+for (const [prefix, router] of routeMounts) {
+  const stack = (router as unknown as { stack: Layer[] }).stack;
   for (const layer of stack) {
-    if (layer.route) {
-      for (const [m, on] of Object.entries(layer.route.methods)) {
-        if (on) live.push(`${m.toUpperCase()} ${prefix + layer.route.path}`);
-      }
-    } else if (layer.handle?.stack) {
-      walk(layer.handle.stack, prefix + prefixFromRegexp(layer.regexp));
+    if (!layer.route) continue;
+    for (const [m, on] of Object.entries(layer.route.methods)) {
+      if (on) live.push(`${m.toUpperCase()} ${prefix}${layer.route.path}`);
     }
   }
-})(rootStack, '');
+}
 
 // Express writes :param and carries the /api/v1 base that openapi.json keeps in `servers`.
 const normalise = (entry: string) => {
-  const [method, ...rest] = entry.split(' ');
-  const path =
-    rest
-      .join(' ')
-      .replace(/^\^/, '')
+  const [method, path] = entry.split(' ');
+  const normalised =
+    path
       .replace(/^\/api\/v1/, '')
       .replace(/:([A-Za-z0-9_]+)/g, '{$1}')
       .replace(/\/$/, '') || '/';
-  return `${method} ${path}`;
+  return `${method} ${normalised}`;
 };
 
 const served = new Set(live.map(normalise));

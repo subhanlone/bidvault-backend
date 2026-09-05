@@ -21,21 +21,8 @@
  * file does not cover, so the gap cannot quietly reopen.
  */
 import { readFileSync } from 'node:fs';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
-
-// Same treatment as the conformance suite: only the PaymentIntent calls are replaced, so no
-// test here reaches the network. Signature verification keeps its real implementation.
-vi.mock('stripe', async () => {
-  const actual = await vi.importActual<typeof import('stripe')>('stripe');
-  const real = new actual.default('sk_test_placeholder_for_signature_verification_only');
-  const intent = { id: 'pi_test_authz', client_secret: 'pi_test_authz_secret', status: 'requires_payment_method' };
-  class MockStripe {
-    webhooks = real.webhooks;
-    paymentIntents = { create: vi.fn(async () => intent), retrieve: vi.fn(async () => intent) };
-  }
-  return { ...actual, default: MockStripe };
-});
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
@@ -121,8 +108,20 @@ const OPERATIONS: Op[] = [
   // ---- payments -------------------------------------------------------------------------
   { method: 'get', contractPath: '/payments/my-wins', url: () => '/payments/my-wins', allow: ['BUYER'] },
   { method: 'get', contractPath: '/payments/seller-stats', url: () => '/payments/seller-stats', allow: ['SELLER'] },
-  { method: 'post', contractPath: '/payments/create-intent', url: () => '/payments/create-intent',
-    allow: ['BUYER'], body: (w) => ({ transactionId: w.transactionId }) },
+  { method: 'get', contractPath: '/payments/my-sales', url: () => '/payments/my-sales', allow: ['SELLER'] },
+  { method: 'get', contractPath: '/payments/earnings', url: () => '/payments/earnings', allow: ['SELLER'] },
+  { method: 'get', contractPath: '/payments/{transactionId}/invoice',
+    url: (w) => `/payments/${w.transactionId}/invoice`, allow: ['BUYER', 'SELLER', 'ADMIN'] },
+  { method: 'post', contractPath: '/payments/{transactionId}/pay',
+    url: (w) => `/payments/${w.transactionId}/pay`, allow: ['BUYER'],
+    body: () => ({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }) },
+  { method: 'patch', contractPath: '/payments/{transactionId}/ship',
+    url: (w) => `/payments/${w.transactionId}/ship`, allow: ['SELLER'] },
+  { method: 'post', contractPath: '/payments/{transactionId}/confirm-receipt',
+    url: (w) => `/payments/${w.transactionId}/confirm-receipt`, allow: ['BUYER'] },
+  { method: 'post', contractPath: '/payments/{transactionId}/dispute',
+    url: (w) => `/payments/${w.transactionId}/dispute`, allow: ['BUYER'],
+    body: () => ({ reason: 'Authz probe dispute reason.' }) },
 
   // ---- admin ----------------------------------------------------------------------------
   { method: 'get', contractPath: '/admin/analytics', url: () => '/admin/analytics', allow: ['ADMIN'] },
@@ -130,6 +129,10 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/admin/transactions/{transactionId}/void',
     url: (w) => `/admin/transactions/${w.transactionId}/void`, allow: ['ADMIN'],
     body: () => ({ reason: 'Buyer unreachable after repeated attempts.' }) },
+  { method: 'get', contractPath: '/admin/disputes', url: () => '/admin/disputes', allow: ['ADMIN'] },
+  { method: 'post', contractPath: '/admin/disputes/{disputeId}/resolve',
+    url: () => '/admin/disputes/placeholder-dispute-id/resolve', allow: ['ADMIN'],
+    body: () => ({ resolution: 'RELEASE', note: 'Authz probe' }) },
   { method: 'get', contractPath: '/admin/users', url: () => '/admin/users?email=test', allow: ['ADMIN'] },
   { method: 'post', contractPath: '/admin/users/{userId}/anonymize',
     url: (w) => `/admin/users/${w.otherBuyer.id}/anonymize`, allow: ['ADMIN'],
@@ -231,12 +234,56 @@ describe('one user cannot reach another user\'s data', () => {
     expect(ids).not.toContain(w.otherBuyerNotificationId);
   });
 
-  it('cannot create a payment intent for another buyer\'s transaction', async () => {
+  it('cannot pay for another buyer\'s transaction', async () => {
     const res = await request(app)
-      .post(api('/payments/create-intent'))
+      .post(api(`/payments/${w.otherBuyerTransactionId}/pay`))
       .set(bearer(w.buyer.token))
-      .send({ transactionId: w.otherBuyerTransactionId });
+      .send({
+        cardNumber: '4242424242424242',
+        deliveryAddress: '123 Test Street, Karachi',
+        deliveryPhone: '03001234567',
+      });
     expect(res.status).toBe(403);
+  });
+
+  it('cannot mark another seller\'s transaction shipped', async () => {
+    await prisma.auctionTransaction.update({
+      where: { id: w.otherBuyerTransactionId },
+      data: { status: 'COMPLETED', deliveryAddress: '123 Test Street', deliveryPhone: '03001234567' },
+    });
+    const res = await request(app)
+      .patch(api(`/payments/${w.otherBuyerTransactionId}/ship`))
+      .set(bearer(w.seller.token));
+    expect(res.status).toBe(403);
+  });
+
+  it('cannot confirm receipt on another buyer\'s transaction', async () => {
+    await prisma.auctionTransaction.update({
+      where: { id: w.otherBuyerTransactionId },
+      data: { status: 'SHIPPED', shippedAt: new Date() },
+    });
+    const res = await request(app)
+      .post(api(`/payments/${w.otherBuyerTransactionId}/confirm-receipt`))
+      .set(bearer(w.buyer.token));
+    expect(res.status).toBe(403);
+
+    const tx = await prisma.auctionTransaction.findUniqueOrThrow({ where: { id: w.otherBuyerTransactionId } });
+    expect(tx.status).toBe('SHIPPED');
+  });
+
+  it('cannot raise a dispute on another buyer\'s transaction', async () => {
+    await prisma.auctionTransaction.update({
+      where: { id: w.otherBuyerTransactionId },
+      data: { status: 'SHIPPED', shippedAt: new Date() },
+    });
+    const res = await request(app)
+      .post(api(`/payments/${w.otherBuyerTransactionId}/dispute`))
+      .set(bearer(w.buyer.token))
+      .send({ reason: 'Trying to dispute a sale that is not mine.' });
+    expect(res.status).toBe(403);
+
+    const dispute = await prisma.dispute.findUnique({ where: { transactionId: w.otherBuyerTransactionId } });
+    expect(dispute).toBeNull();
   });
 
   it('cannot review another buyer\'s completed purchase', async () => {

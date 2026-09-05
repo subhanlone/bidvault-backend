@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import type { AuctionDtoType } from '../../openapi/schemas.js';
+import { REVENUE_STATUSES } from '../../services/fulfillment.service.js';
 
 /**
  * Seller rating + completed-sales counts for a set of sellers, in two grouped queries
@@ -25,7 +26,7 @@ export async function buildSellerStatsMap(sellerIds: string[]) {
     }),
     prisma.auctionTransaction.groupBy({
       by: ['sellerId'],
-      where: { sellerId: { in: uniqueIds }, status: 'COMPLETED' },
+      where: { sellerId: { in: uniqueIds }, status: { in: REVENUE_STATUSES } },
       _count: { sellerId: true },
     }),
   ]);

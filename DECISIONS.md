@@ -151,7 +151,7 @@ upstream ships the fix, the build breaks and says to delete the entry. The one c
 repos are public, so an unauthenticated clone sidesteps the question entirely and keeps both
 workflows free of secrets.
 
-## 10. Stripe API version is pinned, not left to the SDK default
+## 10. Stripe API version is pinned, not left to the SDK default — SUPERSEDED by #12
 
 **Decision.** `new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2026-07-29.dahlia' })`
 (`src/modules/payments/payments.routes.ts:21`), matching the version the installed `stripe`
@@ -167,7 +167,7 @@ it a deliberate, reviewable act instead of an `npm install` side effect.
 **Revisit when** the SDK is upgraded on purpose — bump the pinned version and the dependency in
 the same change, verified against the Stripe dashboard's current default first (BV-054).
 
-## 11. The Stripe account settles in AED, not PKR
+## 11. The Stripe account settles in AED, not PKR — SUPERSEDED by #12
 
 **Decision.** Recorded here rather than left implicit: the Stripe account backing this
 platform settles in UAE dirhams. Every PKR charge is therefore a cross-currency transaction
@@ -189,3 +189,33 @@ that as directional, not exact, since Stripe's minimum and the exchange rate bot
 Pakistan-domiciled Stripe account (or a local payment processor) becomes available — at which
 point this note and the AED-specific minimum-charge math above should be re-derived, not
 assumed to still hold.
+
+## 12. Stripe removed entirely — replaced with a self-built dummy gateway
+
+**Decision.** `payment-gateway.service.ts` replaces the `stripe` SDK end to end:
+`chargeCard()` is a synchronous, pure function that approves or declines by test-card-number
+convention (`4242...` approves, `4000...0002` declines), never a real network call. Seller
+payouts moved from a Stripe Connect account to a local `LedgerEntry`/`User.ledgerBalance`
+ledger credited in the same transaction as the DELIVERED write. See
+`PAYMENT-GATEWAY-MIGRATION.md` for the full decision record and data-model diff.
+
+**Why.** Decision #11 above was the trigger: the Stripe account settles in AED through a
+UAE-registered merchant entity, so every PKR charge was already a cross-currency transaction,
+and Stripe does not support a Pakistan-domiciled account at all — this platform's actual
+market. No amount of currency-bug fixing changes that. Reliability was the second factor: a
+third-party processor in the request path is one more thing that can be down, rate-limited, or
+mid-incident when a demo needs to run.
+
+**Rejected.** Waiting for a Pakistan-domiciled Stripe account, or integrating a local
+processor (JazzCash, Easypaisa, a Pakistani payment gateway) for a student project whose
+purpose is demonstrating the auction lifecycle, not passing real money — the integration cost
+buys nothing the project needs.
+
+**What this obsoletes.** #10 (the pinned Stripe API version — there is no SDK to pin a version
+of) and #11 (the AED settlement note — there is no settlement at all). Left in place above
+rather than deleted, as the record of why the original integration was wrong for this
+platform.
+
+**Revisit when** this project needs to move real money — at which point the dummy gateway is
+the wrong tool by design, and a real, Pakistan-capable processor should be evaluated fresh
+rather than resurrecting Stripe.

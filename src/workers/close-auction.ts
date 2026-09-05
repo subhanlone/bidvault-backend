@@ -36,20 +36,27 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
   // NEW-09: the winning bid is read inside the transaction under a FOR UPDATE lock, so two
   // retries cannot both see status=ACTIVE and create duplicate transactions.
   const txResult = await prisma.$transaction(async (tx) => {
-    const [locked] = await tx.$queryRaw<Array<{ status: string }>>`
-      SELECT status FROM "Auction" WHERE id = ${auction.id} FOR UPDATE
+    // BV-036: bidCount is read here, under the lock, rather than from the pre-transaction read
+    // at the top of the function -- a bid landing in the window between that read and this lock
+    // must not be missing from the count the seller's email reports.
+    const [locked] = await tx.$queryRaw<Array<{ status: string; bidCount: number }>>`
+      SELECT status, "bidCount" FROM "Auction" WHERE id = ${auction.id} FOR UPDATE
     `;
     if (!locked || locked.status === 'CLOSED') {
-      return { alreadyClosed: true, winningBid: null, notifyWinner: false, reserveMet: null };
+      return { alreadyClosed: true, winningBid: null, notifyWinner: false, reserveMet: null, bidCount: 0 };
     }
 
     // BV-018: buyerId is nullable now (a deleted buyer's bid is anonymised in place, not
     // cascaded away, so bidCount/currentBid stay accurate). A bid with no buyer left can't be
     // awarded a transaction -- there is no winnerId to write -- so it is excluded here rather
     // than filtered out after the fact, and the next real bidder wins instead.
+    // BV-037: a single sort key leaves equal-amount bids to Postgres's discretion — reachable
+    // via prisma/seed.ts, admin correction, or (later) proxy bidding, not just a typo case.
+    // Earliest-first is the near-universal auction convention and the one a disputing bidder
+    // would expect.
     const rawWinBid = await tx.bid.findFirst({
       where: { auctionId: auction.id, buyerId: { not: null } },
-      orderBy: { amount: 'desc' },
+      orderBy: [{ amount: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
       include: { buyer: true },
     });
     // The where-filter above guarantees buyerId/buyer are non-null whenever a row comes back;
@@ -121,7 +128,7 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
       }
     }
 
-    return { alreadyClosed: false, winningBid: winBid ?? null, notifyWinner, reserveMet };
+    return { alreadyClosed: false, winningBid: winBid ?? null, notifyWinner, reserveMet, bidCount: locked.bidCount };
   });
 
   if (txResult.alreadyClosed) {
@@ -144,7 +151,7 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
         {
           title: auction.title,
           reservePrice: auction.reservePrice!,
-          bidCount: auction.bidCount,
+          bidCount: txResult.bidCount,
         },
         { email: winningBid.buyer.email, name: winningBid.buyer.name, amount: winningBid.amount },
       ),
@@ -156,7 +163,7 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
   dispatchEmail(
     sendAuctionEndedEmail(
       { email: auction.seller.email, name: auction.seller.name },
-      { title: auction.title, finalBid: auction.currentBid, bidCount: auction.bidCount },
+      { title: auction.title, bidCount: txResult.bidCount },
       winningBid
         ? { email: winningBid.buyer.email, name: winningBid.buyer.name, amount: winningBid.amount }
         : null,

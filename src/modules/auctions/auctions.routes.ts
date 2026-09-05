@@ -4,7 +4,7 @@ import type { Server } from 'socket.io';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
-import { requireAuth } from '../../middleware/auth.js';
+import { optionalAuth, requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 import { placeBidSchema } from '../../openapi/requests.js';
@@ -134,10 +134,21 @@ router.get(
 
 router.get(
   '/:auctionId/bids',
+  // BV-039: this route is public by design (anyone can watch an auction's bid history) but was
+  // publishing full bidder identity to anonymous visitors, who could enumerate exactly who bid,
+  // how much and when, and correlate one person's bidding across the whole platform via
+  // buyerId. optionalAuth reads the caller's own identity when a token is present, purely to
+  // compute `isMine` -- it never gates access to the route. Masking is uniform for every caller,
+  // AdminAuctionMonitor.tsx included: it reuses this same public endpoint for its live view, and
+  // a passively-watched in-progress auction gets the same privacy treatment as any other
+  // viewer. Real identity for actual investigation (a dispute, a stuck payout) is what
+  // GET /admin/disputes and GET /admin/transactions are for, not this feed.
+  optionalAuth(),
   asyncHandler(async (req, res) => {
     const auctionId = req.params.auctionId;
     const limit = parseLimit(req.query.limit);
     const cursor = decodeCursor(req.query.cursor);
+    const requesterId = req.auth?.userId;
 
     const where: Prisma.BidWhereInput = cursor
       ? {
@@ -151,23 +162,32 @@ router.get(
 
     const rows = await prisma.bid.findMany({
       where,
-      include: { buyer: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
 
     const { pageRows, nextCursor } = slicePage(rows, limit, (b) => b.createdAt, (b) => b.id);
 
+    // A stable pseudonym per bidder, numbered by the order they first bid on *this* auction --
+    // independent of which page of the (newest-first) history is being read, and cheap at this
+    // project's scale. distinct + orderBy returns exactly the first row per buyerId in that
+    // order, per Prisma's documented semantics.
+    const firstAppearances = await prisma.bid.findMany({
+      where: { auctionId, buyerId: { not: null } },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { buyerId: true },
+      distinct: ['buyerId'],
+    });
+    const rank = new Map(firstAppearances.map((b, i) => [b.buyerId, i + 1]));
+
     ok(res, {
       items: pageRows.map((bid) => ({
         bidId: bid.id,
         auctionId: bid.auctionId,
-        // BV-018: buyerId/buyer can now be null (an anonymised, deleted account). Reachable
-        // now that the account-deletion route exists (BV-018/BV-042) -- anonymizeUser() keeps
-        // the Bid row and its buyerId intact, so this stays a defensive fallback rather than
-        // the common case, but it is genuinely reachable, not hypothetical.
-        buyerId: bid.buyerId,
-        buyerName: bid.buyer?.name ?? 'Deleted user',
+        // BV-018: buyerId can be null (an anonymised, deleted account) -- still genuinely
+        // reachable, not hypothetical, so it gets its own label rather than a numbered one.
+        isMine: requesterId != null && bid.buyerId === requesterId,
+        buyerName: bid.buyerId === null ? 'Deleted user' : `Bidder ${rank.get(bid.buyerId)}`,
         amount: bid.amount,
         timestamp: bid.createdAt.toISOString(),
       })),
@@ -221,7 +241,12 @@ router.post(
         if (row.status !== 'ACTIVE') throw new BidError(422, 'Bidding is closed for this auction.');
         if (new Date(row.endTime).getTime() <= Date.now()) throw new BidError(422, 'Auction has already ended.');
 
-        const minAllowed = row.currentBid + row.minIncrement;
+        // BV-013: currentBid is seeded to startPrice at creation, so "+ minIncrement" made the
+        // advertised starting price itself unbiddable -- the real floor was one increment above
+        // what both the seller set and the buyer was shown. The first bid is now allowed at the
+        // start price, exactly like eBay; every bid after that must clear the previous one by a
+        // full increment as before.
+        const minAllowed = row.bidCount === 0 ? row.currentBid : row.currentBid + row.minIncrement;
         if (amount < minAllowed) {
           throw new BidError(422, `Bid must be at least PKR ${minAllowed.toLocaleString()}.`);
         }
@@ -293,17 +318,31 @@ router.post(
     // The database is the only source of truth for currentBid/bidCount (BV-010 removed the
     // Redis overlay that used to shadow it here) -- live viewers get the update below via the
     // socket broadcast, not by re-reading the row.
+    //
+    // BV-039: this broadcast reaches every socket in the room, authenticated or not, so it gets
+    // the same masking as GET /:auctionId/bids -- no buyerId, name replaced by the same stable
+    // per-auction pseudonym that route computes. The bidder's own client already has their real
+    // identity from this handler's own response below; it does not need the broadcast to tell
+    // it "that was you".
     const io = req.app.get('io') as Server | undefined;
-    io?.to(`auction:${auctionId}`).emit('bid:placed', {
-      auctionId,
-      bid: {
-        bidId: bid.id,
-        amount: bid.amount,
-        buyerId: bid.buyerId,
-        buyerName: buyer.name,
-        timestamp: bid.createdAt.toISOString(),
-      },
-    });
+    if (io) {
+      const firstAppearances = await prisma.bid.findMany({
+        where: { auctionId, buyerId: { not: null } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { buyerId: true },
+        distinct: ['buyerId'],
+      });
+      const rank = firstAppearances.findIndex((b) => b.buyerId === bid.buyerId) + 1;
+      io.to(`auction:${auctionId}`).emit('bid:placed', {
+        auctionId,
+        bid: {
+          bidId: bid.id,
+          amount: bid.amount,
+          buyerName: `Bidder ${rank}`,
+          timestamp: bid.createdAt.toISOString(),
+        },
+      });
+    }
 
     // Not awaited: bidding is the most latency-sensitive action in the product and this
     // send was adding ~3.3s to every bid.

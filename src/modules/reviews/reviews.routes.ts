@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
@@ -28,8 +29,11 @@ router.post(
       fail(res, 'Forbidden.', 403);
       return;
     }
-    if (tx.status !== 'COMPLETED') {
-      fail(res, 'Complete payment before rating the seller.', 422);
+    // BV-047: gated on DELIVERED, not COMPLETED (paid) — a review is about the item and the
+    // seller's handling of the sale, neither of which the buyer can honestly rate before they
+    // have actually received it. COMPLETED only means the card charged (A4).
+    if (tx.status !== 'DELIVERED') {
+      fail(res, 'Confirm receipt of the item before rating the seller.', 422);
       return;
     }
 
@@ -41,16 +45,28 @@ router.post(
       return;
     }
 
-    const review = await prisma.sellerReview.create({
-      data: {
-        transactionId,
-        auctionId: tx.auctionId,
-        buyerId,
-        sellerId: tx.sellerId,
-        stars,
-        comment: comment ?? null,
-      },
-    });
+    // BV-043: the pre-check above gives the good message on the common path, but a concurrent
+    // duplicate submit (a double-click on a slow connection) can still win the race between
+    // that read and this write -- this is the authoritative fallback for it.
+    let review;
+    try {
+      review = await prisma.sellerReview.create({
+        data: {
+          transactionId,
+          auctionId: tx.auctionId,
+          buyerId,
+          sellerId: tx.sellerId,
+          stars,
+          comment: comment ?? null,
+        },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        fail(res, "You've already reviewed this seller for this purchase.", 409);
+        return;
+      }
+      throw err;
+    }
 
     const buyer = await prisma.user.findUnique({ where: { id: buyerId }, select: { name: true } });
 
@@ -85,11 +101,19 @@ router.get(
       }),
       prisma.sellerReview.findMany({
         where: { sellerId },
-        include: { buyer: { select: { name: true } } },
         orderBy: { createdAt: 'desc' },
         take: 50,
       }),
     ]);
+
+    // BV-039: this route is unauthenticated, same problem as the public bid feed -- mask to a
+    // stable per-seller pseudonym rather than the reviewer's real name. Not paginated (a fixed
+    // top-50), so a rank computed from just this page stays stable for as long as this same
+    // window is being shown.
+    const rank = new Map<string, number>();
+    for (const r of [...reviews].reverse()) {
+      if (!rank.has(r.buyerId)) rank.set(r.buyerId, rank.size + 1);
+    }
 
     ok(res, {
       sellerId,
@@ -99,7 +123,7 @@ router.get(
         reviewId: r.id,
         stars: r.stars,
         comment: r.comment,
-        buyerName: r.buyer.name,
+        buyerName: `Reviewer ${rank.get(r.buyerId)}`,
         createdAt: r.createdAt.toISOString(),
       })),
     });
