@@ -36,7 +36,7 @@ router.get(
       include: {
         auction: true,
         seller: { select: { name: true, email: true } },
-        review: { select: { id: true } },
+        review: { select: { id: true, stars: true, comment: true } },
         dispute: { select: { reason: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -67,6 +67,11 @@ router.get(
       disputeReason: tx.dispute?.reason,
       createdAt: tx.createdAt.toISOString(),
       reviewed: tx.review !== null,
+      // C6, Phase 7: lets the frontend target PATCH/DELETE /reviews/{id} and pre-fill the edit
+      // form directly, without a separate lookup.
+      reviewId: tx.review?.id,
+      reviewStars: tx.review?.stars,
+      reviewComment: tx.review?.comment ?? undefined,
     })));
   }),
 );

@@ -333,6 +333,10 @@ export const WonTransactionDto = z
     disputeReason: z.string().optional(),
     createdAt: isoDateTime,
     reviewed: z.boolean(),
+    // C6, Phase 7.
+    reviewId: z.string().optional(),
+    reviewStars: z.number().int().optional(),
+    reviewComment: z.string().optional(),
   })
   .meta({ id: 'WonTransaction' });
 
