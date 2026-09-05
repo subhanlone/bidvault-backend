@@ -113,10 +113,10 @@ describe('suspend / reinstate', () => {
   it('GET /admin/users reports current status', async () => {
     await prisma.user.update({ where: { id: w.otherBuyer.id }, data: { status: 'SUSPENDED' } });
     const res = await request(app)
-      .get(api(`/admin/users?email=${encodeURIComponent(w.otherBuyer.email)}`))
+      .get(api(`/admin/users?search=${encodeURIComponent(w.otherBuyer.email)}`))
       .set(auth(w.admin.token));
     expect(res.status).toBe(200);
-    const found = res.body.data.find((u: { userId: string }) => u.userId === w.otherBuyer.id);
+    const found = res.body.data.items.find((u: { userId: string }) => u.userId === w.otherBuyer.id);
     expect(found.status).toBe('SUSPENDED');
   });
 });

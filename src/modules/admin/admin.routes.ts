@@ -1,10 +1,11 @@
 import { Router } from 'express';
-import type { TransactionStatus } from '@prisma/client';
+import { Prisma, type TransactionStatus } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
+import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import {
   voidTransactionSchema,
   anonymizeUserSchema,
@@ -383,36 +384,62 @@ router.post(
   }),
 );
 
-// BV-018: the admin half of anonymise-in-place -- for a support request from someone who can
-// no longer sign in to use the self-service route themselves (auth/delete-account). Search by
-// email first: there is no general user-directory screen, and building one is a bigger
-// feature than this one action needs.
+// The admin User Management directory -- backs BV-018's anonymize, C2's suspend/reinstate,
+// and this route itself. Cursor-paginated like the other list endpoints (see
+// utils/pagination.ts): unlike the pending-listing/pending-transaction queues elsewhere in
+// this file, the user population has no natural "active subset" to default-scope it to, so a
+// real directory needs real pagination rather than requiring a search term. `search` matches
+// name OR email -- an admin acting on a report is far more likely to have a name in hand than
+// the person's email address.
 router.get(
   '/users',
   requireAuth(['ADMIN']),
   asyncHandler(async (req, res) => {
-    const email = (req.query.email as string | undefined)?.trim();
-    if (!email) {
-      fail(res, 'Query parameter "email" is required.', 400);
-      return;
+    const search = (req.query.search as string | undefined)?.trim();
+    const limit = parseLimit(req.query.limit);
+    const cursor = decodeCursor(req.query.cursor);
+
+    const filters: Prisma.UserWhereInput = {};
+    if (search) {
+      filters.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ];
     }
 
-    const users = await prisma.user.findMany({
-      where: { email: { contains: email, mode: 'insensitive' } },
+    const where: Prisma.UserWhereInput = cursor
+      ? {
+          AND: [
+            filters,
+            {
+              OR: [
+                { createdAt: { lt: new Date(cursor.sortValue) } },
+                { createdAt: new Date(cursor.sortValue), id: { lt: cursor.id } },
+              ],
+            },
+          ],
+        }
+      : filters;
+
+    const rows = await prisma.user.findMany({
+      where,
       select: { id: true, name: true, email: true, role: true, status: true, createdAt: true },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
     });
 
-    ok(res, users.map((u) => ({
-      userId: u.id,
-      name: u.name,
-      email: u.email,
-      role: u.role,
-      // C2, Phase 7: the admin needs to see current standing to decide suspend vs. reinstate.
-      status: u.status,
-      createdAt: u.createdAt.toISOString(),
-    })));
+    const { pageRows, nextCursor } = slicePage(rows, limit, (u) => u.createdAt, (u) => u.id);
+    ok(res, {
+      items: pageRows.map((u) => ({
+        userId: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        status: u.status,
+        createdAt: u.createdAt.toISOString(),
+      })),
+      nextCursor,
+    });
   }),
 );
 

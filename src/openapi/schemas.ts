@@ -442,8 +442,10 @@ export const AdminTransactionDto = z
   })
   .meta({ id: 'AdminTransaction' });
 
-/** A search result for GET /admin/users — used to find the account BV-018's anonymize (or,
- * since Phase 7, suspend/reinstate) routes target. */
+/** A row in GET /admin/users — the directory the C2 suspend/reinstate and BV-018 anonymize
+ * routes act on. Cursor-paginated (see PaginatedAdminUsersDto) since the user population,
+ * unlike the pending-listing/pending-transaction queues elsewhere in this file, is unbounded
+ * and always fully relevant -- there's no natural "active subset" to default-scope it to. */
 export const AdminUserDto = z
   .object({
     userId: z.string(),
@@ -608,6 +610,7 @@ export const PaginatedAuctionsDto = paginated('PaginatedAuctions', AuctionDto);
 export const PaginatedBidsWithAuctionDto = paginated('PaginatedBidsWithAuction', BidWithAuctionDto);
 export const PaginatedBidsDto = paginated('PaginatedBids', PublicBidDto);
 export const PaginatedListingsDto = paginated('PaginatedListings', ListingDto);
+export const PaginatedAdminUsersDto = paginated('PaginatedAdminUsers', AdminUserDto);
 
 export type UserDtoType = z.infer<typeof UserDto>;
 export type AuctionDtoType = z.infer<typeof AuctionDto>;

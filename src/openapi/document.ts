@@ -193,7 +193,15 @@ const documentInput = {
     // existing client's parse). New: POST /admin/users/{id}/suspend and .../reinstate (C2),
     // POST /admin/listings/{id}/takedown (C3), PATCH/DELETE /reviews/{id} and
     // POST /reviews/{id}/reply (C6). NotificationType gains REVIEW_REPLY and LISTING_REMOVED.
-    version: '8.1.0',
+    //
+    // 9.0.0, 2026-09-05, major: GET /admin/users became the User Management screen's actual
+    // directory instead of a search-only lookup buried in Settings -- a dedicated screen that
+    // could only ever show a search result was the wrong shape once it existed. Breaking:
+    // response is now PaginatedAdminUsers ({items, nextCursor}), not a bare array (verified via
+    // api:compat: response-property-type-changed, array -> object). The `email` query
+    // parameter is replaced by `search` (matches name OR email -- an admin acting on a report
+    // is more likely to have a name than an email address).
+    version: '9.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -994,11 +1002,12 @@ const documentInput = {
       get: {
         tags: ['Admin'],
         security: [{ bearerAuth: [] }],
-        summary: 'Search by email — finds the account an anonymize request targets',
-        requestParams: { query: z.object({ email: z.string() }) },
+        summary: 'Cursor-paginated, newest first. Optional search matches name or email.',
+        requestParams: {
+          query: z.object({ search: z.string().optional() }).extend(R.paginationQuerySchema.shape),
+        },
         responses: {
-          200: okBody(z.array(S.AdminUserDto), 'Matching users'),
-          400: badRequest,
+          200: okBody(S.PaginatedAdminUsersDto, 'A page of users'),
           401: unauthorized,
           403: forbidden,
         },

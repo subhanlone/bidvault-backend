@@ -840,10 +840,10 @@ describe('admin', () => {
   it('GET /admin/users', async () => {
     hit('get', '/admin/users');
     const res = await request(app)
-      .get(api(`/admin/users?email=${encodeURIComponent(w.otherSeller.email)}`))
+      .get(api(`/admin/users?search=${encodeURIComponent(w.otherSeller.email)}`))
       .set(auth(w.admin.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.some((u: { userId: string }) => u.userId === w.otherSeller.id)).toBe(true);
+    expect(res.body.data.items.some((u: { userId: string }) => u.userId === w.otherSeller.id)).toBe(true);
   });
 
   it('POST /admin/users/{userId}/anonymize', async () => {

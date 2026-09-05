@@ -161,7 +161,7 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/admin/disputes/{disputeId}/resolve',
     url: () => '/admin/disputes/placeholder-dispute-id/resolve', allow: ['ADMIN'],
     body: () => ({ resolution: 'RELEASE', note: 'Authz probe' }) },
-  { method: 'get', contractPath: '/admin/users', url: () => '/admin/users?email=test', allow: ['ADMIN'] },
+  { method: 'get', contractPath: '/admin/users', url: () => '/admin/users?search=test', allow: ['ADMIN'] },
   { method: 'post', contractPath: '/admin/users/{userId}/anonymize',
     url: (w) => `/admin/users/${w.otherBuyer.id}/anonymize`, allow: ['ADMIN'],
     body: () => ({ reason: 'Authz probe' }) },
