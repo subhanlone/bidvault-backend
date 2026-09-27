@@ -47,6 +47,7 @@ describe('getPlatformSettings', () => {
       minListingPrice: 1_000,
       reviewTimeoutHours: 48,
       paymentDeadlineHours: 48,
+      reviewEditWindowHours: 72,
       supportEmail: 'support@bidvault.tech',
     });
 

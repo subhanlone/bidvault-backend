@@ -5,7 +5,8 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
-import { createReviewSchema } from '../../openapi/requests.js';
+import { createReviewSchema, updateReviewSchema, replyToReviewSchema } from '../../openapi/requests.js';
+import { getPlatformSettings } from '../../services/settings.service.js';
 
 const router = Router();
 
@@ -88,6 +89,93 @@ router.post(
   }),
 );
 
+// C6, Phase 7: a review was previously permanent -- no correction path for a buyer who mis-typed
+// a rating or wants to soften a comment after the seller resolved something out of band.
+router.patch(
+  '/:reviewId',
+  requireAuth(['BUYER']),
+  validateBody(updateReviewSchema),
+  asyncHandler(async (req, res) => {
+    const review = await prisma.sellerReview.findUnique({ where: { id: req.params.reviewId } });
+    if (!review) { fail(res, 'Review not found.', 404); return; }
+    if (review.buyerId !== req.auth!.userId) { fail(res, 'Forbidden.', 403); return; }
+
+    const { reviewEditWindowHours } = await getPlatformSettings();
+    const deadline = new Date(review.createdAt.getTime() + reviewEditWindowHours * 60 * 60 * 1000);
+    if (Date.now() > deadline.getTime()) {
+      fail(res, `Reviews can only be edited within ${reviewEditWindowHours} hours of posting.`, 409);
+      return;
+    }
+
+    const updated = await prisma.sellerReview.update({
+      where: { id: review.id },
+      data: {
+        stars: req.body.stars ?? review.stars,
+        comment: req.body.comment !== undefined ? req.body.comment : review.comment,
+        updatedAt: new Date(),
+      },
+    });
+
+    ok(res, {
+      reviewId: updated.id,
+      stars: updated.stars,
+      comment: updated.comment,
+      createdAt: updated.createdAt.toISOString(),
+    });
+  }),
+);
+
+router.delete(
+  '/:reviewId',
+  requireAuth(['BUYER']),
+  asyncHandler(async (req, res) => {
+    const review = await prisma.sellerReview.findUnique({ where: { id: req.params.reviewId } });
+    if (!review) { fail(res, 'Review not found.', 404); return; }
+    if (review.buyerId !== req.auth!.userId) { fail(res, 'Forbidden.', 403); return; }
+
+    const { reviewEditWindowHours } = await getPlatformSettings();
+    const deadline = new Date(review.createdAt.getTime() + reviewEditWindowHours * 60 * 60 * 1000);
+    if (Date.now() > deadline.getTime()) {
+      fail(res, `Reviews can only be deleted within ${reviewEditWindowHours} hours of posting.`, 409);
+      return;
+    }
+
+    await prisma.sellerReview.delete({ where: { id: review.id } });
+    ok(res, { reviewId: review.id, status: 'DELETED' });
+  }),
+);
+
+// The reviewed seller's one-shot right of reply -- no edit once posted, matching the review
+// itself's one-shot-per-transaction shape. No time window: a seller may want to respond to an
+// old review whenever they notice it.
+router.post(
+  '/:reviewId/reply',
+  requireAuth(['SELLER']),
+  validateBody(replyToReviewSchema),
+  asyncHandler(async (req, res) => {
+    const review = await prisma.sellerReview.findUnique({ where: { id: req.params.reviewId } });
+    if (!review) { fail(res, 'Review not found.', 404); return; }
+    if (review.sellerId !== req.auth!.userId) { fail(res, 'Forbidden.', 403); return; }
+    if (review.sellerReply !== null) { fail(res, "You've already replied to this review.", 409); return; }
+
+    const updated = await prisma.sellerReview.update({
+      where: { id: review.id },
+      data: { sellerReply: req.body.reply, sellerReplyAt: new Date() },
+    });
+
+    await prisma.notification.create({
+      data: {
+        userId: review.buyerId,
+        type: 'REVIEW_REPLY',
+        title: 'The seller replied to your review',
+        message: `"${req.body.reply}"`,
+      },
+    }).catch((err: unknown) => console.error('[reviews] reply notification failed', { reviewId: review.id, err }));
+
+    ok(res, { reviewId: updated.id, sellerReply: updated.sellerReply, sellerReplyAt: updated.sellerReplyAt?.toISOString() });
+  }),
+);
+
 router.get(
   '/seller/:sellerId',
   asyncHandler(async (req, res) => {
@@ -125,6 +213,10 @@ router.get(
         comment: r.comment,
         buyerName: `Reviewer ${rank.get(r.buyerId)}`,
         createdAt: r.createdAt.toISOString(),
+        // C6, Phase 7.
+        updatedAt: r.updatedAt?.toISOString(),
+        sellerReply: r.sellerReply ?? undefined,
+        sellerReplyAt: r.sellerReplyAt?.toISOString(),
       })),
     });
   }),

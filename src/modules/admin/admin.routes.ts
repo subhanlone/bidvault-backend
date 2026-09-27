@@ -1,15 +1,30 @@
 import { Router } from 'express';
-import type { TransactionStatus } from '@prisma/client';
+import type { Server } from 'socket.io';
+import { Prisma, type TransactionStatus } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
-import { voidTransactionSchema, anonymizeUserSchema, resolveDisputeSchema, cancelAuctionSchema } from '../../openapi/requests.js';
+import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
+import {
+  voidTransactionSchema,
+  anonymizeUserSchema,
+  resolveDisputeSchema,
+  cancelAuctionSchema,
+  suspendUserSchema,
+  takedownListingSchema,
+} from '../../openapi/requests.js';
 import { checkAccountDeletable, anonymizeUser } from '../../services/account.service.js';
 import { dispatchEmail, sendAccountDeletedEmail } from '../../services/email.service.js';
 import { resolveDispute, REVENUE_STATUSES } from '../../services/fulfillment.service.js';
-import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
+import {
+  cancelAuction,
+  takedownListing,
+  type CancelAuctionResult,
+  type TakedownListingResult,
+} from '../../services/auction-control.service.js';
+import { suspendUser, reinstateUser } from '../../services/user-status.service.js';
 
 const router = Router();
 
@@ -274,17 +289,42 @@ router.post(
   requireAuth(['ADMIN']),
   validateBody(cancelAuctionSchema),
   asyncHandler(async (req, res) => {
+    const io = req.app.get('io') as Server | undefined;
     const result = await cancelAuction(req.params.auctionId, {
       userId: req.auth!.userId,
       isAdmin: true,
       reason: req.body.reason,
-    });
+    }, io);
     if (result.kind !== 'ok') {
       const [message, status] = ADMIN_CANCEL_ERROR_STATUS[result.kind];
       fail(res, message, status);
       return;
     }
     ok(res, { auctionId: req.params.auctionId, status: 'CANCELLED' });
+  }),
+);
+
+const TAKEDOWN_ERROR_STATUS: Record<Exclude<TakedownListingResult['kind'], 'ok'>, [string, number]> = {
+  'not-found': ['Listing not found.', 404],
+  'wrong-state': ['Only an approved listing can be taken down.', 409],
+};
+
+// C3, Phase 7: approval was previously one-way -- counterfeit, stolen, prohibited or
+// misdescribed items that went live had no way back off the platform. Cancels the live auction
+// underneath (if any) via the same cancelAuction() the route above uses.
+router.post(
+  '/listings/:listingId/takedown',
+  requireAuth(['ADMIN']),
+  validateBody(takedownListingSchema),
+  asyncHandler(async (req, res) => {
+    const io = req.app.get('io') as Server | undefined;
+    const result = await takedownListing(req.params.listingId, req.auth!.userId, req.body.reason, io);
+    if (result.kind !== 'ok') {
+      const [message, status] = TAKEDOWN_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { listingId: req.params.listingId, status: 'REMOVED' });
   }),
 );
 
@@ -347,34 +387,88 @@ router.post(
   }),
 );
 
-// BV-018: the admin half of anonymise-in-place -- for a support request from someone who can
-// no longer sign in to use the self-service route themselves (auth/delete-account). Search by
-// email first: there is no general user-directory screen, and building one is a bigger
-// feature than this one action needs.
+// The admin User Management directory -- backs BV-018's anonymize, C2's suspend/reinstate,
+// and this route itself. Cursor-paginated like the other list endpoints (see
+// utils/pagination.ts): unlike the pending-listing/pending-transaction queues elsewhere in
+// this file, the user population has no natural "active subset" to default-scope it to, so a
+// real directory needs real pagination rather than requiring a search term. `search` matches
+// name OR email -- an admin acting on a report is far more likely to have a name in hand than
+// the person's email address.
 router.get(
   '/users',
   requireAuth(['ADMIN']),
   asyncHandler(async (req, res) => {
-    const email = (req.query.email as string | undefined)?.trim();
-    if (!email) {
-      fail(res, 'Query parameter "email" is required.', 400);
-      return;
+    const search = (req.query.search as string | undefined)?.trim();
+    const limit = parseLimit(req.query.limit);
+    const cursor = decodeCursor(req.query.cursor);
+
+    const filters: Prisma.UserWhereInput = {};
+    if (search) {
+      filters.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ];
     }
 
-    const users = await prisma.user.findMany({
-      where: { email: { contains: email, mode: 'insensitive' } },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
+    const where: Prisma.UserWhereInput = cursor
+      ? {
+          AND: [
+            filters,
+            {
+              OR: [
+                { createdAt: { lt: new Date(cursor.sortValue) } },
+                { createdAt: new Date(cursor.sortValue), id: { lt: cursor.id } },
+              ],
+            },
+          ],
+        }
+      : filters;
+
+    const rows = await prisma.user.findMany({
+      where,
+      select: { id: true, name: true, email: true, role: true, status: true, createdAt: true },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
     });
 
-    ok(res, users.map((u) => ({
-      userId: u.id,
-      name: u.name,
-      email: u.email,
-      role: u.role,
-      createdAt: u.createdAt.toISOString(),
-    })));
+    const { pageRows, nextCursor } = slicePage(rows, limit, (u) => u.createdAt, (u) => u.id);
+    ok(res, {
+      items: pageRows.map((u) => ({
+        userId: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        status: u.status,
+        createdAt: u.createdAt.toISOString(),
+      })),
+      nextCursor,
+    });
+  }),
+);
+
+// C2, Phase 7: reversible and does not touch the account's data -- distinct from anonymize
+// (BV-018), which is one-way and scrubs PII. See services/user-status.service.ts.
+router.post(
+  '/users/:userId/suspend',
+  requireAuth(['ADMIN']),
+  validateBody(suspendUserSchema),
+  asyncHandler(async (req, res) => {
+    const result = await suspendUser(req.params.userId, req.auth!.userId, req.body.reason);
+    if (result.kind === 'not-found') { fail(res, 'User not found.', 404); return; }
+    if (result.kind === 'self') { fail(res, 'You cannot suspend your own account.', 409); return; }
+    if (result.kind === 'already-suspended') { fail(res, 'This account is already suspended.', 409); return; }
+    ok(res, { userId: req.params.userId, status: 'SUSPENDED' });
+  }),
+);
+
+router.post(
+  '/users/:userId/reinstate',
+  requireAuth(['ADMIN']),
+  asyncHandler(async (req, res) => {
+    const result = await reinstateUser(req.params.userId, req.auth!.userId);
+    if (result.kind === 'not-found') { fail(res, 'User not found.', 404); return; }
+    if (result.kind === 'not-suspended') { fail(res, 'This account is not suspended.', 409); return; }
+    ok(res, { userId: req.params.userId, status: 'ACTIVE' });
   }),
 );
 

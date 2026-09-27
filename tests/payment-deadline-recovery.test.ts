@@ -73,6 +73,15 @@ describe('findOverduePayments / voidOverduePayment (A3)', () => {
     const row = await prisma.auctionTransaction.findUniqueOrThrow({ where: { id: w.transactionId } });
     expect(row.status).toBe('VOIDED');
 
+    // LIFECYCLE-IMPLEMENTATION-PLAN.md's A3 section: "writes an AuditLog row" -- system-initiated,
+    // so no actor.
+    const auditRow = await prisma.auditLog.findFirst({
+      where: { entityId: w.transactionId, action: 'TRANSACTION_VOIDED_OVERDUE' },
+    });
+    expect(auditRow).not.toBeNull();
+    expect(auditRow?.actorUserId).toBeNull();
+    expect(auditRow?.entityType).toBe('AuctionTransaction');
+
     await new Promise((r) => setTimeout(r, 50));
     expect(mail.send).toHaveBeenCalled();
   });

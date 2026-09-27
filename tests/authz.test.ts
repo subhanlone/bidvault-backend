@@ -161,9 +161,22 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/admin/disputes/{disputeId}/resolve',
     url: () => '/admin/disputes/placeholder-dispute-id/resolve', allow: ['ADMIN'],
     body: () => ({ resolution: 'RELEASE', note: 'Authz probe' }) },
-  { method: 'get', contractPath: '/admin/users', url: () => '/admin/users?email=test', allow: ['ADMIN'] },
+  { method: 'get', contractPath: '/admin/users', url: () => '/admin/users?search=test', allow: ['ADMIN'] },
   { method: 'post', contractPath: '/admin/users/{userId}/anonymize',
     url: (w) => `/admin/users/${w.otherBuyer.id}/anonymize`, allow: ['ADMIN'],
+    body: () => ({ reason: 'Authz probe' }) },
+  // Phase 7 (C2): never actually executed as ADMIN in this table (only the 401/403 checks run
+  // here), so reusing otherBuyer.id above is safe -- see tests/account-suspension.test.ts for
+  // the real behaviour and the self-suspend/already-suspended guards.
+  { method: 'post', contractPath: '/admin/users/{userId}/suspend',
+    url: (w) => `/admin/users/${w.otherBuyer.id}/suspend`, allow: ['ADMIN'],
+    body: () => ({ reason: 'Authz probe' }) },
+  { method: 'post', contractPath: '/admin/users/{userId}/reinstate',
+    url: (w) => `/admin/users/${w.otherBuyer.id}/reinstate`, allow: ['ADMIN'] },
+  // Phase 7 (C3): w.pendingListingId is PENDING, not APPROVED, so the happy path never fires
+  // here either -- see tests/listing-takedown.test.ts.
+  { method: 'post', contractPath: '/admin/listings/{listingId}/takedown',
+    url: (w) => `/admin/listings/${w.pendingListingId}/takedown`, allow: ['ADMIN'],
     body: () => ({ reason: 'Authz probe' }) },
 
   // ---- notifications --------------------------------------------------------------------
@@ -179,6 +192,15 @@ const OPERATIONS: Op[] = [
   // ---- reviews ---------------------------------------------------------------------------
   { method: 'post', contractPath: '/reviews', url: () => '/reviews', allow: ['BUYER'],
     body: (w) => ({ transactionId: w.transactionId, stars: 5 }) },
+  // Phase 7 (C6): no seeded review exists, so a nonexistent id is used -- same pattern as the
+  // disputes placeholder above. Never reached past the role gate in this table; the real
+  // ownership/window/one-reply checks live in tests/review-lifecycle.test.ts.
+  { method: 'patch', contractPath: '/reviews/{reviewId}', url: () => '/reviews/placeholder-review-id',
+    allow: ['BUYER'], body: () => ({ stars: 4 }) },
+  { method: 'delete', contractPath: '/reviews/{reviewId}', url: () => '/reviews/placeholder-review-id',
+    allow: ['BUYER'] },
+  { method: 'post', contractPath: '/reviews/{reviewId}/reply', url: () => '/reviews/placeholder-review-id/reply',
+    allow: ['SELLER'], body: () => ({ reply: 'Authz probe' }) },
 
   // ---- settings --------------------------------------------------------------------------
   { method: 'get', contractPath: '/settings', url: () => '/settings', allow: ['ADMIN'] },

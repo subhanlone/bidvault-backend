@@ -28,6 +28,18 @@ enum ListingStatus {
   PENDING
   APPROVED
   REJECTED
+  // C3, Phase 7: distinct from REJECTED -- REJECTED means "never approved", REMOVED means "was
+  // live, pulled for cause" (counterfeit, stolen, prohibited, misdescribed). Only reachable from
+  // APPROVED; see services/auction-control.service.ts's takedownListing().
+  REMOVED
+}
+
+enum UserStatus {
+  ACTIVE
+  // C2, Phase 7: an admin action distinct from anonymize (BV-018) -- reversible, and does not
+  // scrub the account's data. See middleware/auth.ts's requireAuth, which checks this on every
+  // authenticated request via services/user-status.service.ts's short-TTL cache.
+  SUSPENDED
 }
 
 enum AuctionStatus {
@@ -86,6 +98,8 @@ model User {
   email              String                   @unique
   passwordHash       String
   role               UserRole
+  // C2, Phase 7.
+  status             UserStatus               @default(ACTIVE)
   isEmailVerified    Boolean                  @default(false)
   notifyOutbid       Boolean                  @default(true)
   notifyWins         Boolean                  @default(true)
@@ -356,6 +370,12 @@ model SellerReview {
   sellerId      String
   stars         Int
   comment       String?
+  updatedAt     DateTime?
+  // C6, Phase 7: the reviewed seller's one-shot reply -- no edit once posted, matching the
+  // review's own one-shot-per-transaction pattern. Not a second rating direction (that's a
+  // separate, larger feature the finding doesn't ask for) -- just a right of reply.
+  sellerReply   String?
+  sellerReplyAt DateTime?
   createdAt     DateTime           @default(now())
   transaction   AuctionTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
   auction       Auction            @relation(fields: [auctionId], references: [id], onDelete: Cascade)
@@ -387,6 +407,8 @@ model PlatformSetting {
   // reviewTimeoutHours -- a settings-tunable window checked by a worker sweep, not a hardcoded
   // constant -- see services/auction-control.service.ts's findOverduePayments().
   paymentDeadlineHours Int    @default(48)
+  // C6, Phase 7: how long a buyer may edit or delete their own review after posting it.
+  reviewEditWindowHours Int   @default(72)
   supportEmail       String   @default("support@bidvault.tech")
   updatedAt          DateTime @updatedAt
 }

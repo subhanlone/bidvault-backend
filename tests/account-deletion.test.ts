@@ -173,10 +173,31 @@ describe('POST /admin/users/:userId/anonymize', () => {
 describe('GET /admin/users', () => {
   it('finds a user by a partial, case-insensitive email match', async () => {
     const res = await request(app)
-      .get(api(`/admin/users?email=${encodeURIComponent(w.otherBuyer.email.toUpperCase().slice(0, 6))}`))
+      .get(api(`/admin/users?search=${encodeURIComponent(w.otherBuyer.email.toUpperCase().slice(0, 6))}`))
       .set(auth(w.admin.token));
 
     expect(res.status).toBe(200);
-    expect(res.body.data.some((u: { userId: string }) => u.userId === w.otherBuyer.id)).toBe(true);
+    expect(res.body.data.items.some((u: { userId: string }) => u.userId === w.otherBuyer.id)).toBe(true);
+  });
+
+  it('finds a user by a partial, case-insensitive name match', async () => {
+    // world.ts's World type exposes otherBuyer as only {id, email, token} -- "OTHER BUY" is a
+    // substring of the fixture's actual name, 'Other Buyer' (see seedWorld's makeUser calls).
+    const res = await request(app)
+      .get(api('/admin/users?search=OTHER%20BUY'))
+      .set(auth(w.admin.token));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.items.some((u: { userId: string }) => u.userId === w.otherBuyer.id)).toBe(true);
+  });
+
+  it('lists users without a search term, paginated newest first', async () => {
+    const res = await request(app)
+      .get(api('/admin/users?limit=1'))
+      .set(auth(w.admin.token));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.items).toHaveLength(1);
+    expect(res.body.data.nextCursor).toEqual(expect.any(String));
   });
 });

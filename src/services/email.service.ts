@@ -223,6 +223,38 @@ export async function sendAccountDeletedEmail(to: { email: string; name: string 
   ));
 }
 
+// C2, Phase 7: account-standing emails, same "always send" tier as the security emails above --
+// an admin action against the account itself, not routine activity, so it isn't gated on the
+// emailNotifsEnabled toggle.
+export async function sendAccountSuspendedEmail(
+  to: { email: string; name: string },
+  reason: string,
+): Promise<void> {
+  await send(to.email, 'Your BidVault account has been suspended', base(
+    'Account suspended',
+    `
+    ${h1('Your account has been suspended')}
+    ${p(`Hi ${to.name}, an administrator has suspended your BidVault account.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Reason', reason)}
+    </table>
+    ${divider()}
+    ${p('You will not be able to sign in or take any action on the platform until this is lifted. Contact support if you believe this is a mistake.')}
+    `,
+  ));
+}
+
+export async function sendAccountReinstatedEmail(to: { email: string; name: string }): Promise<void> {
+  await send(to.email, 'Your BidVault account has been reinstated', base(
+    'Account reinstated',
+    `
+    ${h1('Your account has been reinstated')}
+    ${p(`Hi ${to.name}, your BidVault account is no longer suspended. You can sign in and use the platform as normal.`)}
+    `,
+  ));
+}
+
 // BV-031: a revoked refresh token being presented again means two holders came from the same
 // token family -- the signature the rotation machinery exists to catch. Revoking every
 // session is the containment step; this is the notification, so the account owner learns
@@ -316,6 +348,29 @@ export async function sendListingRejectedEmail(
     </table>
     ${divider()}
     ${p('You\'re welcome to make changes and submit a new listing that meets our guidelines.')}
+    `,
+  ));
+}
+
+// C3, Phase 7: an approved listing pulled for cause -- distinct from rejection (never approved
+// in the first place). Same gating as the sibling status emails above.
+export async function sendListingTakenDownEmail(
+  to: { email: string; name: string },
+  listing: { title: string; reason: string },
+): Promise<void> {
+  if (!(await alertsEnabled())) return;
+  await send(to.email, `Your listing has been removed — "${listing.title}"`, base(
+    'Listing removed',
+    `
+    ${h1('Your listing has been removed')}
+    ${p(`Hi ${to.name}, an administrator has removed this listing from BidVault.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Listing', listing.title)}
+      ${infoRow('Reason', listing.reason)}
+    </table>
+    ${divider()}
+    ${p('If a live auction was running on this listing, it has been cancelled and every bidder notified. Contact support if you believe this was a mistake.')}
     `,
   ));
 }

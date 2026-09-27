@@ -679,6 +679,34 @@ describe('reviews', () => {
     const res = await request(app).get(api(`/reviews/seller/${w.seller.id}`));
     expect(res.status).toBe(200);
   });
+
+  it('PATCH /reviews/{reviewId} and DELETE /reviews/{reviewId} and POST /reviews/{reviewId}/reply', async () => {
+    hit('patch', '/reviews/{reviewId}');
+    hit('delete', '/reviews/{reviewId}');
+    hit('post', '/reviews/{reviewId}/reply');
+
+    await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'DELIVERED' } });
+    const created = await request(app)
+      .post(api('/reviews'))
+      .set(auth(w.buyer.token))
+      .send({ transactionId: w.transactionId, stars: 4, comment: 'Good.' });
+    const reviewId = created.body.data.reviewId;
+
+    const patched = await request(app)
+      .patch(api(`/reviews/${reviewId}`))
+      .set(auth(w.buyer.token))
+      .send({ stars: 5 });
+    expect(patched.status).toBe(200);
+
+    const replied = await request(app)
+      .post(api(`/reviews/${reviewId}/reply`))
+      .set(auth(w.seller.token))
+      .send({ reply: 'Thank you!' });
+    expect(replied.status).toBe(200);
+
+    const deleted = await request(app).delete(api(`/reviews/${reviewId}`)).set(auth(w.buyer.token));
+    expect(deleted.status).toBe(200);
+  });
 });
 
 // ---- settings ---------------------------------------------------------------------
@@ -812,10 +840,10 @@ describe('admin', () => {
   it('GET /admin/users', async () => {
     hit('get', '/admin/users');
     const res = await request(app)
-      .get(api(`/admin/users?email=${encodeURIComponent(w.otherSeller.email)}`))
+      .get(api(`/admin/users?search=${encodeURIComponent(w.otherSeller.email)}`))
       .set(auth(w.admin.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.some((u: { userId: string }) => u.userId === w.otherSeller.id)).toBe(true);
+    expect(res.body.data.items.some((u: { userId: string }) => u.userId === w.otherSeller.id)).toBe(true);
   });
 
   it('POST /admin/users/{userId}/anonymize', async () => {
@@ -826,6 +854,33 @@ describe('admin', () => {
       .send({ reason: 'Requested via support ticket.' });
     expect(res.status).toBe(200);
     expect(res.body.data.status).toBe('ANONYMIZED');
+  });
+
+  it('POST /admin/users/{userId}/suspend and .../reinstate', async () => {
+    hit('post', '/admin/users/{userId}/suspend');
+    hit('post', '/admin/users/{userId}/reinstate');
+
+    const suspended = await request(app)
+      .post(api(`/admin/users/${w.otherBuyer.id}/suspend`))
+      .set(auth(w.admin.token))
+      .send({ reason: 'Conformance check.' });
+    expect(suspended.status).toBe(200);
+
+    const reinstated = await request(app)
+      .post(api(`/admin/users/${w.otherBuyer.id}/reinstate`))
+      .set(auth(w.admin.token));
+    expect(reinstated.status).toBe(200);
+  });
+
+  it('POST /admin/listings/{listingId}/takedown', async () => {
+    hit('post', '/admin/listings/{listingId}/takedown');
+    const listingId = (await prisma.auction.findUniqueOrThrow({ where: { id: w.liveAuctionId } })).listingId;
+    const res = await request(app)
+      .post(api(`/admin/listings/${listingId}/takedown`))
+      .set(auth(w.admin.token))
+      .send({ reason: 'Conformance check.' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('REMOVED');
   });
 });
 

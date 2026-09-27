@@ -16,6 +16,8 @@ export interface PlatformSettingsData {
   reviewTimeoutHours: number;
   // A3, Phase 6: how long a winner has to pay before the worker's sweep auto-voids the sale.
   paymentDeadlineHours: number;
+  // C6, Phase 7: how long a buyer may edit or delete their own review.
+  reviewEditWindowHours: number;
   supportEmail: string;
 }
 
@@ -29,6 +31,7 @@ const DEFAULTS: PlatformSettingsData = {
   minListingPrice: 1_000,
   reviewTimeoutHours: 48,
   paymentDeadlineHours: 48,
+  reviewEditWindowHours: 72,
   supportEmail: 'support@bidvault.tech',
 };
 
@@ -47,6 +50,7 @@ type SettingRow = {
   minListingPrice: number;
   reviewTimeoutHours: number;
   paymentDeadlineHours: number;
+  reviewEditWindowHours: number;
   supportEmail: string;
 };
 
@@ -58,6 +62,7 @@ function toData(row: SettingRow): PlatformSettingsData {
     minListingPrice: row.minListingPrice,
     reviewTimeoutHours: row.reviewTimeoutHours,
     paymentDeadlineHours: row.paymentDeadlineHours,
+    reviewEditWindowHours: row.reviewEditWindowHours,
     supportEmail: row.supportEmail,
   };
 }
