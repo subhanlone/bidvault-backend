@@ -11,6 +11,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { APPROVED_TEST_CARD, DECLINED_TEST_CARD } from '../src/services/payment-gateway.service.js';
+import { resData } from './helpers/api.js';
 
 // Nothing here should reach Resend. Mocked rather than relying on the service's own no-op
 // without an API key, so the assertions about *who gets told what* are real assertions.
@@ -63,7 +64,7 @@ describe('a successful charge', () => {
     const res = await pay(w.transactionId, w.buyer.token);
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual({ transactionId: w.transactionId, status: 'COMPLETED' });
+    expect(resData(res)).toEqual({ transactionId: w.transactionId, status: 'COMPLETED' });
 
     const tx = await reload(w.transactionId);
     expect(tx.status).toBe('COMPLETED');
@@ -91,7 +92,7 @@ describe('a declined card', () => {
     const res = await pay(w.transactionId, w.buyer.token, DECLINED_TEST_CARD);
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual({
+    expect(resData(res)).toEqual({
       transactionId: w.transactionId,
       status: 'PENDING',
       lastPaymentError: 'Your card was declined.',
@@ -120,7 +121,7 @@ describe('a declined card', () => {
     await pay(w.transactionId, w.buyer.token, DECLINED_TEST_CARD);
 
     const res = await request(app).get(api('/payments/my-wins')).set(bearer(w.buyer.token)).expect(200);
-    const mine = (res.body.data as Array<{ transactionId: string; lastPaymentError?: string }>)
+    const mine = resData<Array<{ transactionId: string; lastPaymentError?: string }>>(res)
       .find((t) => t.transactionId === w.transactionId);
 
     expect(mine?.lastPaymentError).toBe('Your card was declined.');

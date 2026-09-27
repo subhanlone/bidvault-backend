@@ -5,6 +5,12 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { resData, type Paginated } from './helpers/api.js';
+
+interface ListingSummary {
+  listingId: string;
+  isLive: boolean;
+}
 
 vi.mock('resend', () => ({
   Resend: class {
@@ -63,8 +69,8 @@ describe('isLive (A1)', () => {
     const liveListingId = (await prisma.auction.findUniqueOrThrow({ where: { id: w.liveAuctionId } })).listingId;
     const res = await request(app).get(api('/listings/mine')).set(auth(w.seller.token));
     expect(res.status).toBe(200);
-    const live = res.body.data.items.find((l: { listingId: string }) => l.listingId === liveListingId);
-    expect(live.isLive).toBe(true);
+    const live = resData<Paginated<ListingSummary>>(res).items.find((l) => l.listingId === liveListingId);
+    expect(live?.isLive).toBe(true);
   });
 
   it('is false once the auction closes, even though the listing stays APPROVED', async () => {
@@ -72,20 +78,22 @@ describe('isLive (A1)', () => {
 
     const res = await request(app).get(api('/listings/mine')).set(auth(w.seller.token));
     const listingId = (await prisma.auction.findUniqueOrThrow({ where: { id: w.liveAuctionId } })).listingId;
-    const item = res.body.data.items.find((l: { listingId: string }) => l.listingId === listingId);
-    expect(item.isLive).toBe(false);
+    const item = resData<Paginated<ListingSummary>>(res).items.find((l) => l.listingId === listingId);
+    expect(item?.isLive).toBe(false);
   });
 
   it('is false for a PENDING listing with no auction at all', async () => {
     const res = await request(app).get(api('/listings/mine')).set(auth(w.seller.token));
-    const pending = res.body.data.items.find((l: { listingId: string }) => l.listingId === w.pendingListingId);
-    expect(pending.isLive).toBe(false);
+    const pending = resData<Paginated<ListingSummary>>(res).items.find(
+      (l) => l.listingId === w.pendingListingId,
+    );
+    expect(pending?.isLive).toBe(false);
   });
 
   it('/stats only counts live inventory, not every APPROVED listing ever', async () => {
-    const before = (await request(app).get(api('/stats'))).body.data.listingCount;
+    const before = resData<{ listingCount: number }>(await request(app).get(api('/stats'))).listingCount;
     await prisma.auction.update({ where: { id: w.liveAuctionId }, data: { status: 'CLOSED' } });
-    const after = (await request(app).get(api('/stats'))).body.data.listingCount;
+    const after = resData<{ listingCount: number }>(await request(app).get(api('/stats'))).listingCount;
     expect(after).toBe(before - 1);
   });
 });
@@ -119,9 +127,10 @@ describe('resubmit a rejected listing (A2)', () => {
       .send(VALID_LISTING_BODY);
 
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('PENDING');
-    expect(res.body.data.title).toBe(VALID_LISTING_BODY.title);
-    expect(res.body.data.rejectionReason).toBeUndefined();
+    const data = resData<{ status: string; title: string; rejectionReason?: string }>(res);
+    expect(data.status).toBe('PENDING');
+    expect(data.title).toBe(VALID_LISTING_BODY.title);
+    expect(data.rejectionReason).toBeUndefined();
 
     const row = await prisma.listing.findUniqueOrThrow({ where: { id: listing.id } });
     expect(row.status).toBe('PENDING');
@@ -161,7 +170,7 @@ describe('withdraw a pending listing (B4)', () => {
       .delete(api(`/listings/${w.pendingListingId}`))
       .set(auth(w.seller.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('WITHDRAWN');
+    expect(resData<{ status: string }>(res).status).toBe('WITHDRAWN');
 
     const row = await prisma.listing.findUnique({ where: { id: w.pendingListingId } });
     expect(row).toBeNull();

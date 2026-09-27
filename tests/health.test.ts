@@ -8,6 +8,19 @@
  */
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { resData } from './helpers/api.js';
+
+interface HealthData {
+  status: string;
+  service: string;
+  version: string;
+  commit: string;
+  workerHeartbeatAgeSeconds: number | null;
+  dependencies: {
+    database: { state: string; latencyMs: number };
+    redis: { state: string };
+  };
+}
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
@@ -20,9 +33,10 @@ const app = createApp();
 describe('GET /health', () => {
   it('reports both dependencies up, with the build identity', async () => {
     const res = await request(app).get('/api/v1/health');
+    const data = resData<HealthData>(res);
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toMatchObject({
+    expect(data).toMatchObject({
       status: 'ok',
       service: 'bidvault-backend',
       dependencies: {
@@ -32,9 +46,9 @@ describe('GET /health', () => {
     });
     // The contract version, so a deployed build can be identified from outside. Without this
     // the only way to tell which commit is live is to read GitHub's deployment records.
-    expect(res.body.data.version).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(res.body.data.commit).toBeTruthy();
-    expect(res.body.data.dependencies.database.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(data.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(data.commit).toBeTruthy();
+    expect(data.dependencies.database.latencyMs).toBeGreaterThanOrEqual(0);
   });
 
   // BV-012: a crashed worker leaves every ACTIVE auction open past its end time with nothing
@@ -44,7 +58,7 @@ describe('GET /health', () => {
   it('reports workerHeartbeatAgeSeconds null when the worker has never written one', async () => {
     await redisConnection.del(WORKER_HEARTBEAT_KEY);
     const res = await request(app).get('/api/v1/health');
-    expect(res.body.data.workerHeartbeatAgeSeconds).toBeNull();
+    expect(resData<HealthData>(res).workerHeartbeatAgeSeconds).toBeNull();
   });
 
   it('reports the age of a real heartbeat written to Redis', async () => {
@@ -52,8 +66,9 @@ describe('GET /health', () => {
     await redisConnection.set(WORKER_HEARTBEAT_KEY, thirtySecondsAgo.toString());
     try {
       const res = await request(app).get('/api/v1/health');
-      expect(res.body.data.workerHeartbeatAgeSeconds).toBeGreaterThanOrEqual(30);
-      expect(res.body.data.workerHeartbeatAgeSeconds).toBeLessThan(35);
+      const data = resData<HealthData>(res);
+      expect(data.workerHeartbeatAgeSeconds).toBeGreaterThanOrEqual(30);
+      expect(data.workerHeartbeatAgeSeconds).toBeLessThan(35);
     } finally {
       await redisConnection.del(WORKER_HEARTBEAT_KEY);
     }
@@ -69,13 +84,14 @@ describe('GET /health', () => {
       const started = Date.now();
       const res = await request(app).get('/api/v1/health');
       const elapsed = Date.now() - started;
+      const data = resData<HealthData>(res);
 
       // Liveness is unaffected: the process is alive, so Railway must not restart it.
       expect(res.status).toBe(200);
-      expect(res.body.data.status).toBe('ok');
-      expect(res.body.data.dependencies.redis.state).toBe('down');
+      expect(data.status).toBe('ok');
+      expect(data.dependencies.redis.state).toBe('down');
       // Database is independent and should still report up.
-      expect(res.body.data.dependencies.database.state).toBe('up');
+      expect(data.dependencies.database.state).toBe('up');
       // Bounded by the 2s probe timeout rather than hanging.
       expect(elapsed).toBeLessThan(6_000);
     } finally {

@@ -8,6 +8,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import crypto from 'node:crypto';
+import { resData } from './helpers/api.js';
 
 vi.mock('resend', () => ({
   Resend: class {
@@ -90,8 +91,9 @@ describe('listing-code collision', () => {
       });
 
     expect(res.status).toBe(201);
-    expect(res.body.data.listingCode).not.toBe(collidingCode);
-    expect(res.body.data.listingCode).toMatch(new RegExp(`^BV-${year}-[0-9A-F]{10}$`));
+    const data = resData<{ listingCode: string }>(res);
+    expect(data.listingCode).not.toBe(collidingCode);
+    expect(data.listingCode).toMatch(new RegExp(`^BV-${year}-[0-9A-F]{10}$`));
 
     expect(
       await prisma.listing.count({

@@ -8,6 +8,13 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { resData } from './helpers/api.js';
+
+interface BulkApprovalDto {
+  approved: number;
+  failed: number;
+  remaining: number;
+}
 
 vi.mock('resend', () => ({
   Resend: class {
@@ -76,9 +83,10 @@ describe('approve-all', () => {
     const res = await request(app).post(api('/listings/approve-all')).set(auth(w.admin.token));
 
     expect(res.status).toBe(200);
-    expect(res.body.data.approved).toBe(4);
-    expect(res.body.data.failed).toBe(0);
-    expect(res.body.data.remaining).toBe(0);
+    const data = resData<BulkApprovalDto>(res);
+    expect(data.approved).toBe(4);
+    expect(data.failed).toBe(0);
+    expect(data.remaining).toBe(0);
     expect(await prisma.listing.count({ where: { status: 'PENDING' } })).toBe(0);
   });
 
@@ -97,8 +105,9 @@ describe('approve-all', () => {
     expect(res.status).toBe(200);
     // world.ts's two pre-seeded listings + '3' approve; '4' was already REJECTED, not PENDING, by
     // the time this ran, so it is neither approved nor counted as a failure.
-    expect(res.body.data.approved).toBe(3);
-    expect(res.body.data.failed).toBe(0);
-    expect(res.body.data.remaining).toBe(0);
+    const data = resData<BulkApprovalDto>(res);
+    expect(data.approved).toBe(3);
+    expect(data.failed).toBe(0);
+    expect(data.remaining).toBe(0);
   });
 });

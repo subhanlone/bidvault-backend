@@ -7,6 +7,15 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { resData, type Paginated } from './helpers/api.js';
+
+/** The one id field a paginated item actually has depends on which entity this page is of. */
+interface PageItem {
+  id?: string;
+  auctionId?: string;
+  bidId?: string;
+  listingId?: string;
+}
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
@@ -92,8 +101,12 @@ async function walkAllPages(
     const url: string = api(`${path}${suffix}`);
     const res = await request(app).get(url).set(headers);
     expect(res.status).toBe(200);
-    for (const item of res.body.data.items) seen.push(item.id ?? item.auctionId ?? item.bidId ?? item.listingId);
-    cursor = res.body.data.nextCursor;
+    const page = resData<Paginated<PageItem>>(res);
+    for (const item of page.items) {
+      const id = item.id ?? item.auctionId ?? item.bidId ?? item.listingId;
+      if (id) seen.push(id);
+    }
+    cursor = page.nextCursor;
     if (!cursor) break;
   }
   return seen;
@@ -106,8 +119,9 @@ describe('GET /auctions pagination', () => {
 
     const res = await request(app).get(api('/auctions?limit=2'));
     expect(res.status).toBe(200);
-    expect(res.body.data.items).toHaveLength(2);
-    expect(res.body.data.nextCursor).not.toBeNull();
+    const data = resData<Paginated<PageItem>>(res);
+    expect(data.items).toHaveLength(2);
+    expect(data.nextCursor).not.toBeNull();
   });
 
   it('walks every row exactly once across ties on the sort key, via the id tiebreak', async () => {
@@ -123,7 +137,7 @@ describe('GET /auctions pagination', () => {
   it('defaults to ACTIVE when no status is requested', async () => {
     const res = await request(app).get(api('/auctions?limit=100'));
     expect(res.status).toBe(200);
-    const ids: string[] = res.body.data.items.map((a: { auctionId: string }) => a.auctionId);
+    const ids: string[] = resData<Paginated<{ auctionId: string }>>(res).items.map((a) => a.auctionId);
     // w.closedAuctionId is CLOSED -- must not appear in the unfiltered default.
     expect(ids).not.toContain(w.closedAuctionId);
     expect(ids).toContain(w.liveAuctionId);
@@ -132,7 +146,7 @@ describe('GET /auctions pagination', () => {
   it('an explicit status still overrides the default', async () => {
     const res = await request(app).get(api('/auctions?status=CLOSED&limit=100'));
     expect(res.status).toBe(200);
-    const ids: string[] = res.body.data.items.map((a: { auctionId: string }) => a.auctionId);
+    const ids: string[] = resData<Paginated<{ auctionId: string }>>(res).items.map((a) => a.auctionId);
     expect(ids).toContain(w.closedAuctionId);
   });
 

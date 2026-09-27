@@ -6,7 +6,19 @@ import { v2 as cloudinary } from 'cloudinary';
 import { rateLimit } from 'express-rate-limit';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
-import type { Socket } from 'socket.io';
+import type { AuctionSocket } from '../src/socket/auction-subscriptions.js';
+import { resData, resError } from './helpers/api.js';
+
+interface UploadSignatureDto {
+  signature: string;
+  timestamp: number;
+  apiKey: string;
+  cloudName: string;
+  folder: string;
+  format: string;
+  publicId: string;
+  allowedFormats: string;
+}
 
 const mail = vi.hoisted(() => ({
   send: vi.fn(async (_message: { subject: string; html: string }) => ({
@@ -85,13 +97,16 @@ describe('opaque error boundary', () => {
     const res = await request(throwingApp(new Error('postgresql://secret-host/internal'))).get('/boom');
 
     expect(res.status).toBe(500);
-    expect(res.body).toMatchObject({
+    // expect.stringMatching returns `any` (vitest's own asymmetric-matcher type) -- an
+    // explicitly-typed local gives the assertion below a real destination to narrow into.
+    const expected: { success: boolean; error: string; requestId: string } = {
       success: false,
       error: 'Internal server error',
-      requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
-    });
+      requestId: expect.stringMatching(/^[0-9a-f-]{36}$/) as string,
+    };
+    expect(res.body).toMatchObject(expected);
     expect(JSON.stringify(res.body)).not.toContain('secret-host');
-    expect(res.headers['x-request-id']).toBe(res.body.requestId);
+    expect(res.headers['x-request-id']).toBe(resError(res).requestId);
   });
 
   it('maps a forced Prisma P2002 without exposing its constraint', async () => {
@@ -102,7 +117,7 @@ describe('opaque error boundary', () => {
     const res = await request(throwingApp(error)).get('/boom');
 
     expect(res.status).toBe(409);
-    expect(res.body.error).toBe('A record with these details already exists.');
+    expect(resError(res).error).toBe('A record with these details already exists.');
     expect(JSON.stringify(res.body)).not.toContain('User_email_key');
   });
 
@@ -111,7 +126,7 @@ describe('opaque error boundary', () => {
       .get(api('/health'))
       .set('Origin', 'https://attacker.invalid');
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe('Origin not allowed.');
+    expect(resError(res).error).toBe('Origin not allowed.');
   });
 });
 
@@ -128,7 +143,7 @@ describe('rate limits and OTP attempt budgets', () => {
       .post(api('/auth/login'))
       .send({ email: 'rate-login@test.local', password: 'wrong-password' });
     expect(blocked.status).toBe(429);
-    expect(blocked.body.error).toBe('Too many login attempts. Please try again later.');
+    expect(resError(blocked).error).toBe('Too many login attempts. Please try again later.');
   }, 15_000);
 
   it('spends the login budget on failures only, so a shared address is not locked out', async () => {
@@ -179,7 +194,7 @@ describe('rate limits and OTP attempt budgets', () => {
         .post(api('/auth/verify-reset-otp'))
         .send({ email: w.buyer.email, otp: '654321' });
       expect(res.status, `attempt ${attempt}`).toBe(422);
-      expect(res.body.error).toBe('Invalid or expired code.');
+      expect(resError(res).error).toBe('Invalid or expired code.');
     }
 
     const stored = await prisma.passwordResetToken.findUniqueOrThrow({ where: { id: token.id } });
@@ -197,7 +212,7 @@ describe('rate limits and OTP attempt budgets', () => {
         .post(api('/auth/verify-email'))
         .send({ email: w.buyer.email, otp: '654321' });
       expect(res.status).toBe(422);
-      expect(res.body.error).toBe('Invalid or expired code.');
+      expect(resError(res).error).toBe('Invalid or expired code.');
     }
 
     const stored = await prisma.emailVerificationToken.findUniqueOrThrow({ where: { id: token.id } });
@@ -218,9 +233,9 @@ describe('enumeration resistance and session recovery', () => {
       .post(api('/auth/verify-email'))
       .send({ email: 'missing-user@test.local', otp: '654321' });
 
-    expect({ status: missing.status, error: missing.body.error }).toEqual({
+    expect({ status: missing.status, error: resError(missing).error }).toEqual({
       status: existing.status,
-      error: existing.body.error,
+      error: resError(existing).error,
     });
   });
 
@@ -267,15 +282,16 @@ describe('enumeration resistance and session recovery', () => {
       .send({ currentPassword: PASSWORD, newPassword: 'Correct-Horse-Battery-Staple-42!' });
 
     expect(changed.status).toBe(200);
-    expect(typeof changed.body.data.accessToken).toBe('string');
-    expect(typeof changed.body.data.refreshToken).toBe('string');
+    const changedTokens = resData<{ accessToken: string; refreshToken: string }>(changed);
+    expect(typeof changedTokens.accessToken).toBe('string');
+    expect(typeof changedTokens.refreshToken).toBe('string');
 
     // The replacement works -- the usability half, and the half that was missing.
     const fresh = await request(app)
       .post(api('/auth/refresh'))
-      .send({ refreshToken: changed.body.data.refreshToken });
+      .send({ refreshToken: changedTokens.refreshToken });
     expect(fresh.status).toBe(200);
-    expect(typeof fresh.body.data.accessToken).toBe('string');
+    expect(typeof resData<{ accessToken: string }>(fresh).accessToken).toBe('string');
 
     // The session held before the change is dead -- the security half.
     //
@@ -326,7 +342,7 @@ describe('enumeration resistance and session recovery', () => {
       .send({ refreshToken: oldToken });
 
     expect(res.status).toBe(401);
-    expect(res.body.error).toBe('Session invalidated. Please sign in again.');
+    expect(resError(res).error).toBe('Session invalidated. Please sign in again.');
     const active = await prisma.refreshToken.findUniqueOrThrow({ where: { id: activeId } });
     expect(active.revokedAt).toBeInstanceOf(Date);
 
@@ -382,8 +398,9 @@ describe('bounded values and escaped email output', () => {
       .send({ amount: 2_147_483_648 });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe('Validation error');
-    expect(res.body.details).toHaveProperty('amount');
+    const failure = resError(res);
+    expect(failure.error).toBe('Validation error');
+    expect(failure.details).toHaveProperty('amount');
   });
 
   it('rejects a storable but abusive bid relative to the locked auction state', async () => {
@@ -392,7 +409,7 @@ describe('bounded values and escaped email output', () => {
       .set(auth(w.buyer.token))
       .send({ amount: 2_000_000_000 });
     expect(res.status).toBe(422);
-    expect(res.body.error).toContain('cannot exceed');
+    expect(resError(res).error).toContain('cannot exceed');
   });
 
   it('bounds listing money, emoji, rejection reason and image host', () => {
@@ -479,7 +496,7 @@ describe('socket and Cloudinary abuse controls', () => {
       where: { id: w.liveAuctionId },
     });
     const findUnique = vi.spyOn(prisma.auction, 'findUnique').mockResolvedValue(existingAuction);
-    registerAuctionSubscriptions(fake as unknown as Socket);
+    registerAuctionSubscriptions(fake as unknown as AuctionSocket);
 
     const subscribe = handlers.get('auction:subscribe')!;
     for (let i = 0; i < 30; i++) subscribe(`auction-${i}`);
@@ -498,12 +515,13 @@ describe('socket and Cloudinary abuse controls', () => {
       .set(auth(w.seller.token));
 
     expect(first.status).toBe(200);
-    expect(first.body.data).toMatchObject({
+    const firstData = resData<UploadSignatureDto>(first);
+    expect(firstData).toMatchObject({
       allowedFormats: 'jpg,png,webp',
       format: 'jpg',
     });
-    expect(first.body.data.publicId).toMatch(new RegExp(`^listing-${w.seller.id}-`));
-    expect(second.body.data.publicId).not.toBe(first.body.data.publicId);
+    expect(firstData.publicId).toMatch(new RegExp(`^listing-${w.seller.id}-`));
+    expect(resData<UploadSignatureDto>(second).publicId).not.toBe(firstData.publicId);
   });
 
   it('signs only parameters Cloudinary recognises', async () => {
@@ -522,10 +540,11 @@ describe('socket and Cloudinary abuse controls', () => {
       'signature', 'timestamp', 'apiKey', 'cloudName', 'folder', 'format', 'publicId',
       'allowedFormats',
     ]);
-    expect(new Set(Object.keys(res.body.data))).toEqual(CLOUDINARY_UPLOAD_PARAMS);
+    const data = resData<UploadSignatureDto>(res);
+    expect(new Set(Object.keys(data))).toEqual(CLOUDINARY_UPLOAD_PARAMS);
 
     // The signature must cover exactly the signable fields, in Cloudinary's own ordering.
-    const { signature, timestamp, folder, format, publicId, allowedFormats } = res.body.data;
+    const { signature, timestamp, folder, format, publicId, allowedFormats } = data;
     const expected = cloudinary.utils.api_sign_request(
       { timestamp, folder, format, public_id: publicId, allowed_formats: allowedFormats },
       env.CLOUDINARY_API_SECRET,

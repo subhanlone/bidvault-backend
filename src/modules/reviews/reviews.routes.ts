@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
@@ -14,7 +15,7 @@ router.post(
   '/',
   requireAuth(['BUYER']),
   validateBody(createReviewSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof createReviewSchema>>(async (req, res) => {
     const { transactionId, stars, comment } = req.body;
     const buyerId = req.auth!.userId;
 
@@ -95,7 +96,7 @@ router.patch(
   '/:reviewId',
   requireAuth(['BUYER']),
   validateBody(updateReviewSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof updateReviewSchema>>(async (req, res) => {
     const review = await prisma.sellerReview.findUnique({ where: { id: req.params.reviewId } });
     if (!review) { fail(res, 'Review not found.', 404); return; }
     if (review.buyerId !== req.auth!.userId) { fail(res, 'Forbidden.', 403); return; }
@@ -152,7 +153,7 @@ router.post(
   '/:reviewId/reply',
   requireAuth(['SELLER']),
   validateBody(replyToReviewSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof replyToReviewSchema>>(async (req, res) => {
     const review = await prisma.sellerReview.findUnique({ where: { id: req.params.reviewId } });
     if (!review) { fail(res, 'Review not found.', 404); return; }
     if (review.sellerId !== req.auth!.userId) { fail(res, 'Forbidden.', 403); return; }

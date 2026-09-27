@@ -10,6 +10,20 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { resData, type Paginated } from './helpers/api.js';
+
+interface PublicBidItem {
+  bidId: string;
+  auctionId: string;
+  isMine: boolean;
+  buyerName: string;
+  amount: number;
+  timestamp: string;
+}
+
+interface PublicReview {
+  buyerName: string;
+}
 
 vi.mock('resend', () => ({
   Resend: class {
@@ -97,22 +111,25 @@ describe('public bid feed', () => {
 
     const anon = await request(app).get(api(`/auctions/${auctionId}/bids`));
     expect(anon.status).toBe(200);
-    for (const item of anon.body.data.items) {
+    const anonItems = resData<Paginated<PublicBidItem>>(anon).items;
+    for (const item of anonItems) {
       expect(item).not.toHaveProperty('buyerId');
       expect(item.isMine).toBe(false);
     }
     // Newest first: otherBuyer's 1,100 bid, then buyer's 1,000 bid.
-    expect(anon.body.data.items[0].buyerName).toBe('Bidder 2');
-    expect(anon.body.data.items[1].buyerName).toBe('Bidder 1');
+    expect(anonItems[0].buyerName).toBe('Bidder 2');
+    expect(anonItems[1].buyerName).toBe('Bidder 1');
 
     const asBuyer = await request(app).get(api(`/auctions/${auctionId}/bids`)).set(auth(w.buyer.token));
-    const mine = asBuyer.body.data.items.filter((i: { isMine: boolean }) => i.isMine);
+    const mine = resData<Paginated<PublicBidItem>>(asBuyer).items.filter((i) => i.isMine);
     expect(mine).toHaveLength(1);
     expect(mine[0].buyerName).toBe('Bidder 1');
 
     // An authenticated caller who never bid on this auction sees the same masked view as anon.
     const asAdmin = await request(app).get(api(`/auctions/${auctionId}/bids`)).set(auth(w.admin.token));
-    expect(asAdmin.body.data.items.every((i: { isMine: boolean }) => i.isMine === false)).toBe(true);
+    expect(
+      resData<Paginated<PublicBidItem>>(asAdmin).items.every((i) => i.isMine === false),
+    ).toBe(true);
   });
 
   it('never sends buyerId on the bid:placed socket broadcast, and masks the name there too', async () => {
@@ -124,7 +141,7 @@ describe('public bid feed', () => {
       .send({ amount: 1_000 });
     expect(res.status).toBe(201);
     // The bidder's own direct response keeps full identity -- it's their own action.
-    expect(res.body.data.buyerId).toBe(w.buyer.id);
+    expect(resData<{ buyerId: string }>(res).buyerId).toBe(w.buyer.id);
 
     expect(emit).toHaveBeenCalledTimes(1);
     const [, payload] = emit.mock.calls[0] as [string, { auctionId: string; bid: Record<string, unknown> }];
@@ -195,11 +212,12 @@ describe('public seller reviews', () => {
 
     const res = await request(app).get(api(`/reviews/seller/${w.seller.id}`));
     expect(res.status).toBe(200);
-    for (const r of res.body.data.reviews) {
+    const reviews = resData<{ reviews: PublicReview[] }>(res).reviews;
+    for (const r of reviews) {
       expect(r.buyerName).toMatch(/^Reviewer \d+$/);
     }
     // Newest first: otherBuyer's review, then buyer's.
-    expect(res.body.data.reviews[0].buyerName).toBe('Reviewer 2');
-    expect(res.body.data.reviews[1].buyerName).toBe('Reviewer 1');
+    expect(reviews[0].buyerName).toBe('Reviewer 2');
+    expect(reviews[1].buyerName).toBe('Reviewer 1');
   });
 });

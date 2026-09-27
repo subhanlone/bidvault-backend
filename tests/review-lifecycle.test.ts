@@ -5,6 +5,27 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { resData } from './helpers/api.js';
+
+interface ReviewDto {
+  reviewId: string;
+  stars: number;
+  comment: string | null;
+  createdAt: string;
+}
+
+interface ReplyDto {
+  reviewId: string;
+  sellerReply: string | null;
+  sellerReplyAt?: string;
+}
+
+interface SellerReviewsDto {
+  sellerId: string;
+  average: number | null;
+  count: number;
+  reviews: Array<{ reviewId: string; sellerReply?: string }>;
+}
 
 vi.mock('resend', () => ({
   Resend: class {
@@ -52,7 +73,7 @@ async function seedReview() {
     .post(api('/reviews'))
     .set(auth(w.buyer.token))
     .send({ transactionId: w.transactionId, stars: 3, comment: 'It was fine.' });
-  return res.body.data.reviewId as string;
+  return resData<ReviewDto>(res).reviewId;
 }
 
 describe('edit a review (C6)', () => {
@@ -63,7 +84,7 @@ describe('edit a review (C6)', () => {
       .set(auth(w.buyer.token))
       .send({ stars: 5, comment: 'Actually it was great, updating my review.' });
     expect(res.status).toBe(200);
-    expect(res.body.data.stars).toBe(5);
+    expect(resData<ReviewDto>(res).stars).toBe(5);
 
     const row = await prisma.sellerReview.findUniqueOrThrow({ where: { id: reviewId } });
     expect(row.stars).toBe(5);
@@ -125,7 +146,7 @@ describe("seller's right of reply (C6)", () => {
       .set(auth(w.seller.token))
       .send({ reply: 'Thanks for your business!' });
     expect(res.status).toBe(200);
-    expect(res.body.data.sellerReply).toBe('Thanks for your business!');
+    expect(resData<ReplyDto>(res).sellerReply).toBe('Thanks for your business!');
 
     const notification = await prisma.notification.findFirst({ where: { userId: w.buyer.id, type: 'REVIEW_REPLY' } });
     expect(notification).not.toBeNull();
@@ -156,7 +177,7 @@ describe("seller's right of reply (C6)", () => {
 
     const res = await request(app).get(api(`/reviews/seller/${w.seller.id}`));
     expect(res.status).toBe(200);
-    const review = res.body.data.reviews.find((r: { reviewId: string }) => r.reviewId === reviewId);
-    expect(review.sellerReply).toBe('Thank you!');
+    const review = resData<SellerReviewsDto>(res).reviews.find((r) => r.reviewId === reviewId);
+    expect(review?.sellerReply).toBe('Thank you!');
   });
 });

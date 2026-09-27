@@ -8,6 +8,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { resError } from './helpers/api.js';
 
 vi.mock('resend', () => ({
   Resend: class {
@@ -71,7 +72,7 @@ describe('duplicate submit past the pre-check', () => {
     });
 
     expect(res.status).toBe(409);
-    expect(res.body.error).toBe('An account with this email already exists.');
+    expect(resError(res).error).toBe('An account with this email already exists.');
   });
 
   it('reviews: falls back to the specific 409 message, not the generic one', async () => {
@@ -133,6 +134,6 @@ describe('duplicate submit past the pre-check', () => {
       .send({ transactionId: transaction.id, stars: 3 });
 
     expect(res.status).toBe(409);
-    expect(res.body.error).toBe("You've already reviewed this seller for this purchase.");
+    expect(resError(res).error).toBe("You've already reviewed this seller for this purchase.");
   });
 });

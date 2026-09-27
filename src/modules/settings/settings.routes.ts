@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { z } from 'zod';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
@@ -41,7 +42,7 @@ router.put(
   '/',
   requireAuth(['ADMIN']),
   validateBody(updateSettingsSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof updateSettingsSchema>>(async (req, res) => {
     ok(res, await updatePlatformSettings(req.body));
   }),
 );

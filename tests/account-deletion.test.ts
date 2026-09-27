@@ -7,6 +7,11 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { resData, type Paginated } from './helpers/api.js';
+
+interface UserDirectoryEntry {
+  userId: string;
+}
 
 const mail = vi.hoisted(() => ({
   send: vi.fn(async (_message: { subject: string; html: string }) => ({
@@ -56,12 +61,25 @@ afterAll(async () => {
 describe('checkAccountDeletable', () => {
   it('refuses a seller with an active auction', async () => {
     const result = await checkAccountDeletable(w.seller.id);
-    expect(result).toEqual({ allowed: false, reason: expect.stringMatching(/active auction/i) });
+    // expect.stringMatching returns `any` (an asymmetric matcher, not really a string) by
+    // vitest's own types. toEqual infers its expected type from what it's handed, so an
+    // inline assertion there is always "unnecessary" to the type checker even though the
+    // property is genuinely `any` -- routing through an explicitly-typed local first gives
+    // the assertion a real destination type to narrow into.
+    const expected: { allowed: boolean; reason: string } = {
+      allowed: false,
+      reason: expect.stringMatching(/active auction/i) as string,
+    };
+    expect(result).toEqual(expected);
   });
 
   it('refuses a buyer with a pending transaction', async () => {
     const result = await checkAccountDeletable(w.buyer.id);
-    expect(result).toEqual({ allowed: false, reason: expect.stringMatching(/awaiting payment/i) });
+    const expected: { allowed: boolean; reason: string } = {
+      allowed: false,
+      reason: expect.stringMatching(/awaiting payment/i) as string,
+    };
+    expect(result).toEqual(expected);
   });
 
   it('allows a user with no active auction and no pending transaction', async () => {
@@ -177,7 +195,9 @@ describe('GET /admin/users', () => {
       .set(auth(w.admin.token));
 
     expect(res.status).toBe(200);
-    expect(res.body.data.items.some((u: { userId: string }) => u.userId === w.otherBuyer.id)).toBe(true);
+    expect(
+      resData<Paginated<UserDirectoryEntry>>(res).items.some((u) => u.userId === w.otherBuyer.id),
+    ).toBe(true);
   });
 
   it('finds a user by a partial, case-insensitive name match', async () => {
@@ -188,7 +208,9 @@ describe('GET /admin/users', () => {
       .set(auth(w.admin.token));
 
     expect(res.status).toBe(200);
-    expect(res.body.data.items.some((u: { userId: string }) => u.userId === w.otherBuyer.id)).toBe(true);
+    expect(
+      resData<Paginated<UserDirectoryEntry>>(res).items.some((u) => u.userId === w.otherBuyer.id),
+    ).toBe(true);
   });
 
   it('lists users without a search term, paginated newest first', async () => {
@@ -197,7 +219,8 @@ describe('GET /admin/users', () => {
       .set(auth(w.admin.token));
 
     expect(res.status).toBe(200);
-    expect(res.body.data.items).toHaveLength(1);
-    expect(res.body.data.nextCursor).toEqual(expect.any(String));
+    const data = resData<Paginated<UserDirectoryEntry>>(res);
+    expect(data.items).toHaveLength(1);
+    expect(data.nextCursor).toEqual(expect.any(String));
   });
 });

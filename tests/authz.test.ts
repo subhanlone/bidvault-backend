@@ -23,6 +23,7 @@
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { resData, type Paginated } from './helpers/api.js';
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
@@ -280,7 +281,7 @@ describe('one user cannot reach another user\'s data', () => {
 
   it('GET /notifications returns only the caller\'s own', async () => {
     const res = await request(app).get(api('/notifications')).set(bearer(w.buyer.token)).expect(200);
-    const ids = (res.body.data as Array<{ id: string }>).map((n) => n.id);
+    const ids = resData<Array<{ id: string }>>(res).map((n) => n.id);
     expect(ids).not.toContain(w.otherBuyerNotificationId);
   });
 
@@ -349,26 +350,26 @@ describe('one user cannot reach another user\'s data', () => {
 
   it('GET /payments/my-wins returns only the caller\'s wins', async () => {
     const res = await request(app).get(api('/payments/my-wins')).set(bearer(w.buyer.token)).expect(200);
-    const ids = (res.body.data as Array<{ transactionId: string }>).map((t) => t.transactionId);
+    const ids = resData<Array<{ transactionId: string }>>(res).map((t) => t.transactionId);
     expect(ids).toContain(w.transactionId);
     expect(ids).not.toContain(w.otherBuyerTransactionId);
   });
 
   it('GET /listings/mine returns only the caller\'s listings', async () => {
     const res = await request(app).get(api('/listings/mine')).set(bearer(w.seller.token)).expect(200);
-    const ids = (res.body.data.items as Array<{ listingId: string }>).map((l) => l.listingId);
+    const ids = resData<Paginated<{ listingId: string }>>(res).items.map((l) => l.listingId);
     expect(ids).not.toContain(w.otherSellerListingId);
   });
 
   it('GET /auctions/mine/bids returns only the caller\'s bids', async () => {
     const res = await request(app).get(api('/auctions/mine/bids')).set(bearer(w.buyer.token)).expect(200);
-    const buyerIds = new Set((res.body.data.items as Array<{ buyerId: string }>).map((b) => b.buyerId));
+    const buyerIds = new Set(resData<Paginated<{ buyerId: string }>>(res).items.map((b) => b.buyerId));
     expect([...buyerIds]).toEqual([w.buyer.id]);
   });
 
   it('GET /watchlist returns only the caller\'s watched auctions', async () => {
     const res = await request(app).get(api('/watchlist')).set(bearer(w.buyer.token)).expect(200);
-    const ids = (res.body.data.items as Array<{ auctionId: string }>).map((a) => a.auctionId);
+    const ids = resData<Paginated<{ auctionId: string }>>(res).items.map((a) => a.auctionId);
     expect(ids).toContain(w.liveAuctionId);
     expect(ids).not.toContain(w.otherBuyerWatchedAuctionId);
   });
@@ -388,7 +389,7 @@ describe('one user cannot reach another user\'s data', () => {
   it('GET /payments/seller-stats counts only the caller\'s sales', async () => {
     const res = await request(app).get(api('/payments/seller-stats')).set(bearer(w.seller.token)).expect(200);
     // otherSeller has the only COMPLETED transaction in the world; the first seller has none.
-    expect(res.body.data).toMatchObject({ itemsSold: 0, totalRevenue: 0 });
+    expect(resData(res)).toMatchObject({ itemsSold: 0, totalRevenue: 0 });
   });
 
   it('a seller cannot bid on their own auction', async () => {

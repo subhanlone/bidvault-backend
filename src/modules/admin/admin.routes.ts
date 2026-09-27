@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { z } from 'zod';
 import type { Server } from 'socket.io';
 import { Prisma, type TransactionStatus } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
@@ -236,7 +237,7 @@ router.post(
   '/transactions/:transactionId/void',
   requireAuth(['ADMIN']),
   validateBody(voidTransactionSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof voidTransactionSchema>>(async (req, res) => {
     const { transactionId } = req.params;
     const { reason } = req.body;
     const adminUserId = req.auth!.userId;
@@ -288,7 +289,7 @@ router.post(
   '/auctions/:auctionId/cancel',
   requireAuth(['ADMIN']),
   validateBody(cancelAuctionSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof cancelAuctionSchema>>(async (req, res) => {
     const io = req.app.get('io') as Server | undefined;
     const result = await cancelAuction(req.params.auctionId, {
       userId: req.auth!.userId,
@@ -316,7 +317,7 @@ router.post(
   '/listings/:listingId/takedown',
   requireAuth(['ADMIN']),
   validateBody(takedownListingSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof takedownListingSchema>>(async (req, res) => {
     const io = req.app.get('io') as Server | undefined;
     const result = await takedownListing(req.params.listingId, req.auth!.userId, req.body.reason, io);
     if (result.kind !== 'ok') {
@@ -368,7 +369,7 @@ router.post(
   '/disputes/:disputeId/resolve',
   requireAuth(['ADMIN']),
   validateBody(resolveDisputeSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof resolveDisputeSchema>>(async (req, res) => {
     const { disputeId } = req.params;
     const { resolution, note } = req.body;
     const adminUserId = req.auth!.userId;
@@ -452,7 +453,7 @@ router.post(
   '/users/:userId/suspend',
   requireAuth(['ADMIN']),
   validateBody(suspendUserSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof suspendUserSchema>>(async (req, res) => {
     const result = await suspendUser(req.params.userId, req.auth!.userId, req.body.reason);
     if (result.kind === 'not-found') { fail(res, 'User not found.', 404); return; }
     if (result.kind === 'self') { fail(res, 'You cannot suspend your own account.', 409); return; }
@@ -476,7 +477,7 @@ router.post(
   '/users/:userId/anonymize',
   requireAuth(['ADMIN']),
   validateBody(anonymizeUserSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof anonymizeUserSchema>>(async (req, res) => {
     const { userId } = req.params;
     const { reason } = req.body;
     const adminUserId = req.auth!.userId;

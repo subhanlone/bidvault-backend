@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
-import { ItemCondition, Prisma } from '@prisma/client';
+import type { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import type { Server } from 'socket.io';
 import { v2 as cloudinary } from 'cloudinary';
 import { prisma } from '../../db/prisma.js';
@@ -249,7 +250,7 @@ router.post(
   '/',
   requireAuth(['SELLER']),
   validateBody(submitListingSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof submitListingSchema>>(async (req, res) => {
     const settings = await getPlatformSettings();
     if (req.body.startPrice < settings.minListingPrice) {
       fail(res, `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`, 422);
@@ -284,7 +285,7 @@ router.post(
             sellerId: req.auth!.userId,
             title: req.body.title,
             category: req.body.category,
-            condition: req.body.condition as ItemCondition,
+            condition: req.body.condition,
             description: req.body.description,
             startPrice: req.body.startPrice,
             reservePrice: req.body.reservePrice,
@@ -329,7 +330,7 @@ router.patch(
   '/:listingId',
   requireAuth(['SELLER']),
   validateBody(submitListingSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof submitListingSchema>>(async (req, res) => {
     const existing = await prisma.listing.findUnique({ where: { id: req.params.listingId } });
     if (!existing) {
       fail(res, 'Listing not found.', 404);
@@ -369,7 +370,7 @@ router.patch(
       data: {
         title: req.body.title,
         category: req.body.category,
-        condition: req.body.condition as ItemCondition,
+        condition: req.body.condition,
         description: req.body.description,
         startPrice: req.body.startPrice,
         reservePrice: req.body.reservePrice,
@@ -565,7 +566,7 @@ router.post(
   '/:listingId/reject',
   requireAuth(['ADMIN']),
   validateBody(rejectListingSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof rejectListingSchema>>(async (req, res) => {
     const listing = await prisma.listing.findUnique({
       where: { id: req.params.listingId },
       include: { seller: true },
