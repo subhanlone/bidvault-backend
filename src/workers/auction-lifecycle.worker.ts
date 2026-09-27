@@ -11,6 +11,7 @@ import { closeAuction } from './close-auction.js';
 import { WORKER_HEARTBEAT_KEY, WORKER_HEARTBEAT_INTERVAL_MS } from '../infra/worker-heartbeat.js';
 import { subscribeToSettingsInvalidation } from '../services/settings.service.js';
 import { findTimedOutShipments, confirmDelivery } from '../services/fulfillment.service.js';
+import { findOverduePayments, voidOverduePayment } from '../services/auction-control.service.js';
 
 // BV-025: close-auction.ts sends email through email.service.ts, which reads
 // emailNotifsEnabled via getPlatformSettings() -- this process needs the same cross-process
@@ -152,12 +153,47 @@ async function autoConfirmTimedOutShipments(): Promise<void> {
 const fulfillmentSweepTimer = setInterval(() => void autoConfirmTimedOutShipments(), RECONCILE_INTERVAL_MS);
 fulfillmentSweepTimer.unref();
 
+/**
+ * A3, Phase 6: a winner who never pays used to lock the item forever — a PENDING transaction
+ * had no deadline, no expiry, no sweep. Same shape as the fulfilment sweep above:
+ * paymentDeadlineHours-driven, voidOverduePayment() is the same function the row lock and
+ * state change live in, this loop is only the plumbing.
+ */
+let paymentSweepInFlight = false;
+
+async function autoVoidOverduePayments(): Promise<void> {
+  if (paymentSweepInFlight) return;
+  paymentSweepInFlight = true;
+
+  try {
+    const overdue = await findOverduePayments();
+    if (overdue.length === 0) return;
+
+    for (const transactionId of overdue) {
+      const result = await voidOverduePayment(transactionId);
+      if (result.kind !== 'ok') {
+        console.error(`[payment-sweep] auto-void failed for ${transactionId}: ${result.kind}`);
+      }
+    }
+
+    console.log(`[payment-sweep] auto-voided ${overdue.length} overdue payment(s).`);
+  } catch (error) {
+    console.error('[payment-sweep] Sweep failed:', error);
+  } finally {
+    paymentSweepInFlight = false;
+  }
+}
+
+const paymentSweepTimer = setInterval(() => void autoVoidOverduePayments(), RECONCILE_INTERVAL_MS);
+paymentSweepTimer.unref();
+
 const heartbeatTimer = setInterval(writeHeartbeat, WORKER_HEARTBEAT_INTERVAL_MS);
 heartbeatTimer.unref();
 
 async function shutdown() {
   clearInterval(reconcileTimer);
   clearInterval(fulfillmentSweepTimer);
+  clearInterval(paymentSweepTimer);
   clearInterval(heartbeatTimer);
   await worker.close();
   await prisma.$disconnect();
@@ -172,3 +208,4 @@ console.log(`Auction lifecycle worker started (queue prefix: ${env.QUEUE_PREFIX}
 writeHeartbeat();
 void reconcileOverdueAuctions();
 void autoConfirmTimedOutShipments();
+void autoVoidOverduePayments();

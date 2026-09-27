@@ -307,6 +307,49 @@ describe('auctions', () => {
     expect(res.status).toBe(422);
     expect(res.body).toMatchObject({ success: false, error: expect.stringContaining('at least PKR') });
   });
+
+  it('POST /auctions/{auctionId}/cancel', async () => {
+    hit('post', '/auctions/{auctionId}/cancel');
+    // w.liveAuctionId already has a bid (world.ts), and a seller can only cancel a bid-free
+    // auction — a fresh one is needed for the happy path this file is scoped to.
+    const listing = await prisma.listing.create({
+      data: {
+        listingCode: 'TEST-CONFORMANCE-CANCEL',
+        sellerId: w.seller.id,
+        title: 'Bid-Free Conformance Auction',
+        category: 'Electronics & Gadgets',
+        condition: 'NEW',
+        description: 'Created solely to exercise the seller-cancel operation once.',
+        startPrice: 5_000,
+        minIncrement: 200,
+        durationDays: 2,
+        status: 'APPROVED',
+      },
+    });
+    const auction = await prisma.auction.create({
+      data: {
+        listingId: listing.id,
+        sellerId: w.seller.id,
+        title: listing.title,
+        category: listing.category,
+        condition: listing.condition,
+        description: listing.description,
+        startPrice: listing.startPrice,
+        minIncrement: listing.minIncrement,
+        currentBid: listing.startPrice,
+        bidCount: 0,
+        status: 'ACTIVE',
+        startTime: new Date(),
+        endTime: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
+      },
+    });
+    const res = await request(app)
+      .post(api(`/auctions/${auction.id}/cancel`))
+      .set(auth(w.seller.token))
+      .send({ reason: 'No longer available.' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('CANCELLED');
+  });
 });
 
 // ---- listings ---------------------------------------------------------------------
@@ -386,6 +429,38 @@ describe('listings', () => {
     hit('post', '/listings/approve-all');
     const res = await request(app).post(api('/listings/approve-all')).set(auth(w.admin.token));
     expect(res.status).toBe(200);
+  });
+
+  it('PATCH /listings/{listingId}', async () => {
+    hit('patch', '/listings/{listingId}');
+    const rejected = await prisma.listing.update({
+      where: { id: w.pendingListingId },
+      data: { status: 'REJECTED', rejectionReason: 'Needs clearer photos.' },
+    });
+    const res = await request(app)
+      .patch(api(`/listings/${rejected.id}`))
+      .set(auth(w.seller.token))
+      .send({
+        title: 'Resubmitted Item',
+        category: 'Electronics & Gadgets',
+        condition: 'USED',
+        description: 'Edited after rejection, resubmitted for another review.',
+        startPrice: 12_000,
+        minIncrement: 500,
+        durationDays: 4,
+        attributes: { brand: 'Sony', model: 'A7' },
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('PENDING');
+  });
+
+  it('DELETE /listings/{listingId}', async () => {
+    hit('delete', '/listings/{listingId}');
+    const res = await request(app)
+      .delete(api(`/listings/${w.pendingListingId}`))
+      .set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('WITHDRAWN');
   });
 });
 
@@ -534,6 +609,27 @@ describe('payments', () => {
     expect(res.body.data.status).toBe('DISPUTED');
   });
 
+  it('POST /payments/{transactionId}/offer-next-bidder', async () => {
+    hit('post', '/payments/{transactionId}/offer-next-bidder');
+    await prisma.bid.create({ data: { auctionId: w.closedAuctionId, buyerId: w.otherBuyer.id, amount: 7_000 } });
+    await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'VOIDED' } });
+    const res = await request(app)
+      .post(api(`/payments/${w.transactionId}/offer-next-bidder`))
+      .set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('PENDING');
+  });
+
+  it('POST /payments/{transactionId}/relist', async () => {
+    hit('post', '/payments/{transactionId}/relist');
+    await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'VOIDED' } });
+    const res = await request(app)
+      .post(api(`/payments/${w.transactionId}/relist`))
+      .set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveProperty('listingId');
+    expect(res.body.data).toHaveProperty('auctionId');
+  });
 });
 
 // ---- notifications ----------------------------------------------------------------
@@ -617,6 +713,18 @@ describe('admin', () => {
     hit('get', '/admin/analytics');
     const res = await request(app).get(api('/admin/analytics')).set(auth(w.admin.token));
     expect(res.status).toBe(200);
+  });
+
+  it('POST /admin/auctions/{auctionId}/cancel', async () => {
+    hit('post', '/admin/auctions/{auctionId}/cancel');
+    // Unlike the seller's own cancel route, the admin path works even with bids already on
+    // it — w.liveAuctionId (one bid, from world.ts) exercises exactly that.
+    const res = await request(app)
+      .post(api(`/admin/auctions/${w.liveAuctionId}/cancel`))
+      .set(auth(w.admin.token))
+      .send({ reason: 'Suspected pricing error.' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('CANCELLED');
   });
 
   // BV-008: the monthly buckets used to be JS Date math over every fetched row -- getFullYear()

@@ -133,7 +133,13 @@ export function createApp() {
         // Feeds the public stat panels. They previously padded themselves out with
         // invented figures ("4.9/5 satisfaction", "99% satisfaction", "99.9% uptime")
         // that nothing measured; these are real counts so every tile traces to a query.
-        prisma.listing.count({ where: { status: 'APPROVED' } }),
+        //
+        // A1, Phase 6: was `status: 'APPROVED'` alone, which counts a listing as live
+        // inventory forever, including one whose auction sold and closed weeks ago — the
+        // number only ever grew. Scoped to the join so this reports what's actually
+        // biddable right now, which is also the more honest homepage claim for a live
+        // marketplace ("X items up for auction now" rather than an ever-growing total).
+        prisma.listing.count({ where: { status: 'APPROVED', auction: { status: 'ACTIVE' } } }),
         prisma.auctionTransaction.count({ where: { status: { in: REVENUE_STATUSES } } }),
       ]);
     ok(res, {

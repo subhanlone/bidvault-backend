@@ -30,7 +30,7 @@ class ListingStateError extends Error {}
 
 // See toAuctionDto — the return type is the published contract, so drift is a build error.
 function toListingDto(
-  listing: Prisma.ListingGetPayload<{ include: { seller: true } }>,
+  listing: Prisma.ListingGetPayload<{ include: { seller: true; auction: true } }>,
 ): ListingDtoType {
   return {
     listingId: listing.id,
@@ -52,10 +52,17 @@ function toListingDto(
     imageUrl: listing.imageUrl ?? undefined,
     sellerEmail: listing.seller.email,
     attributes: (listing.attributes as Record<string, string | number> | null) ?? undefined,
+    // A1, Phase 6: derived from the auction join rather than a second ListingStatus value —
+    // see LIFECYCLE-IMPLEMENTATION-PLAN.md Decision 1. No auction yet (brand new) or an
+    // auction that's CLOSED/CANCELLED both read as not-live; only APPROVED + ACTIVE does.
+    isLive: listing.status === 'APPROVED' && listing.auction?.status === 'ACTIVE',
+    auctionId: listing.auction?.id,
   };
 }
 
-function generateListingCode(): string {
+// Exported for services/auction-control.service.ts's relist path (A5, Phase 6), which needs
+// the exact same collision-safe code generation for the fresh Listing row it creates.
+export function generateListingCode(): string {
   const year = new Date().getFullYear();
   // BV-014: widened from randomBytes(3) (16.7M values -- ~50% collision odds by ~4,800
   // listings sharing a year prefix) to randomBytes(5) (1.1 x 10^12 values), which makes a
@@ -268,7 +275,7 @@ router.post(
     // information the seller did anything wrong. Re-rolling and retrying is the honest fix;
     // surfacing it as a 409 (what the shared P2002 handler would otherwise turn it into) would
     // blame the seller for something they never touched, after they just filled in a 3-step form.
-    let listing: Prisma.ListingGetPayload<{ include: { seller: true } }> | undefined;
+    let listing: Prisma.ListingGetPayload<{ include: { seller: true; auction: true } }> | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         listing = await prisma.listing.create({
@@ -288,7 +295,7 @@ router.post(
             attributes: attributesResult.data as Prisma.InputJsonValue,
             status: 'PENDING',
           },
-          include: { seller: true },
+          include: { seller: true, auction: true },
         });
         break;
       } catch (err) {
@@ -315,6 +322,107 @@ router.post(
   }),
 );
 
+// A2, Phase 6: a rejected listing could previously only be retyped from scratch as a brand new
+// submission -- the rejectionReason rendered correctly and then offered nothing. Re-validated
+// exactly like a fresh POST /, since it's the same form re-submitted.
+router.patch(
+  '/:listingId',
+  requireAuth(['SELLER']),
+  validateBody(submitListingSchema),
+  asyncHandler(async (req, res) => {
+    const existing = await prisma.listing.findUnique({ where: { id: req.params.listingId } });
+    if (!existing) {
+      fail(res, 'Listing not found.', 404);
+      return;
+    }
+    if (existing.sellerId !== req.auth!.userId) {
+      fail(res, 'You can only edit your own listings.', 403);
+      return;
+    }
+    if (existing.status !== 'REJECTED') {
+      fail(res, 'Only a rejected listing can be edited and resubmitted.', 409);
+      return;
+    }
+
+    const settings = await getPlatformSettings();
+    if (req.body.startPrice < settings.minListingPrice) {
+      fail(res, `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`, 422);
+      return;
+    }
+    if (req.body.imageUrl && !isOwnedCloudinaryImage(req.body.imageUrl, req.auth!.userId)) {
+      fail(res, 'Image must be an upload issued for this seller by BidVault.', 422);
+      return;
+    }
+    if (req.body.minIncrement > settings.maxBidIncrement) {
+      fail(res, `Minimum bid increment cannot exceed PKR ${settings.maxBidIncrement.toLocaleString()}.`, 422);
+      return;
+    }
+
+    const attributesResult = validateCategoryAttributes(req.body.category, req.body.attributes);
+    if (!attributesResult.success) {
+      fail(res, attributesResult.error, 422);
+      return;
+    }
+
+    const updated = await prisma.listing.update({
+      where: { id: existing.id },
+      data: {
+        title: req.body.title,
+        category: req.body.category,
+        condition: req.body.condition as ItemCondition,
+        description: req.body.description,
+        startPrice: req.body.startPrice,
+        reservePrice: req.body.reservePrice,
+        minIncrement: req.body.minIncrement,
+        durationDays: req.body.durationDays,
+        imageUrl: req.body.imageUrl,
+        emoji: req.body.emoji,
+        attributes: attributesResult.data as Prisma.InputJsonValue,
+        status: 'PENDING',
+        rejectionReason: null,
+      },
+      include: { seller: true, auction: true },
+    });
+
+    dispatchEmail(sendListingSubmittedEmail(
+      { email: updated.seller.email, name: updated.seller.name },
+      { title: updated.title, listingCode: updated.listingCode },
+    ), 'listing resubmitted');
+
+    const io = req.app.get('io') as Server | undefined;
+    io?.emit('listing:submitted', { listingId: updated.id, title: updated.title });
+
+    ok(res, toListingDto(updated));
+  }),
+);
+
+// B4, Phase 6: a listing can be withdrawn before it has ever been auctioned. Scoped to PENDING
+// only -- an APPROVED listing already has a live Auction, which is POST /auctions/{id}/cancel's
+// job instead (see auctions.routes.ts), and a REJECTED one has nothing to "withdraw" beyond
+// what A2's resubmit or simply leaving it already covers.
+router.delete(
+  '/:listingId',
+  requireAuth(['SELLER']),
+  asyncHandler(async (req, res) => {
+    const existing = await prisma.listing.findUnique({ where: { id: req.params.listingId } });
+    if (!existing) {
+      fail(res, 'Listing not found.', 404);
+      return;
+    }
+    if (existing.sellerId !== req.auth!.userId) {
+      fail(res, 'You can only withdraw your own listings.', 403);
+      return;
+    }
+    if (existing.status !== 'PENDING') {
+      fail(res, 'Only a listing awaiting review can be withdrawn.', 409);
+      return;
+    }
+
+    await prisma.listing.delete({ where: { id: existing.id } });
+    ok(res, { listingId: existing.id, status: 'WITHDRAWN' });
+  }),
+);
+
 router.get(
   '/mine',
   requireAuth(['SELLER']),
@@ -335,7 +443,7 @@ router.get(
 
     const rows = await prisma.listing.findMany({
       where,
-      include: { seller: true },
+      include: { seller: true, auction: true },
       orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -364,7 +472,7 @@ router.get(
 
     const rows = await prisma.listing.findMany({
       where,
-      include: { seller: true },
+      include: { seller: true, auction: true },
       orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
       take: limit + 1,
     });

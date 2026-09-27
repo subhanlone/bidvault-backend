@@ -30,14 +30,24 @@ export const ItemCondition = z.enum(['NEW', 'LIKE_NEW', 'USED']).meta({ id: 'Ite
 export const ListingStatus = z
   .enum(['DRAFT', 'PENDING', 'APPROVED', 'REJECTED'])
   .meta({ id: 'ListingStatus' });
-// SCHEDULED is retained in the database enum but no longer reachable: auctions go straight
-// to ACTIVE on approval and the auction:start job was removed.
+// D3, Phase 6: SCHEDULED removed -- it was retained in the enum but never reachable (auctions
+// go straight to ACTIVE on approval) and was itself a lifecycle-gap finding: a client could
+// filter ?status=SCHEDULED and silently get an empty list forever. CANCELLED added -- see
+// AuctionStatus in schema.prisma for what B4/C4 use it for. Breaking change (enum narrowed and
+// widened in the same release) -- info.version bump required.
 export const AuctionStatus = z
-  .enum(['SCHEDULED', 'ACTIVE', 'CLOSED'])
+  .enum(['ACTIVE', 'CLOSED', 'CANCELLED'])
   .meta({ id: 'AuctionStatus' });
 export const TransactionStatus = z
   .enum(['PENDING', 'COMPLETED', 'FAILED', 'VOIDED', 'SHIPPED', 'DELIVERED', 'DISPUTED', 'REFUNDED'])
   .meta({ id: 'TransactionStatus' });
+// Found out of sync with reality while working on Phase 6 (LIFECYCLE-IMPLEMENTATION-PLAN.md):
+// fulfillment.service.ts (BV-047) has written ITEM_SHIPPED/PAYOUT_RECEIVED/DISPUTE_RAISED/
+// DISPUTE_RESOLVED since before this session, none of which were ever added here -- a
+// GET /notifications response containing any of them has been silently violating this DTO's
+// contract (see BV-016's contractViolations counter) the entire time. Fixed alongside the two
+// new types this phase adds (AUCTION_CANCELLED, SECOND_CHANCE_OFFER, LISTING_RELISTED) rather
+// than compounding the drift with a third untracked value.
 export const NotificationType = z
   .enum([
     'BID_OUTBID',
@@ -46,6 +56,13 @@ export const NotificationType = z
     'LISTING_APPROVED',
     'LISTING_REJECTED',
     'NEW_REVIEW',
+    'ITEM_SHIPPED',
+    'PAYOUT_RECEIVED',
+    'DISPUTE_RAISED',
+    'DISPUTE_RESOLVED',
+    'AUCTION_CANCELLED',
+    'SECOND_CHANCE_OFFER',
+    'LISTING_RELISTED',
   ])
   .meta({ id: 'NotificationType' });
 
@@ -133,6 +150,15 @@ export const ListingDto = z
     imageUrl: z.string().optional(),
     sellerEmail: z.email(),
     attributes: CategoryAttributes.optional(),
+    // A1, Phase 6: whether this listing's inventory is actually still for sale right now.
+    // Deliberately NOT a new ListingStatus value -- see LIFECYCLE-IMPLEMENTATION-PLAN.md
+    // Decision 1. Always false for a listing with no auction yet or whose auction is
+    // CLOSED/CANCELLED; true only while status is APPROVED and the auction is ACTIVE.
+    isLive: z.boolean(),
+    // B4, Phase 6: lets the seller's own listing screen target POST /auctions/{id}/cancel
+    // without a separate lookup. Undefined until an auction exists (Listing.auction is
+    // optional 1:1) -- present whenever isLive could ever be true, and harmless otherwise.
+    auctionId: z.string().optional(),
   })
   .meta({ id: 'Listing' });
 
@@ -442,6 +468,8 @@ export const PlatformSettingsDto = z
     maxBidIncrement: z.number().int(),
     minListingPrice: z.number().int(),
     reviewTimeoutHours: z.number().int(),
+    // A3, Phase 6.
+    paymentDeadlineHours: z.number().int(),
     supportEmail: z.string(),
   })
   .meta({ id: 'PlatformSettings' });

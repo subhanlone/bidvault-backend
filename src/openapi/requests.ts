@@ -155,6 +155,12 @@ export const placeBidSchema = z
   .object({ amount: z.coerce.number().int().positive().max(MAX_MONEY) })
   .meta({ id: 'PlaceBidRequest' });
 
+// B4/C4, Phase 6: shared by both cancel paths (seller withdrawing their own bid-free auction,
+// admin stopping any auction) -- same shape as voidTransactionSchema, one required reason.
+export const cancelAuctionSchema = z
+  .object({ reason: z.string().trim().min(3).max(500) })
+  .meta({ id: 'CancelAuctionRequest' });
+
 // ---- payments ---------------------------------------------------------------------
 
 export const payTransactionSchema = z
@@ -193,6 +199,8 @@ export const updateSettingsSchema = z
     maxBidIncrement: z.coerce.number().int().positive().optional(),
     minListingPrice: z.coerce.number().int().positive().optional(),
     reviewTimeoutHours: z.coerce.number().int().positive().optional(),
+    // A3, Phase 6.
+    paymentDeadlineHours: z.coerce.number().int().positive().optional(),
     // Stores an address, so it gets the strict rule — same one register uses.
     supportEmail: strictEmail.optional(),
   })

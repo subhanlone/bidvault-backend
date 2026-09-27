@@ -16,6 +16,7 @@ import {
   raiseDispute,
   REVENUE_STATUSES,
 } from '../../services/fulfillment.service.js';
+import { offerToNextBidder, relistFromVoidedTransaction } from '../../services/auction-control.service.js';
 
 const router = Router();
 
@@ -332,6 +333,44 @@ router.post(
       return;
     }
     ok(res, { transactionId: req.params.transactionId, status: 'DISPUTED' });
+  }),
+);
+
+// A3/A5, Phase 6: the seller's two options once the worker's payment-deadline sweep has voided
+// a non-paying winner's transaction. See auction-control.service.ts for why both re-target the
+// same row rather than creating a new one (AuctionTransaction.auctionId is @@unique).
+const AUCTION_CONTROL_ERROR_STATUS: Record<string, [string, number]> = {
+  'not-found': ['Transaction not found.', 404],
+  forbidden: ['Forbidden.', 403],
+  'wrong-state': ['Only a voided transaction can be recovered this way.', 409],
+  'no-other-bidder': ['There is no other bidder to offer this item to.', 409],
+};
+
+router.post(
+  '/:transactionId/offer-next-bidder',
+  requireAuth(['SELLER']),
+  asyncHandler(async (req, res) => {
+    const result = await offerToNextBidder(req.params.transactionId, req.auth!.userId);
+    if (result.kind !== 'ok') {
+      const [message, status] = AUCTION_CONTROL_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { transactionId: req.params.transactionId, status: 'PENDING' });
+  }),
+);
+
+router.post(
+  '/:transactionId/relist',
+  requireAuth(['SELLER']),
+  asyncHandler(async (req, res) => {
+    const result = await relistFromVoidedTransaction(req.params.transactionId, req.auth!.userId);
+    if (result.kind !== 'ok') {
+      const [message, status] = AUCTION_CONTROL_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { listingId: result.listingId, auctionId: result.auctionId });
   }),
 );
 

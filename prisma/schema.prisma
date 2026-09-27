@@ -31,9 +31,18 @@ enum ListingStatus {
 }
 
 enum AuctionStatus {
-  SCHEDULED
+  // SCHEDULED removed (D3, Phase 6): auctions have gone straight to ACTIVE on approval since
+  // the auction:start job was retired, and production had zero rows in this state at the time
+  // of removal (confirmed against the flushed, empty production database) -- nothing to migrate.
   ACTIVE
   CLOSED
+  // Added (B4/C4, Phase 6): a seller can withdraw a bid-free live auction, and an admin can
+  // stop any auction regardless of bid count (pricing error, shill-bidding suspicion, or a
+  // takedown of the listing underneath it -- see C3). Distinct from CLOSED: CLOSED means the
+  // clock ran out and the normal close-auction.ts settlement logic ran (a winner may exist);
+  // CANCELLED means the auction was pulled before that could happen, so no AuctionTransaction
+  // is ever created for it. See services/auction-control.service.ts for both cancel paths.
+  CANCELLED
 }
 
 enum TransactionStatus {
@@ -374,6 +383,10 @@ model PlatformSetting {
   maxBidIncrement    Int      @default(500000)
   minListingPrice    Int      @default(1000)
   reviewTimeoutHours Int      @default(48)
+  // A3, Phase 6: how long a winner has to pay before the sale is auto-voided. Same shape as
+  // reviewTimeoutHours -- a settings-tunable window checked by a worker sweep, not a hardcoded
+  // constant -- see services/auction-control.service.ts's findOverduePayments().
+  paymentDeadlineHours Int    @default(48)
   supportEmail       String   @default("support@bidvault.tech")
   updatedAt          DateTime @updatedAt
 }
