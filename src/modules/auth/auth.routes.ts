@@ -253,6 +253,16 @@ router.post(
       return;
     }
 
+    // C2, Phase 7: requireAuth blocks every subsequent request for a suspended account, but
+    // login itself never checked -- a suspended user still walked away with a fresh, valid
+    // token pair and only discovered the lockout on their next call. Checked here off the row
+    // already loaded above, not isSuspended()'s cache: that cache exists to save a DB round
+    // trip on every authenticated request, but login already did the round trip for this row.
+    if (user.status === 'SUSPENDED') {
+      fail(res, 'This account has been suspended.', 403);
+      return;
+    }
+
     // Re-hash accounts still on the old cost, which is what makes the dummy-hash comparison
     // above actually level the timing.
     //
