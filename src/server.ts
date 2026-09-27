@@ -1,11 +1,11 @@
 import { createServer } from 'node:http';
-import { Server as SocketIOServer } from 'socket.io';
+import { Server as SocketIOServer, type DefaultEventsMap } from 'socket.io';
 import { createApp } from './app.js';
 import { env, clientOrigins } from './config/env.js';
 import { prisma } from './db/prisma.js';
 import { redisConnection } from './infra/redis.js';
 import { verifyAccessToken } from './utils/jwt.js';
-import { registerAuctionSubscriptions } from './socket/auction-subscriptions.js';
+import { registerAuctionSubscriptions, type AuctionSocketData } from './socket/auction-subscriptions.js';
 import { subscribeToSettingsInvalidation } from './services/settings.service.js';
 
 void subscribeToSettingsInvalidation();
@@ -13,12 +13,15 @@ void subscribeToSettingsInvalidation();
 const app = createApp();
 const httpServer = createServer(app);
 
-const io = new SocketIOServer(httpServer, {
-  cors: {
-    origin: clientOrigins,
-    methods: ['GET', 'POST'],
+const io = new SocketIOServer<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, AuctionSocketData>(
+  httpServer,
+  {
+    cors: {
+      origin: clientOrigins,
+      methods: ['GET', 'POST'],
+    },
   },
-});
+);
 
 app.set('io', io);
 

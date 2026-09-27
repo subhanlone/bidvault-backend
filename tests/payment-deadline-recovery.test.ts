@@ -6,6 +6,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { resData } from './helpers/api.js';
 
 const mail = vi.hoisted(() => ({ send: vi.fn(async () => ({ data: { id: 'email_test' }, error: null })) }));
 
@@ -109,7 +110,7 @@ describe('offer-next-bidder (A5)', () => {
       .set(auth(w.seller.token));
 
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('PENDING');
+    expect(resData<{ status: string }>(res).status).toBe('PENDING');
 
     const row = await prisma.auctionTransaction.findUniqueOrThrow({ where: { id: w.transactionId } });
     expect(row.status).toBe('PENDING');
@@ -158,7 +159,7 @@ describe('relist (A5)', () => {
       .set(auth(w.seller.token));
 
     expect(res.status).toBe(200);
-    const { listingId, auctionId } = res.body.data;
+    const { listingId, auctionId } = resData<{ listingId: string; auctionId: string }>(res);
     expect(listingId).not.toBe(w.closedAuctionId);
 
     const newListing = await prisma.listing.findUniqueOrThrow({ where: { id: listingId } });

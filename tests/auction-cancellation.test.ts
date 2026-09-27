@@ -5,6 +5,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import type { Server } from 'socket.io';
+import { resData } from './helpers/api.js';
 
 const mail = vi.hoisted(() => ({ send: vi.fn(async () => ({ data: { id: 'email_test' }, error: null })) }));
 
@@ -102,7 +103,7 @@ describe('seller cancels their own auction (B4)', () => {
       .send({ reason: 'Changed my mind about selling this.' });
 
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('CANCELLED');
+    expect(resData<{ status: string }>(res).status).toBe('CANCELLED');
 
     const row = await prisma.auction.findUniqueOrThrow({ where: { id: auction.id } });
     expect(row.status).toBe('CANCELLED');
@@ -147,7 +148,7 @@ describe('admin cancels any auction (C4)', () => {
       .send({ reason: 'Suspected shill bidding.' });
 
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('CANCELLED');
+    expect(resData<{ status: string }>(res).status).toBe('CANCELLED');
 
     const row = await prisma.auction.findUniqueOrThrow({ where: { id: w.liveAuctionId } });
     expect(row.status).toBe('CANCELLED');

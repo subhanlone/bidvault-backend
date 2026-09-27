@@ -27,14 +27,25 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 
+interface WhoAmI {
+  ip?: string;
+  ips: string[];
+}
+
 /** A minimal app that reports what Express resolved, so nothing else is under test. */
 function appWithHops(hops: number) {
   const app = express();
   app.set('trust proxy', hops);
   app.get('/whoami', (req, res) => {
-    res.json({ ip: req.ip, ips: req.ips });
+    const body: WhoAmI = { ip: req.ip, ips: req.ips };
+    res.json(body);
   });
   return app;
+}
+
+/** This route answers `WhoAmI` directly, not the app's `{success,data}` envelope. */
+function whoAmI(res: { body: unknown }): WhoAmI {
+  return res.body as WhoAmI;
 }
 
 // Reserved documentation ranges, so these can never collide with a real address.
@@ -53,8 +64,8 @@ describe('trust proxy hop counts', () => {
 
     // The socket address, never the header. This is the local default, and it is what makes
     // a spoofed header harmless when there is genuinely no proxy in front.
-    expect(res.body.ip).not.toBe(CLIENT);
-    expect(res.body.ips).toEqual([]);
+    expect(whoAmI(res).ip).not.toBe(CLIENT);
+    expect(whoAmI(res).ips).toEqual([]);
   });
 
   it('1 hop behind one proxy: req.ip is the client', async () => {
@@ -64,7 +75,7 @@ describe('trust proxy hop counts', () => {
       .get('/whoami')
       .set('X-Forwarded-For', CLIENT);
 
-    expect(res.body.ip).toBe(CLIENT);
+    expect(whoAmI(res).ip).toBe(CLIENT);
   });
 
   it('1 hop behind TWO proxies resolves the wrong address, silently', async () => {
@@ -75,8 +86,8 @@ describe('trust proxy hop counts', () => {
       .get('/whoami')
       .set('X-Forwarded-For', `${CLIENT}, ${MIDDLE}`);
 
-    expect(res.body.ip).toBe(MIDDLE);
-    expect(res.body.ip).not.toBe(CLIENT);
+    expect(whoAmI(res).ip).toBe(MIDDLE);
+    expect(whoAmI(res).ip).not.toBe(CLIENT);
   });
 
   it('2 hops behind two proxies: req.ip is the client', async () => {
@@ -84,7 +95,7 @@ describe('trust proxy hop counts', () => {
       .get('/whoami')
       .set('X-Forwarded-For', `${CLIENT}, ${MIDDLE}`);
 
-    expect(res.body.ip).toBe(CLIENT);
+    expect(whoAmI(res).ip).toBe(CLIENT);
   });
 
   it('a client cannot spoof past the trusted count', async () => {
@@ -96,8 +107,8 @@ describe('trust proxy hop counts', () => {
       .get('/whoami')
       .set('X-Forwarded-For', `${spoofed}, ${CLIENT}`);
 
-    expect(res.body.ip).toBe(CLIENT);
-    expect(res.body.ip).not.toBe(spoofed);
+    expect(whoAmI(res).ip).toBe(CLIENT);
+    expect(whoAmI(res).ip).not.toBe(spoofed);
   });
 
   it('too many hops reads an attacker-supplied entry as the client', async () => {
@@ -108,7 +119,7 @@ describe('trust proxy hop counts', () => {
       .get('/whoami')
       .set('X-Forwarded-For', `${spoofed}, ${CLIENT}`);
 
-    expect(res.body.ip).toBe(spoofed);
+    expect(whoAmI(res).ip).toBe(spoofed);
   });
 });
 

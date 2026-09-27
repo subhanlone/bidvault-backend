@@ -52,7 +52,13 @@ function keyByIp(req: Request): string {
 }
 
 function keyByEmail(req: Request): string {
-  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : 'invalid';
+  // Runs before validateBody (rate limiting must apply even to a malformed request), so the
+  // body is genuinely unknown here -- narrowed by hand rather than trusting Express's `any`.
+  const body: unknown = req.body;
+  const email =
+    body && typeof body === 'object' && 'email' in body && typeof body.email === 'string'
+      ? body.email.trim().toLowerCase()
+      : 'invalid';
   return email;
 }
 

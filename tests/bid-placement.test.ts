@@ -9,6 +9,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { resData, resError } from './helpers/api.js';
 
 vi.mock('resend', () => ({
   Resend: class {
@@ -95,7 +96,7 @@ describe('starting-price bid floor', () => {
       .send({ amount: 10_000 });
 
     expect(res.status).toBe(201);
-    expect(res.body.data.amount).toBe(10_000);
+    expect(resData<{ amount: number }>(res).amount).toBe(10_000);
     expect((await prisma.auction.findUniqueOrThrow({ where: { id: auctionId } })).currentBid).toBe(10_000);
   });
 
@@ -108,7 +109,7 @@ describe('starting-price bid floor', () => {
       .send({ amount: 9_999 });
 
     expect(res.status).toBe(422);
-    expect(res.body.error).toContain('PKR 10,000');
+    expect(resError(res).error).toContain('PKR 10,000');
   });
 
   it('requires a full increment above the first bid for the second one', async () => {
@@ -120,7 +121,7 @@ describe('starting-price bid floor', () => {
       .set(auth(w.otherBuyer.token))
       .send({ amount: 10_400 });
     expect(tooLow.status).toBe(422);
-    expect(tooLow.body.error).toContain('PKR 10,500');
+    expect(resError(tooLow).error).toContain('PKR 10,500');
 
     const ok = await request(app)
       .post(api(`/auctions/${auctionId}/bids`))

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { z } from 'zod';
 import { AuctionStatus, Prisma } from '@prisma/client';
 import type { Server } from 'socket.io';
 import { prisma } from '../../db/prisma.js';
@@ -215,7 +216,7 @@ router.post(
   '/:auctionId/bids',
   requireAuth(['BUYER']),
   validateBody(placeBidSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof placeBidSchema>>(async (req, res) => {
     const amount: number = req.body.amount;
     const auctionId = req.params.auctionId;
     const buyerId = req.auth!.userId;
@@ -378,7 +379,7 @@ router.post(
   '/:auctionId/cancel',
   requireAuth(['SELLER']),
   validateBody(cancelAuctionSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof cancelAuctionSchema>>(async (req, res) => {
     const io = req.app.get('io') as Server | undefined;
     const result = await cancelAuction(req.params.auctionId, {
       userId: req.auth!.userId,

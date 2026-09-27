@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { z } from 'zod';
 import type { Prisma, TransactionStatus } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
@@ -193,7 +194,7 @@ router.post(
   '/:transactionId/pay',
   requireAuth(['BUYER']),
   validateBody(payTransactionSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof payTransactionSchema>>(async (req, res) => {
     const winnerId = req.auth!.userId;
     const { transactionId } = req.params;
     const { cardNumber, deliveryAddress, deliveryPhone } = req.body;
@@ -330,7 +331,7 @@ router.post(
   '/:transactionId/dispute',
   requireAuth(['BUYER']),
   validateBody(raiseDisputeSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof raiseDisputeSchema>>(async (req, res) => {
     const result = await raiseDispute(req.params.transactionId, req.auth!.userId, req.body.reason);
     if (result.kind !== 'ok') {
       const [message, status] = FULFILLMENT_ERROR_STATUS[result.kind];

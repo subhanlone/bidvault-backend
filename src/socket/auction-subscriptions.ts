@@ -1,5 +1,12 @@
-import type { Socket } from 'socket.io';
+import type { DefaultEventsMap, Socket } from 'socket.io';
 import { prisma } from '../db/prisma.js';
+
+/** Set once at handshake (see server.ts's `io.use`); not read anywhere yet, but typed rather
+ * than left as Socket.IO's default `any` `socket.data` so a future reader doesn't get it back. */
+export interface AuctionSocketData {
+  userId?: string;
+  role?: string;
+}
 
 const BUCKET_CAPACITY = 50;
 const REFILL_WINDOW_MS = 60_000;
@@ -55,7 +62,9 @@ class AuctionExistenceCache {
 
 const auctionCache = new AuctionExistenceCache();
 
-export function registerAuctionSubscriptions(socket: Socket): void {
+export type AuctionSocket = Socket<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, AuctionSocketData>;
+
+export function registerAuctionSubscriptions(socket: AuctionSocket): void {
   const bucket: SubscriptionBucket = {};
   const pending = new Set<string>();
 

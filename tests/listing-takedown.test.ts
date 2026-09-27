@@ -6,6 +6,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import type { Server } from 'socket.io';
+import { resData } from './helpers/api.js';
 
 const mail = vi.hoisted(() => ({ send: vi.fn(async () => ({ data: { id: 'email_test' }, error: null })) }));
 
@@ -68,7 +69,7 @@ describe('admin takedown', () => {
       .send({ reason: 'Counterfeit item reported.' });
 
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('REMOVED');
+    expect(resData<{ status: string }>(res).status).toBe('REMOVED');
 
     const listing = await prisma.listing.findUniqueOrThrow({ where: { id: listingId } });
     expect(listing.status).toBe('REMOVED');

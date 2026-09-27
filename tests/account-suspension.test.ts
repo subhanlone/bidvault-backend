@@ -6,6 +6,16 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { resData, resError, type Paginated } from './helpers/api.js';
+
+interface UserStatusDto {
+  status: string;
+}
+
+interface UserDirectoryEntry {
+  userId: string;
+  status: string;
+}
 
 vi.mock('resend', () => ({
   Resend: class {
@@ -54,14 +64,14 @@ describe('suspend / reinstate', () => {
       .set(auth(w.admin.token))
       .send({ reason: 'Repeated non-payment.' });
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('SUSPENDED');
+    expect(resData<UserStatusDto>(res).status).toBe('SUSPENDED');
 
     const row = await prisma.user.findUniqueOrThrow({ where: { id: w.otherBuyer.id } });
     expect(row.status).toBe('SUSPENDED');
 
     const blocked = await request(app).get(api('/auth/me')).set(auth(w.otherBuyer.token));
     expect(blocked.status).toBe(403);
-    expect(blocked.body.error).toMatch(/suspended/i);
+    expect(resError(blocked).error).toMatch(/suspended/i);
   });
 
   it('reinstates a suspended account, restoring access', async () => {
@@ -72,7 +82,7 @@ describe('suspend / reinstate', () => {
       .post(api(`/admin/users/${w.otherBuyer.id}/reinstate`))
       .set(auth(w.admin.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('ACTIVE');
+    expect(resData<UserStatusDto>(res).status).toBe('ACTIVE');
 
     const restored = await request(app).get(api('/auth/me')).set(auth(w.otherBuyer.token));
     expect(restored.status).toBe(200);
@@ -116,7 +126,9 @@ describe('suspend / reinstate', () => {
       .get(api(`/admin/users?search=${encodeURIComponent(w.otherBuyer.email)}`))
       .set(auth(w.admin.token));
     expect(res.status).toBe(200);
-    const found = res.body.data.items.find((u: { userId: string }) => u.userId === w.otherBuyer.id);
-    expect(found.status).toBe('SUSPENDED');
+    const found = resData<Paginated<UserDirectoryEntry>>(res).items.find(
+      (u) => u.userId === w.otherBuyer.id,
+    );
+    expect(found?.status).toBe('SUSPENDED');
   });
 });

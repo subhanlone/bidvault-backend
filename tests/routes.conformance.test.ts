@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { resData, resError, type Paginated } from './helpers/api.js';
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
@@ -31,6 +32,12 @@ const auth = (token: string) => ({ Authorization: `Bearer ${token}` } as Record<
 const covered = new Set<string>();
 function hit(method: string, path: string) {
   covered.add(`${method.toUpperCase()} ${path}`);
+}
+
+/** `expect.stringContaining` returns `any` (vitest's own asymmetric-matcher type); an
+ * explicitly-typed return here gives the cast below a real destination to narrow into. */
+function failureContaining(text: string): { success: boolean; error: string } {
+  return { success: false, error: expect.stringContaining(text) as string };
 }
 
 let w: World;
@@ -70,7 +77,7 @@ describe('platform', () => {
     hit('get', '/stats');
     const res = await request(app).get(api('/stats'));
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveProperty('userCount');
+    expect(resData(res)).toHaveProperty('userCount');
   });
 });
 
@@ -114,7 +121,7 @@ describe('auth', () => {
       .post(api('/auth/login'))
       .send({ email: w.buyer.email, password: PASSWORD });
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveProperty('accessToken');
+    expect(resData(res)).toHaveProperty('accessToken');
   });
 
   it('POST /auth/refresh', async () => {
@@ -124,7 +131,7 @@ describe('auth', () => {
       .send({ email: w.buyer.email, password: PASSWORD });
     const res = await request(app)
       .post(api('/auth/refresh'))
-      .send({ refreshToken: login.body.data.refreshToken });
+      .send({ refreshToken: resData<{ refreshToken: string }>(login).refreshToken });
     expect(res.status).toBe(200);
   });
 
@@ -135,7 +142,7 @@ describe('auth', () => {
       .send({ email: w.buyer.email, password: PASSWORD });
     const res = await request(app)
       .post(api('/auth/logout'))
-      .send({ refreshToken: login.body.data.refreshToken });
+      .send({ refreshToken: resData<{ refreshToken: string }>(login).refreshToken });
     expect(res.status).toBe(200);
   });
 
@@ -185,7 +192,7 @@ describe('auth', () => {
       .post(api('/auth/resend-verification'))
       .send({ email: 'unverified@test.local' });
     expect(res.status).toBe(200);
-    expect(res.body.data.codeExpiresAt).toEqual(expect.any(String));
+    expect(resData<{ codeExpiresAt?: string }>(res).codeExpiresAt).toEqual(expect.any(String));
   });
 
   // Both OTP routes have a neutral early exit that answers without an expiry, so that the
@@ -197,7 +204,7 @@ describe('auth', () => {
       .post(api('/auth/forgot-password'))
       .send({ email: 'nobody-here@test.local' });
     expect(res.status).toBe(200);
-    expect(res.body.data.codeExpiresAt).toBeUndefined();
+    expect(resData<{ codeExpiresAt?: string }>(res).codeExpiresAt).toBeUndefined();
   });
 
   it('POST /auth/resend-verification — verified account takes the neutral path', async () => {
@@ -206,7 +213,7 @@ describe('auth', () => {
       .post(api('/auth/resend-verification'))
       .send({ email: w.buyer.email });
     expect(res.status).toBe(200);
-    expect(res.body.data.codeExpiresAt).toBeUndefined();
+    expect(resData<{ codeExpiresAt?: string }>(res).codeExpiresAt).toBeUndefined();
   });
 
   it('POST /auth/change-password', async () => {
@@ -222,7 +229,7 @@ describe('auth', () => {
     hit('get', '/auth/me');
     const res = await request(app).get(api('/auth/me')).set(auth(w.buyer.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.user.email).toBe(w.buyer.email);
+    expect(resData<{ user: { email: string } }>(res).user.email).toBe(w.buyer.email);
   });
 
   it('GET /auth/me/preferences', async () => {
@@ -258,23 +265,25 @@ describe('auctions', () => {
     hit('get', '/auctions');
     const res = await request(app).get(api('/auctions'));
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.data.items)).toBe(true);
-    expect(res.body.data).toHaveProperty('nextCursor');
+    const page = resData<Paginated<unknown>>(res);
+    expect(Array.isArray(page.items)).toBe(true);
+    expect(page).toHaveProperty('nextCursor');
   });
 
   it('GET /auctions/{auctionId}', async () => {
     hit('get', '/auctions/{auctionId}');
     const res = await request(app).get(api(`/auctions/${w.liveAuctionId}`));
     expect(res.status).toBe(200);
-    expect(res.body.data.auctionId).toBe(w.liveAuctionId);
+    expect(resData<{ auctionId: string }>(res).auctionId).toBe(w.liveAuctionId);
   });
 
   it('GET /auctions/{auctionId}/bids', async () => {
     hit('get', '/auctions/{auctionId}/bids');
     const res = await request(app).get(api(`/auctions/${w.liveAuctionId}/bids`));
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.data.items)).toBe(true);
-    expect(res.body.data).toHaveProperty('nextCursor');
+    const page = resData<Paginated<unknown>>(res);
+    expect(Array.isArray(page.items)).toBe(true);
+    expect(page).toHaveProperty('nextCursor');
   });
 
   it('POST /auctions/{auctionId}/bids', async () => {
@@ -290,8 +299,9 @@ describe('auctions', () => {
     hit('get', '/auctions/mine/bids');
     const res = await request(app).get(api('/auctions/mine/bids')).set(auth(w.buyer.token));
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.data.items)).toBe(true);
-    expect(res.body.data).toHaveProperty('nextCursor');
+    const page = resData<Paginated<unknown>>(res);
+    expect(Array.isArray(page.items)).toBe(true);
+    expect(page).toHaveProperty('nextCursor');
   });
 
   // BV-065: this operation's 400 is validateBody's ValidationErrorBody; the bid-floor
@@ -305,7 +315,7 @@ describe('auctions', () => {
       .set(auth(w.buyer.token))
       .send({ amount: 21_500 });
     expect(res.status).toBe(422);
-    expect(res.body).toMatchObject({ success: false, error: expect.stringContaining('at least PKR') });
+    expect(res.body).toMatchObject(failureContaining('at least PKR'));
   });
 
   it('POST /auctions/{auctionId}/cancel', async () => {
@@ -348,7 +358,7 @@ describe('auctions', () => {
       .set(auth(w.seller.token))
       .send({ reason: 'No longer available.' });
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('CANCELLED');
+    expect(resData<{ status: string }>(res).status).toBe('CANCELLED');
   });
 });
 
@@ -378,16 +388,18 @@ describe('listings', () => {
     hit('get', '/listings/mine');
     const res = await request(app).get(api('/listings/mine')).set(auth(w.seller.token));
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.data.items)).toBe(true);
-    expect(res.body.data).toHaveProperty('nextCursor');
+    const page = resData<Paginated<unknown>>(res);
+    expect(Array.isArray(page.items)).toBe(true);
+    expect(page).toHaveProperty('nextCursor');
   });
 
   it('GET /listings/pending', async () => {
     hit('get', '/listings/pending');
     const res = await request(app).get(api('/listings/pending')).set(auth(w.admin.token));
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.data.items)).toBe(true);
-    expect(res.body.data).toHaveProperty('nextCursor');
+    const page = resData<Paginated<unknown>>(res);
+    expect(Array.isArray(page.items)).toBe(true);
+    expect(page).toHaveProperty('nextCursor');
   });
 
   it('POST /listings/upload-signature', async () => {
@@ -396,7 +408,7 @@ describe('listings', () => {
       .post(api('/listings/upload-signature'))
       .set(auth(w.seller.token));
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveProperty('signature');
+    expect(resData(res)).toHaveProperty('signature');
   });
 
   it('POST /listings/{listingId}/approve', async () => {
@@ -413,7 +425,9 @@ describe('listings', () => {
     });
     expect(entry).not.toBeNull();
     expect(entry?.actorUserId).toBe(w.admin.id);
-    expect((entry?.metadata as { auctionId?: string } | null)?.auctionId).toBe(res.body.data.auctionId);
+    expect((entry?.metadata as { auctionId?: string } | null)?.auctionId).toBe(
+      resData<{ auctionId: string }>(res).auctionId,
+    );
   });
 
   it('POST /listings/{listingId}/reject', async () => {
@@ -451,7 +465,7 @@ describe('listings', () => {
         attributes: { brand: 'Sony', model: 'A7' },
       });
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('PENDING');
+    expect(resData<{ status: string }>(res).status).toBe('PENDING');
   });
 
   it('DELETE /listings/{listingId}', async () => {
@@ -460,7 +474,7 @@ describe('listings', () => {
       .delete(api(`/listings/${w.pendingListingId}`))
       .set(auth(w.seller.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('WITHDRAWN');
+    expect(resData<{ status: string }>(res).status).toBe('WITHDRAWN');
   });
 });
 
@@ -471,7 +485,7 @@ describe('watchlist', () => {
     hit('get', '/watchlist');
     const res = await request(app).get(api('/watchlist')).set(auth(w.buyer.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.items.length).toBeGreaterThan(0);
+    expect(resData<Paginated<unknown>>(res).items.length).toBeGreaterThan(0);
   });
 
   it('POST /watchlist/{auctionId}', async () => {
@@ -498,7 +512,7 @@ describe('payments', () => {
     hit('get', '/payments/my-wins');
     const res = await request(app).get(api('/payments/my-wins')).set(auth(w.buyer.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.length).toBeGreaterThan(0);
+    expect(resData<unknown[]>(res).length).toBeGreaterThan(0);
   });
 
   it('GET /payments/seller-stats', async () => {
@@ -514,7 +528,7 @@ describe('payments', () => {
       .set(auth(w.buyer.token))
       .send({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('COMPLETED');
+    expect(resData<{ status: string }>(res).status).toBe('COMPLETED');
   });
 
   // Now goes through validateBody like everything else, so a malformed body is a
@@ -525,8 +539,9 @@ describe('payments', () => {
       .set(auth(w.buyer.token))
       .send({});
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe('Validation error');
-    expect(res.body.details).toHaveProperty('cardNumber');
+    const failure = resError(res);
+    expect(failure.error).toBe('Validation error');
+    expect(failure.details).toHaveProperty('cardNumber');
   });
 
   // BV-065: the outcome.status branch in the handler can answer 409 for a transaction that
@@ -543,28 +558,32 @@ describe('payments', () => {
       .set(auth(w.buyer.token))
       .send({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
     expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({ success: false, error: expect.stringContaining('already') });
+    expect(res.body).toMatchObject(failureContaining('already'));
   });
 
   it('GET /payments/earnings', async () => {
     hit('get', '/payments/earnings');
     const res = await request(app).get(api('/payments/earnings')).set(auth(w.seller.token));
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveProperty('ledgerBalance');
+    expect(resData(res)).toHaveProperty('ledgerBalance');
   });
 
   it('GET /payments/{transactionId}/invoice', async () => {
     hit('get', '/payments/{transactionId}/invoice');
     const res = await request(app).get(api(`/payments/${w.transactionId}/invoice`)).set(auth(w.buyer.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.transactionId).toBe(w.transactionId);
+    expect(resData<{ transactionId: string }>(res).transactionId).toBe(w.transactionId);
   });
 
   it('GET /payments/my-sales', async () => {
     hit('get', '/payments/my-sales');
     const res = await request(app).get(api('/payments/my-sales')).set(auth(w.seller.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.items.some((t: { transactionId: string }) => t.transactionId === w.transactionId)).toBe(true);
+    expect(
+      resData<Paginated<{ transactionId: string }>>(res).items.some(
+        (t) => t.transactionId === w.transactionId,
+      ),
+    ).toBe(true);
   });
 
   it('PATCH /payments/{transactionId}/ship', async () => {
@@ -577,7 +596,7 @@ describe('payments', () => {
       .patch(api(`/payments/${w.transactionId}/ship`))
       .set(auth(w.seller.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('SHIPPED');
+    expect(resData<{ status: string }>(res).status).toBe('SHIPPED');
   });
 
   it('POST /payments/{transactionId}/confirm-receipt', async () => {
@@ -590,7 +609,7 @@ describe('payments', () => {
       .post(api(`/payments/${w.transactionId}/confirm-receipt`))
       .set(auth(w.buyer.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('DELIVERED');
+    expect(resData<{ status: string }>(res).status).toBe('DELIVERED');
   });
 
   it('POST /payments/{transactionId}/dispute', async () => {
@@ -606,7 +625,7 @@ describe('payments', () => {
       .set(auth(w.otherBuyer.token))
       .send({ reason: 'Item arrived damaged and unusable.' });
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('DISPUTED');
+    expect(resData<{ status: string }>(res).status).toBe('DISPUTED');
   });
 
   it('POST /payments/{transactionId}/offer-next-bidder', async () => {
@@ -617,7 +636,7 @@ describe('payments', () => {
       .post(api(`/payments/${w.transactionId}/offer-next-bidder`))
       .set(auth(w.seller.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('PENDING');
+    expect(resData<{ status: string }>(res).status).toBe('PENDING');
   });
 
   it('POST /payments/{transactionId}/relist', async () => {
@@ -627,8 +646,9 @@ describe('payments', () => {
       .post(api(`/payments/${w.transactionId}/relist`))
       .set(auth(w.seller.token));
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveProperty('listingId');
-    expect(res.body.data).toHaveProperty('auctionId');
+    const data = resData(res);
+    expect(data).toHaveProperty('listingId');
+    expect(data).toHaveProperty('auctionId');
   });
 });
 
@@ -639,7 +659,7 @@ describe('notifications', () => {
     hit('get', '/notifications');
     const res = await request(app).get(api('/notifications')).set(auth(w.buyer.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.length).toBeGreaterThan(0);
+    expect(resData<unknown[]>(res).length).toBeGreaterThan(0);
   });
 
   it('POST /notifications/{notificationId}/read', async () => {
@@ -690,7 +710,7 @@ describe('reviews', () => {
       .post(api('/reviews'))
       .set(auth(w.buyer.token))
       .send({ transactionId: w.transactionId, stars: 4, comment: 'Good.' });
-    const reviewId = created.body.data.reviewId;
+    const reviewId = resData<{ reviewId: string }>(created).reviewId;
 
     const patched = await request(app)
       .patch(api(`/reviews/${reviewId}`))
@@ -752,7 +772,7 @@ describe('admin', () => {
       .set(auth(w.admin.token))
       .send({ reason: 'Suspected pricing error.' });
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('CANCELLED');
+    expect(resData<{ status: string }>(res).status).toBe('CANCELLED');
   });
 
   // BV-008: the monthly buckets used to be JS Date math over every fetched row -- getFullYear()
@@ -783,17 +803,26 @@ describe('admin', () => {
     const res = await request(app).get(api('/admin/analytics')).set(auth(w.admin.token));
     expect(res.status).toBe(200);
 
-    const bucket = res.body.data.monthlyRevenue.find((m: { month: string }) => m.month === monthLabel);
+    interface RevenueBucket {
+      month: string;
+      value: number;
+      bids: number;
+    }
+    const bucket = resData<{ monthlyRevenue: RevenueBucket[] }>(res).monthlyRevenue.find(
+      (m) => m.month === monthLabel,
+    );
     expect(bucket).toBeDefined();
-    expect(bucket.value).toBeGreaterThanOrEqual(77_000);
-    expect(bucket.bids).toBeGreaterThanOrEqual(1);
+    expect(bucket?.value).toBeGreaterThanOrEqual(77_000);
+    expect(bucket?.bids).toBeGreaterThanOrEqual(1);
   });
 
   it('GET /admin/transactions', async () => {
     hit('get', '/admin/transactions');
     const res = await request(app).get(api('/admin/transactions')).set(auth(w.admin.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.some((tx: { transactionId: string }) => tx.transactionId === w.transactionId)).toBe(true);
+    expect(
+      resData<Array<{ transactionId: string }>>(res).some((tx) => tx.transactionId === w.transactionId),
+    ).toBe(true);
   });
 
   it('POST /admin/transactions/{transactionId}/void', async () => {
@@ -803,7 +832,7 @@ describe('admin', () => {
       .set(auth(w.admin.token))
       .send({ reason: 'Buyer unreachable after repeated attempts.' });
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('VOIDED');
+    expect(resData<{ status: string }>(res).status).toBe('VOIDED');
 
     const row = await prisma.auctionTransaction.findUniqueOrThrow({ where: { id: w.transactionId } });
     expect(row.status).toBe('VOIDED');
@@ -820,7 +849,9 @@ describe('admin', () => {
     });
     const res = await request(app).get(api('/admin/disputes')).set(auth(w.admin.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.some((d: { transactionId: string }) => d.transactionId === w.transactionId)).toBe(true);
+    expect(
+      resData<Array<{ transactionId: string }>>(res).some((d) => d.transactionId === w.transactionId),
+    ).toBe(true);
   });
 
   it('POST /admin/disputes/{disputeId}/resolve', async () => {
@@ -834,7 +865,7 @@ describe('admin', () => {
       .set(auth(w.admin.token))
       .send({ resolution: 'RELEASE', note: 'Seller provided proof of delivery.' });
     expect(res.status).toBe(200);
-    expect(res.body.data.resolution).toBe('RELEASE');
+    expect(resData<{ resolution: string }>(res).resolution).toBe('RELEASE');
   });
 
   it('GET /admin/users', async () => {
@@ -843,7 +874,9 @@ describe('admin', () => {
       .get(api(`/admin/users?search=${encodeURIComponent(w.otherSeller.email)}`))
       .set(auth(w.admin.token));
     expect(res.status).toBe(200);
-    expect(res.body.data.items.some((u: { userId: string }) => u.userId === w.otherSeller.id)).toBe(true);
+    expect(
+      resData<Paginated<{ userId: string }>>(res).items.some((u) => u.userId === w.otherSeller.id),
+    ).toBe(true);
   });
 
   it('POST /admin/users/{userId}/anonymize', async () => {
@@ -853,7 +886,7 @@ describe('admin', () => {
       .set(auth(w.admin.token))
       .send({ reason: 'Requested via support ticket.' });
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('ANONYMIZED');
+    expect(resData<{ status: string }>(res).status).toBe('ANONYMIZED');
   });
 
   it('POST /admin/users/{userId}/suspend and .../reinstate', async () => {
@@ -880,7 +913,7 @@ describe('admin', () => {
       .set(auth(w.admin.token))
       .send({ reason: 'Conformance check.' });
     expect(res.status).toBe(200);
-    expect(res.body.data.status).toBe('REMOVED');
+    expect(resData<{ status: string }>(res).status).toBe('REMOVED');
   });
 });
 

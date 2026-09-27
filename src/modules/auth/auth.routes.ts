@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import type { Request } from 'express';
+import type { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import type { UserRole } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
@@ -131,7 +132,7 @@ async function createSessionTokens(params: {
 router.post(
   '/register',
   validateBody(registerSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof registerSchema>>(async (req, res) => {
     const { name, email, password, role } = req.body;
     const normalizedEmail = email.toLowerCase();
 
@@ -191,7 +192,7 @@ router.post(
 router.post(
   '/verify-email',
   validateBody(verifyEmailSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof verifyEmailSchema>>(async (req, res) => {
     const { email, otp } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
@@ -238,7 +239,7 @@ router.post(
   loginIpRateLimit,
   validateBody(loginSchema),
   loginEmailRateLimit,
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof loginSchema>>(async (req, res) => {
     const { email, password } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
@@ -295,7 +296,7 @@ router.post(
 router.post(
   '/refresh',
   validateBody(refreshSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof refreshSchema>>(async (req, res) => {
     const { refreshToken } = req.body;
     let payload: { sub: string; jti: string };
 
@@ -384,7 +385,7 @@ router.post(
 router.post(
   '/logout',
   validateBody(refreshSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof refreshSchema>>(async (req, res) => {
     const { refreshToken } = req.body;
     const tokenHash = hashToken(refreshToken);
 
@@ -407,7 +408,7 @@ router.post(
   authEmailIpRateLimit,
   validateBody(forgotSchema),
   authEmailAddressRateLimit,
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof forgotSchema>>(async (req, res) => {
     const { email } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
@@ -445,7 +446,7 @@ router.post(
 router.post(
   '/verify-reset-otp',
   validateBody(verifyResetSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof verifyResetSchema>>(async (req, res) => {
     const { email, otp } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
@@ -477,7 +478,7 @@ router.post(
 router.post(
   '/reset-password',
   validateBody(resetSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof resetSchema>>(async (req, res) => {
     const { email, otp, password } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
@@ -528,7 +529,7 @@ router.post(
   authEmailIpRateLimit,
   validateBody(resendVerificationSchema),
   authEmailAddressRateLimit,
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof resendVerificationSchema>>(async (req, res) => {
     const { email } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
@@ -566,7 +567,7 @@ router.post(
   '/change-password',
   requireAuth(),
   validateBody(changePasswordSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof changePasswordSchema>>(async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     const user = await prisma.user.findUnique({ where: { id: req.auth!.userId } });
 
@@ -622,7 +623,7 @@ router.post(
   '/delete-account',
   requireAuth(),
   validateBody(deleteAccountSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof deleteAccountSchema>>(async (req, res) => {
     const { password } = req.body;
     const userId = req.auth!.userId;
     const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -686,7 +687,7 @@ router.patch(
   '/me/preferences',
   requireAuth(),
   validateBody(preferencesSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler<z.infer<typeof preferencesSchema>>(async (req, res) => {
     const updated = await prisma.user.update({
       where: { id: req.auth!.userId },
       data: req.body,

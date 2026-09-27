@@ -71,7 +71,10 @@ export function responseSchemaFor(
  * `:param` where the contract writes `{param}`, and the /api/v1 base lives in `servers`.
  */
 function operationKey(req: Request): string | null {
-  const routePath = (req as Request & { route?: { path?: string } }).route?.path;
+  // Express's own `Request.route` is typed `any`, and intersecting `Request` with a narrower
+  // `route` shape doesn't help -- TypeScript collapses `any & T` back to `any`. Reinterpreting
+  // as a fresh, unrelated type (via `unknown`) is what actually gets a checked type here.
+  const routePath = (req as unknown as { route?: { path?: string } }).route?.path;
   if (!routePath) return null;
 
   const path =
