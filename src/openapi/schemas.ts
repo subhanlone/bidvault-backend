@@ -616,3 +616,4 @@ export type UserDtoType = z.infer<typeof UserDto>;
 export type AuctionDtoType = z.infer<typeof AuctionDto>;
 export type ListingDtoType = z.infer<typeof ListingDto>;
 export type BidDtoType = z.infer<typeof BidDto>;
+export type BidWithAuctionDtoType = z.infer<typeof BidWithAuctionDto>;
