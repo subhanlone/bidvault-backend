@@ -9,6 +9,7 @@ import { optionalAuth, requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 import { placeBidSchema, cancelAuctionSchema } from '../../openapi/requests.js';
+import type { BidDtoType, BidWithAuctionDtoType } from '../../openapi/schemas.js';
 import { buildSellerStatsMap, toAuctionDto } from './auction-dto.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
@@ -105,13 +106,14 @@ router.get(
     const statsMap = await buildSellerStatsMap(pageRows.map(b => b.auction.sellerId));
 
     ok(res, {
-      items: pageRows.map(bid => ({
+      items: pageRows.map((bid): BidWithAuctionDtoType => ({
         bidId: bid.id,
         auctionId: bid.auctionId,
-        buyerId: bid.buyerId,
         // Filtered to `where: { buyerId }` above (the caller's own id, a live authenticated
         // user), so this bid's buyer can never be the null/anonymised case -- unlike the public
-        // bid list on GET /:auctionId/bids.
+        // bid list on GET /:auctionId/bids. Prisma still types bid.buyerId as string | null,
+        // so the caller's own id is used instead of narrowing it.
+        buyerId,
         buyerName: bid.buyer!.name,
         amount: bid.amount,
         timestamp: bid.createdAt.toISOString(),
@@ -360,14 +362,17 @@ router.post(
       { title: auctionTitle, amount: bid.amount, auctionId },
     ), 'bid placed');
 
-    ok(res, {
+    // bid.buyerId is typed string | null (BV-018); the bidder is the authenticated caller, so
+    // the local buyerId is the non-null value this contract requires.
+    const dto: BidDtoType = {
       bidId: bid.id,
       auctionId: bid.auctionId,
-      buyerId: bid.buyerId,
+      buyerId,
       buyerName: buyer.name,
       amount: bid.amount,
       timestamp: bid.createdAt.toISOString(),
-    }, 201);
+    };
+    ok(res, dto, 201);
   }),
 );
 
