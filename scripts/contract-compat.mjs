@@ -43,7 +43,10 @@ try {
 const headSpec = readFileSync(join(root, 'openapi.json'), 'utf8');
 
 const dir = mkdtempSync(join(tmpdir(), 'oasdiff-'));
-try {
+
+// Returns the exit code instead of calling process.exit(): process.exit() ends the process on
+// the spot and skips the `finally` below, which left a temp directory behind on every run.
+const compare = () => {
   writeFileSync(join(dir, 'base.json'), baseSpec);
   writeFileSync(join(dir, 'head.json'), headSpec);
 
@@ -53,10 +56,16 @@ try {
     { encoding: 'utf8', env: { ...process.env, MSYS_NO_PATHCONV: '1' } },
   );
 
-  if (run.error || run.status === null) {
+  // `oasdiff breaking` exits 0 even when it reports breaking changes (no --fail-on), so any
+  // other status means the tool itself failed -- e.g. the docker CLI is installed but its daemon
+  // is not running. Reading that error text as an empty report would pass the gate without
+  // having compared anything.
+  if (run.error || run.status !== 0) {
     console.error(`Could not run ${OASDIFF}. Is Docker running?`);
     if (run.error) console.error(`  ${run.error.message}`);
-    process.exit(1);
+    const output = `${run.stdout ?? ''}${run.stderr ?? ''}`.trim();
+    if (output) console.error(`  ${output}`);
+    return 1;
   }
 
   const report = `${run.stdout ?? ''}${run.stderr ?? ''}`.trim();
@@ -66,7 +75,7 @@ try {
 
   if (errors === 0) {
     console.log(report || 'No breaking changes.');
-    process.exit(0);
+    return 0;
   }
 
   console.log(report);
@@ -85,7 +94,7 @@ try {
     console.log(
       `\n${errors} breaking change(s), acknowledged: info.version ${before} -> ${after}.`,
     );
-    process.exit(0);
+    return 0;
   }
 
   console.error(
@@ -95,7 +104,13 @@ try {
       `deliberate. See COMPATIBILITY.md.\n\n` +
       `Bear in mind the deploy order: additions go backend-first, removals frontend-first.`,
   );
-  process.exit(1);
+  return 1;
+};
+
+let code;
+try {
+  code = compare();
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
+process.exit(code);
