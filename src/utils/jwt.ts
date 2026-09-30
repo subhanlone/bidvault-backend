@@ -44,8 +44,16 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
   return accessPayloadSchema.parse(decoded);
 }
 
-export function signRefreshToken(payload: RefreshTokenPayload): string {
-  return jwt.sign(payload, env.JWT_REFRESH_SECRET, {
+/**
+ * `issuedAt` pins the token's `iat` (and so its `exp`). The database keeps only a hash of each
+ * refresh token, never the token, so a duplicate request inside the reuse interval can only be
+ * given the successor it raced with by signing it again -- and that comes out byte-for-byte the
+ * same only if the second signature carries the same timestamp as the first. Callers store the
+ * same instant as the row's `createdAt`.
+ */
+export function signRefreshToken(payload: RefreshTokenPayload, issuedAt?: Date): string {
+  const claims = issuedAt ? { ...payload, iat: Math.floor(issuedAt.getTime() / 1000) } : payload;
+  return jwt.sign(claims, env.JWT_REFRESH_SECRET, {
     algorithm: 'HS256',
     issuer: ISSUER,
     audience: REFRESH_AUDIENCE,

@@ -43,6 +43,14 @@ const schema = z.object({
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_SECRET: z.string().min(16),
   JWT_REFRESH_EXPIRES_IN_DAYS: z.coerce.number().int().positive().default(14),
+  // Refresh tokens rotate on every use and a spent one coming back revokes the whole family. Two
+  // tabs of one browser that need a token at the same instant both present the same one, and no
+  // client-side coordination is airtight (another tab can read a stale copy for a few
+  // milliseconds after a write). For this many seconds after a token is spent, a repeat of it is
+  // answered with the successor that already exists instead of being treated as theft. Only the
+  // immediate parent of the live token qualifies; anything older is still a replay. 0 disables.
+  // Supabase Auth defaults to 10, Okta to 30.
+  REFRESH_REUSE_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(10),
   // How many reverse proxies sit between the client and this process, for Express's
   // `trust proxy`. Railway terminates TLS at its edge and forwards over an internal hop, so
   // the deployed value is at least 1; locally there is no proxy at all, hence the 0 default.
