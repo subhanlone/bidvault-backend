@@ -103,13 +103,41 @@ function getRequestMeta(req: Request): { ipAddress?: string; userAgent?: string 
   return { ipAddress, userAgent };
 }
 
+/**
+ * The successor to hand a repeat of a token that was spent moments ago, or null when the repeat
+ * is a real replay.
+ *
+ * Only the token's immediate parent qualifies, and only while that successor is still unused: a
+ * token two generations back, or one spent longer ago than the interval, stays theft. The
+ * successor is signed again rather than read back -- only hashes are stored -- and the hash check
+ * refuses to hand out anything that is not exactly the token that was issued (tokens created
+ * before `iat` was pinned to `createdAt` cannot be reproduced, and simply fall back to replay).
+ */
+async function successorWithinReuseInterval(spent: {
+  userId: string;
+  revokedAt: Date | null;
+  replacedByTokenId: string | null;
+}): Promise<string | null> {
+  const intervalMs = env.REFRESH_REUSE_INTERVAL_SECONDS * 1000;
+  if (intervalMs === 0 || !spent.revokedAt || !spent.replacedByTokenId) return null;
+  if (Date.now() - spent.revokedAt.getTime() > intervalMs) return null;
+
+  const successor = await prisma.refreshToken.findUnique({ where: { id: spent.replacedByTokenId } });
+  if (!successor || successor.userId !== spent.userId) return null;
+  if (successor.revokedAt || successor.expiresAt <= new Date()) return null;
+
+  const candidate = signRefreshToken({ sub: successor.userId, jti: successor.id }, successor.createdAt);
+  return hashToken(candidate) === successor.tokenHash ? candidate : null;
+}
+
 async function createSessionTokens(params: {
   userId: string;
   role: 'BUYER' | 'SELLER' | 'ADMIN';
   req: Request;
 }): Promise<{ accessToken: string; refreshToken: string }> {
   const refreshTokenId = crypto.randomUUID();
-  const refreshToken = signRefreshToken({ sub: params.userId, jti: refreshTokenId });
+  const issuedAt = new Date();
+  const refreshToken = signRefreshToken({ sub: params.userId, jti: refreshTokenId }, issuedAt);
   const refreshTokenHash = hashToken(refreshToken);
   const expiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_DAYS * 24 * 60 * 60 * 1000);
   const meta = getRequestMeta(params.req);
@@ -119,6 +147,7 @@ async function createSessionTokens(params: {
       id: refreshTokenId,
       userId: params.userId,
       tokenHash: refreshTokenHash,
+      createdAt: issuedAt,
       expiresAt,
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
@@ -318,19 +347,46 @@ router.post(
       return;
     }
 
-    if (tokenRecord.revokedAt) {
-      await prisma.refreshToken.updateMany({
+    // A spent token coming back is a replay: the family is revoked, and the owner is told -- once,
+    // and only if this actually signed something out (every request that loses a race for the same
+    // token lands here, and a replay against an already-dead family has nothing new to report).
+    const rejectReplay = async () => {
+      const revoked = await prisma.refreshToken.updateMany({
         where: { userId: tokenRecord.userId, revokedAt: null },
         data: { revokedAt: new Date() },
       });
       console.warn('[auth] refresh token reuse detected; revoked token family', {
         userId: tokenRecord.userId,
+        sessionsRevoked: revoked.count,
       });
-      dispatchEmail(
-        sendSessionsRevokedSecurityAlertEmail({ email: tokenRecord.user.email, name: tokenRecord.user.name }),
-        'refresh token reuse detected',
-      );
+      if (revoked.count > 0) {
+        dispatchEmail(
+          sendSessionsRevokedSecurityAlertEmail({ email: tokenRecord.user.email, name: tokenRecord.user.name }),
+          'refresh token reuse detected',
+        );
+      }
       fail(res, 'Session invalidated. Please sign in again.', 401);
+    };
+
+    // A token spent a moment ago is usually not theft but a second tab that asked at the same
+    // instant as the first (see REFRESH_REUSE_INTERVAL_SECONDS). It gets the successor that already
+    // exists, so both tabs end up holding the same token whichever response lands last.
+    const answerRepeat = async (spent: {
+      userId: string;
+      revokedAt: Date | null;
+      replacedByTokenId: string | null;
+    }): Promise<boolean> => {
+      const successor = await successorWithinReuseInterval(spent);
+      if (!successor) return false;
+      ok(res, {
+        accessToken: signAccessToken({ sub: tokenRecord.userId, role: tokenRecord.user.role }),
+        refreshToken: successor,
+      });
+      return true;
+    };
+
+    if (tokenRecord.revokedAt) {
+      if (!(await answerRepeat(tokenRecord))) await rejectReplay();
       return;
     }
 
@@ -345,30 +401,44 @@ router.post(
     }
 
     const newRefreshId = crypto.randomUUID();
-    const newRefreshToken = signRefreshToken({ sub: tokenRecord.userId, jti: newRefreshId });
+    const issuedAt = new Date();
+    const newRefreshToken = signRefreshToken({ sub: tokenRecord.userId, jti: newRefreshId }, issuedAt);
     const newHash = hashToken(newRefreshToken);
     const expiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_DAYS * 24 * 60 * 60 * 1000);
     const meta = getRequestMeta(req);
 
-    await prisma.$transaction([
-      prisma.refreshToken.update({
-        where: { id: tokenRecord.id },
-        data: {
-          revokedAt: new Date(),
-          replacedByTokenId: newRefreshId,
-        },
-      }),
-      prisma.refreshToken.create({
+    // Spending the token is the check. The revokedAt test above is only a fast path: two requests
+    // in flight together both pass it, and an unconditional update let each mint a successor --
+    // one token, two live sessions, nothing for reuse detection to see. Here the update only
+    // matches while the token is still unspent, so Postgres lets exactly one request through
+    // (a second waits on the row, then finds it already spent) and the rest are repeats.
+    const rotated = await prisma.$transaction(async (tx) => {
+      const spent = await tx.refreshToken.updateMany({
+        where: { id: tokenRecord.id, revokedAt: null },
+        data: { revokedAt: new Date(), replacedByTokenId: newRefreshId },
+      });
+      if (spent.count !== 1) return false;
+
+      await tx.refreshToken.create({
         data: {
           id: newRefreshId,
           userId: tokenRecord.userId,
           tokenHash: newHash,
+          createdAt: issuedAt,
           expiresAt,
           ipAddress: meta.ipAddress,
           userAgent: meta.userAgent,
         },
-      }),
-    ]);
+      });
+      return true;
+    });
+
+    if (!rotated) {
+      // Lost the race: the winner has committed by now, so the row shows it spent and by whom.
+      const spent = await prisma.refreshToken.findUnique({ where: { id: tokenRecord.id } });
+      if (!spent || !(await answerRepeat(spent))) await rejectReplay();
+      return;
+    }
 
     const accessToken = signAccessToken({
       sub: tokenRecord.userId,

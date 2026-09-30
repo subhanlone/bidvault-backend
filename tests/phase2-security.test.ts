@@ -324,7 +324,8 @@ describe('enumeration resistance and session recovery', () => {
           userId: w.buyer.id,
           tokenHash: hashToken(oldToken),
           expiresAt: future(),
-          revokedAt: new Date(),
+          // Spent well outside the reuse interval, so this is theft and not two tabs at once.
+          revokedAt: new Date(Date.now() - 60_000),
           replacedByTokenId: activeId,
         },
         {
@@ -352,6 +353,98 @@ describe('enumeration resistance and session recovery', () => {
       expect(mail.send).toHaveBeenCalledWith(
         expect.objectContaining({ subject: 'Security alert: all BidVault sessions were signed out' }),
       );
+    });
+  });
+
+  describe('two tabs asking at once (the reuse interval)', () => {
+    // Real tokens from the real login route: the interval answers a repeat by signing the
+    // successor again, which only reproduces the issued token if it was issued the way the
+    // routes issue it. Hand-built rows would prove nothing here.
+    const login = async () =>
+      resData<{ refreshToken: string }>(
+        await request(app).post(api('/auth/login')).send({ email: w.buyer.email, password: PASSWORD }),
+      ).refreshToken;
+    const refresh = (refreshToken: string) =>
+      request(app).post(api('/auth/refresh')).send({ refreshToken });
+    const liveSessions = () =>
+      prisma.refreshToken.count({ where: { userId: w.buyer.id, revokedAt: null } });
+    const alerts = () =>
+      mail.send.mock.calls.filter(
+        ([message]) => message.subject === 'Security alert: all BidVault sessions were signed out',
+      ).length;
+    // A token spent long enough ago to be outside the interval, without waiting for it.
+    const ageSpentToken = async (refreshToken: string) =>
+      prisma.refreshToken.update({
+        where: { tokenHash: hashToken(refreshToken) },
+        data: { revokedAt: new Date(Date.now() - 60_000) },
+      });
+
+    beforeEach(() => {
+      mail.send.mockClear();
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+
+    it('answers concurrent refreshes with one successor: nothing forks, nobody is signed out', async () => {
+      const first = await login();
+
+      // The token used to be looked up, checked, and only then marked spent, so requests in
+      // flight together each passed the check and each minted a successor: one token, several
+      // live sessions. Spending it is the check now, and the contenders share the winner's result.
+      const attempts = await Promise.all(Array.from({ length: 4 }, () => refresh(first)));
+
+      expect(attempts.map((res) => res.status)).toEqual([200, 200, 200, 200]);
+      const successors = new Set(attempts.map((res) => resData<{ refreshToken: string }>(res).refreshToken));
+      expect(successors.size).toBe(1);
+      expect(await liveSessions()).toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(alerts()).toBe(0);
+    });
+
+    it('answers a repeat inside the interval with the same successor, and that successor works', async () => {
+      const first = await login();
+      const won = resData<{ refreshToken: string }>(await refresh(first)).refreshToken;
+
+      const repeat = await refresh(first);
+      expect(repeat.status).toBe(200);
+      expect(resData<{ refreshToken: string }>(repeat).refreshToken).toBe(won);
+      expect(await liveSessions()).toBe(1);
+
+      expect((await refresh(won)).status).toBe(200);
+    });
+
+    it('still treats a token two generations back as a replay', async () => {
+      const first = await login();
+      const second = resData<{ refreshToken: string }>(await refresh(first)).refreshToken;
+      expect((await refresh(second)).status).toBe(200);
+
+      // `first` was spent a moment ago, but its successor has itself been spent: it is not the
+      // immediate parent of anything live any more.
+      const replay = await refresh(first);
+      expect(replay.status).toBe(401);
+      expect(await liveSessions()).toBe(0);
+      await vi.waitFor(() => expect(alerts()).toBe(1));
+    });
+
+    it('treats a repeat after the interval as a replay', async () => {
+      const first = await login();
+      expect((await refresh(first)).status).toBe(200);
+      await ageSpentToken(first);
+
+      expect((await refresh(first)).status).toBe(401);
+      expect(await liveSessions()).toBe(0);
+    });
+
+    it('mails the security alert once, not once per replay', async () => {
+      const first = await login();
+      expect((await refresh(first)).status).toBe(200);
+      await ageSpentToken(first);
+
+      expect((await refresh(first)).status).toBe(401);
+      await vi.waitFor(() => expect(alerts()).toBe(1));
+      // The family is already dead: a second replay has nothing left to sign out or report.
+      expect((await refresh(first)).status).toBe(401);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(alerts()).toBe(1);
     });
   });
 });
