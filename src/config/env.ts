@@ -67,6 +67,10 @@ const schema = z.object({
   // Verify after any deploy: log `req.ip` and `x-forwarded-for` and confirm req.ip is the
   // real client address. express-rate-limit (BV-002) also validates this at startup.
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+  // TEMPORARY. When set, app.ts mounts GET /__ip-debug, which echoes the raw proxy headers so the
+  // right TRUST_PROXY_HOPS can be measured against the deployed topology. Unset = no route.
+  // Remove this together with the route once the hop count is settled.
+  IP_DEBUG_TOKEN: z.string().min(16).optional(),
   // Injected by Railway on GitHub-triggered deploys. Reported by GET /health so the
   // running build is identifiable from the outside — without it the only way to tell
   // which commit is live is to read GitHub's deployment records.
