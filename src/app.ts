@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -61,6 +62,32 @@ export function createApp() {
   // deployed topology actually is in production. It is deliberately not hardcoded, because
   // the correct number can only be measured against a running deployment.
   app.set('trust proxy', env.TRUST_PROXY_HOPS);
+
+  // TEMPORARY measurement aid for TRUST_PROXY_HOPS — remove once the number is settled. Only
+  // mounted when IP_DEBUG_TOKEN is set, and it sits above the rate limiter and maintenance
+  // guard on purpose so neither can interfere with what it reports. It reports the *raw*
+  // headers and socket peer, which do not depend on the current TRUST_PROXY_HOPS value; `ip`
+  // and `ips` show what Express derives from that value, for the after-the-change check.
+  if (env.IP_DEBUG_TOKEN) {
+    const expected = Buffer.from(env.IP_DEBUG_TOKEN);
+    app.get('/__ip-debug', (req, res) => {
+      const supplied = Buffer.from(req.get('x-debug-token') ?? '');
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+        res.status(404).end();
+        return;
+      }
+      res.set('Cache-Control', 'no-store').json({
+        trustProxyHops: env.TRUST_PROXY_HOPS,
+        remoteAddress: req.socket.remoteAddress,
+        xForwardedFor: req.get('x-forwarded-for'),
+        xRealIp: req.get('x-real-ip'),
+        cfConnectingIp: req.get('cf-connecting-ip'),
+        xRailwayEdge: req.get('x-railway-edge'),
+        ip: req.ip,
+        ips: req.ips,
+      });
+    });
+  }
 
   app.use(
     cors({
