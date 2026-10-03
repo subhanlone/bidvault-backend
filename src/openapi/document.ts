@@ -19,12 +19,16 @@ const okBody = (data: ZodType, description: string) => ({
   content: { [JSON_CT]: { schema: z.object({ success: z.literal(true), data }) } },
 });
 
-/** Every failure is `{ success: false, error, code? }`. */
+/**
+ * Every failure is `{ success: false, error, code? }`. A rule about one request field also names
+ * it in `details`, the same field -> messages map validation failures carry.
+ */
 const ErrorBody = z
   .object({
     success: z.literal(false),
     error: z.string(),
     code: z.string().optional(),
+    details: z.record(z.string(), z.array(z.string())).optional(),
   })
   .meta({ id: 'ErrorResponse' });
 
@@ -201,7 +205,16 @@ const documentInput = {
     // api:compat: response-property-type-changed, array -> object). The `email` query
     // parameter is replaced by `search` (matches name OR email -- an admin acting on a report
     // is more likely to have a name than an email address).
-    version: '9.0.0',
+    //
+    // 9.1.0, 2026-10-04, minor: GET /listings/limits (seller-only) publishes the two admin-set
+    // rules a listing must satisfy, minListingPrice and maxBidIncrement, so the create-listing
+    // form no longer has to read them from the unauthenticated /settings/public and no longer
+    // needs hard-coded fallback numbers that go stale the moment an admin changes a rule. And
+    // ErrorResponse gained an optional `details` (field -> messages), which POST /listings and
+    // PATCH /listings/{listingId} now fill for those two rules so the failure can be shown at
+    // the field. Purely additive -- oasdiff: new path, optional response property added. The two
+    // fields stay on /settings/public for now: removal is frontend first, then a major bump.
+    version: '9.1.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -548,6 +561,18 @@ const documentInput = {
           401: unauthorized,
           403: forbidden,
           429: tooManyRequests,
+        },
+      },
+    },
+    '/listings/limits': {
+      get: {
+        tags: ['Listings'],
+        security: [{ bearerAuth: [] }],
+        summary: 'The admin-set minimum starting price and maximum bid increment a listing must satisfy',
+        responses: {
+          200: okBody(S.ListingLimitsDto, 'The current limits'),
+          401: unauthorized,
+          403: forbidden,
         },
       },
     },

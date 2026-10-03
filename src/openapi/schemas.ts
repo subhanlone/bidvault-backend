@@ -218,6 +218,14 @@ export const PublicSettingsDto = z
   })
   .meta({ id: 'PublicSettings' });
 
+/** The two admin-set rules a submitted listing has to satisfy. Seller-only: nobody else needs them. */
+export const ListingLimitsDto = z
+  .object({
+    minListingPrice: z.number().int(),
+    maxBidIncrement: z.number().int(),
+  })
+  .meta({ id: 'ListingLimits' });
+
 const ProbeDto = z.object({
   state: z.enum(['up', 'down']),
   latencyMs: z.number().int().nonnegative(),

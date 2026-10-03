@@ -97,6 +97,7 @@ const OPERATIONS: Op[] = [
       startPrice: 15_000, minIncrement: 500, durationDays: 3,
       attributes: { brand: 'Probe', model: 'X1' },
     }) },
+  { method: 'get', contractPath: '/listings/limits', url: () => '/listings/limits', allow: ['SELLER'] },
   { method: 'get', contractPath: '/listings/mine', url: () => '/listings/mine', allow: ['SELLER'] },
   { method: 'get', contractPath: '/listings/pending', url: () => '/listings/pending', allow: ['ADMIN'] },
   { method: 'post', contractPath: '/listings/{listingId}/approve',
