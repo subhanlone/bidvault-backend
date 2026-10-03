@@ -43,6 +43,10 @@ const schema = z.object({
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_SECRET: z.string().min(16),
   JWT_REFRESH_EXPIRES_IN_DAYS: z.coerce.number().int().positive().default(14),
+  // Whether the refresh-token cookie carries the Secure attribute (HTTPS only). On by default in
+  // production, off everywhere else because http://localhost would otherwise never keep the cookie.
+  // Set it explicitly only to override that, e.g. an HTTPS staging host that is not NODE_ENV=production.
+  COOKIE_SECURE: z.enum(['true', 'false']).optional(),
   // Refresh tokens rotate on every use and a spent one coming back revokes the whole family. Two
   // tabs of one browser that need a token at the same instant both present the same one, and no
   // client-side coordination is airtight (another tab can read a stale copy for a few
@@ -110,4 +114,6 @@ export const env = parsed.data;
 
 // CLIENT_ORIGIN may be a comma-separated list of allowed origins (e.g. the
 // production domain plus a legacy Vercel subdomain still in use).
+export const cookieSecure = env.COOKIE_SECURE ? env.COOKIE_SECURE === 'true' : env.NODE_ENV === 'production';
+
 export const clientOrigins = env.CLIENT_ORIGIN.split(',').map(s => s.trim()).filter(Boolean);

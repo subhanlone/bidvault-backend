@@ -5360,6 +5360,10 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128
+          },
+          "remember": {
+            "description": "false for a session that should end with the browser session instead of lasting 14 days. Default true.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -5371,14 +5375,12 @@
         "type": "object",
         "properties": {
           "refreshToken": {
+            "description": "Omit it to use the HttpOnly refresh cookie, which the browser sends by itself. Sending it in the body is for clients that still hold the token, and moves their session onto the cookie.",
             "type": "string",
             "minLength": 1,
             "maxLength": 4096
           }
-        },
-        "required": [
-          "refreshToken"
-        ]
+        }
       },
       "ForgotPasswordRequest": {
         "type": "object",
