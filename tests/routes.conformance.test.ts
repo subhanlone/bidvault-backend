@@ -384,6 +384,15 @@ describe('listings', () => {
     expect(res.status).toBe(201);
   });
 
+  it('GET /listings/limits', async () => {
+    hit('get', '/listings/limits');
+    const res = await request(app).get(api('/listings/limits')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    const limits = resData<{ minListingPrice: number; maxBidIncrement: number }>(res);
+    expect(Number.isInteger(limits.minListingPrice)).toBe(true);
+    expect(Number.isInteger(limits.maxBidIncrement)).toBe(true);
+  });
+
   it('GET /listings/mine', async () => {
     hit('get', '/listings/mine');
     const res = await request(app).get(api('/listings/mine')).set(auth(w.seller.token));

@@ -41,7 +41,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  resetRateLimits();
+  await resetRateLimits();
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   w = await seedWorld();
 });

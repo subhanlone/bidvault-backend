@@ -6,7 +6,7 @@ import type { Server } from 'socket.io';
 import { v2 as cloudinary } from 'cloudinary';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
-import { fail, ok } from '../../utils/response.js';
+import { fail, failField, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { scheduleAuctionLifecycle } from '../../queues/auction-lifecycle.queue.js';
@@ -253,7 +253,7 @@ router.post(
   asyncHandler<z.infer<typeof submitListingSchema>>(async (req, res) => {
     const settings = await getPlatformSettings();
     if (req.body.startPrice < settings.minListingPrice) {
-      fail(res, `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`, 422);
+      failField(res, 'startPrice', `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`);
       return;
     }
     if (req.body.imageUrl && !isOwnedCloudinaryImage(req.body.imageUrl, req.auth!.userId)) {
@@ -261,7 +261,7 @@ router.post(
       return;
     }
     if (req.body.minIncrement > settings.maxBidIncrement) {
-      fail(res, `Minimum bid increment cannot exceed PKR ${settings.maxBidIncrement.toLocaleString()}.`, 422);
+      failField(res, 'minIncrement', `Minimum bid increment cannot exceed PKR ${settings.maxBidIncrement.toLocaleString()}.`);
       return;
     }
 
@@ -347,7 +347,7 @@ router.patch(
 
     const settings = await getPlatformSettings();
     if (req.body.startPrice < settings.minListingPrice) {
-      fail(res, `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`, 422);
+      failField(res, 'startPrice', `Starting price must be at least PKR ${settings.minListingPrice.toLocaleString()}.`);
       return;
     }
     if (req.body.imageUrl && !isOwnedCloudinaryImage(req.body.imageUrl, req.auth!.userId)) {
@@ -355,7 +355,7 @@ router.patch(
       return;
     }
     if (req.body.minIncrement > settings.maxBidIncrement) {
-      fail(res, `Minimum bid increment cannot exceed PKR ${settings.maxBidIncrement.toLocaleString()}.`, 422);
+      failField(res, 'minIncrement', `Minimum bid increment cannot exceed PKR ${settings.maxBidIncrement.toLocaleString()}.`);
       return;
     }
 
@@ -421,6 +421,18 @@ router.delete(
 
     await prisma.listing.delete({ where: { id: existing.id } });
     ok(res, { listingId: existing.id, status: 'WITHDRAWN' });
+  }),
+);
+
+// The two rules POST / and PATCH /:listingId enforce, for the create-listing form to check against
+// and to show as a hint. Seller-only: they used to ride along on the unauthenticated
+// /settings/public, which published them to every visitor who has no use for them.
+router.get(
+  '/limits',
+  requireAuth(['SELLER']),
+  asyncHandler(async (_req, res) => {
+    const { minListingPrice, maxBidIncrement } = await getPlatformSettings();
+    ok(res, { minListingPrice, maxBidIncrement });
   }),
 );
 
