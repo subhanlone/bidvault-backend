@@ -73,7 +73,16 @@ export const verifyEmailSchema = z
   .meta({ id: 'VerifyEmailRequest' });
 
 export const loginSchema = z
-  .object({ email: lookupEmail, password: z.string().min(1).max(128) })
+  .object({
+    email: lookupEmail,
+    password: z.string().min(1).max(128),
+    remember: z
+      .boolean()
+      .optional()
+      .describe(
+        'false for a session that should end with the browser session instead of lasting 14 days. Default true.',
+      ),
+  })
   .meta({ id: 'LoginRequest' });
 
 export const forgotSchema = z.object({ email: lookupEmail }).meta({ id: 'ForgotPasswordRequest' });
@@ -91,7 +100,16 @@ export const resetSchema = z
   .meta({ id: 'ResetPasswordRequest' });
 
 export const refreshSchema = z
-  .object({ refreshToken: z.string().min(1).max(4096) })
+  .object({
+    refreshToken: z
+      .string()
+      .min(1)
+      .max(4096)
+      .optional()
+      .describe(
+        'Omit it to use the HttpOnly refresh cookie, which the browser sends by itself. Sending it in the body is for clients that still hold the token, and moves their session onto the cookie.',
+      ),
+  })
   .meta({ id: 'RefreshRequest' });
 
 export const resendVerificationSchema = z

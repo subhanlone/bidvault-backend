@@ -10,6 +10,13 @@ export interface AccessTokenPayload {
 export interface RefreshTokenPayload {
   sub: string;
   jti: string;
+  /**
+   * false for a session the user asked not to keep ("Keep me signed in" unticked): its cookie is
+   * a browser-session cookie rather than a 14-day one. It rides in the token because rotation has
+   * to hand it on to every successor, and a claim is the one place that needs no database column.
+   * Absent means true, which is also what every token issued before this existed means.
+   */
+  remember?: boolean;
 }
 
 const ISSUER = 'bidvault';
@@ -24,6 +31,7 @@ const accessPayloadSchema = z.object({
 const refreshPayloadSchema = z.object({
   sub: z.string().min(1),
   jti: z.string().min(1),
+  rem: z.boolean().optional(),
 });
 
 export function signAccessToken(payload: AccessTokenPayload): string {
@@ -52,7 +60,15 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
  * same instant as the row's `createdAt`.
  */
 export function signRefreshToken(payload: RefreshTokenPayload, issuedAt?: Date): string {
-  const claims = issuedAt ? { ...payload, iat: Math.floor(issuedAt.getTime() / 1000) } : payload;
+  // Built here, in one fixed order, because the reuse interval re-signs a successor and needs
+  // the same bytes: `rem` is written only when it is false, so a normal token is exactly what it
+  // always was.
+  const claims = {
+    sub: payload.sub,
+    jti: payload.jti,
+    ...(payload.remember === false ? { rem: false } : {}),
+    ...(issuedAt ? { iat: Math.floor(issuedAt.getTime() / 1000) } : {}),
+  };
   return jwt.sign(claims, env.JWT_REFRESH_SECRET, {
     algorithm: 'HS256',
     issuer: ISSUER,
@@ -61,11 +77,12 @@ export function signRefreshToken(payload: RefreshTokenPayload, issuedAt?: Date):
   });
 }
 
-export function verifyRefreshToken(token: string): RefreshTokenPayload {
+export function verifyRefreshToken(token: string): { sub: string; jti: string; remember: boolean } {
   const decoded = jwt.verify(token, env.JWT_REFRESH_SECRET, {
     algorithms: ['HS256'],
     issuer: ISSUER,
     audience: REFRESH_AUDIENCE,
   });
-  return refreshPayloadSchema.parse(decoded);
+  const { sub, jti, rem } = refreshPayloadSchema.parse(decoded);
+  return { sub, jti, remember: rem !== false };
 }

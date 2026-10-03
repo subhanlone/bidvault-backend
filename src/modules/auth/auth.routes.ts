@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import type { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import type { UserRole } from '@prisma/client';
@@ -33,6 +33,7 @@ import {
   deleteAccountSchema,
 } from '../../openapi/requests.js';
 import { hashToken } from '../../utils/token-hash.js';
+import { cameFromTrustedOrigin, clearRefreshCookie, readRefreshCookie, setRefreshCookie } from './refresh-cookie.js';
 import {
   dispatchEmail,
   sendWelcomeEmail,
@@ -113,11 +114,10 @@ function getRequestMeta(req: Request): { ipAddress?: string; userAgent?: string 
  * refuses to hand out anything that is not exactly the token that was issued (tokens created
  * before `iat` was pinned to `createdAt` cannot be reproduced, and simply fall back to replay).
  */
-async function successorWithinReuseInterval(spent: {
-  userId: string;
-  revokedAt: Date | null;
-  replacedByTokenId: string | null;
-}): Promise<string | null> {
+async function successorWithinReuseInterval(
+  spent: { userId: string; revokedAt: Date | null; replacedByTokenId: string | null },
+  remember: boolean,
+): Promise<string | null> {
   const intervalMs = env.REFRESH_REUSE_INTERVAL_SECONDS * 1000;
   if (intervalMs === 0 || !spent.revokedAt || !spent.replacedByTokenId) return null;
   if (Date.now() - spent.revokedAt.getTime() > intervalMs) return null;
@@ -126,18 +126,37 @@ async function successorWithinReuseInterval(spent: {
   if (!successor || successor.userId !== spent.userId) return null;
   if (successor.revokedAt || successor.expiresAt <= new Date()) return null;
 
-  const candidate = signRefreshToken({ sub: successor.userId, jti: successor.id }, successor.createdAt);
+  const candidate = signRefreshToken({ sub: successor.userId, jti: successor.id, remember }, successor.createdAt);
   return hashToken(candidate) === successor.tokenHash ? candidate : null;
 }
 
+/** Whether the session making this request was a remembered one, read from its own refresh
+ * cookie; true when there is none or it cannot be read, which is what an unmarked token means. */
+function sessionIsRemembered(req: Request): boolean {
+  const cookie = readRefreshCookie(req);
+  if (!cookie) return true;
+  try {
+    return verifyRefreshToken(cookie).remember;
+  } catch {
+    return true;
+  }
+}
+
+/** Starts a session: the token pair in the body (still read by existing clients) and the refresh
+ * token as an HttpOnly cookie, which is what the frontend will rely on instead of storage. */
 async function createSessionTokens(params: {
   userId: string;
   role: 'BUYER' | 'SELLER' | 'ADMIN';
   req: Request;
+  res: Response;
+  remember: boolean;
 }): Promise<{ accessToken: string; refreshToken: string }> {
   const refreshTokenId = crypto.randomUUID();
   const issuedAt = new Date();
-  const refreshToken = signRefreshToken({ sub: params.userId, jti: refreshTokenId }, issuedAt);
+  const refreshToken = signRefreshToken(
+    { sub: params.userId, jti: refreshTokenId, remember: params.remember },
+    issuedAt,
+  );
   const refreshTokenHash = hashToken(refreshToken);
   const expiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_DAYS * 24 * 60 * 60 * 1000);
   const meta = getRequestMeta(params.req);
@@ -154,6 +173,7 @@ async function createSessionTokens(params: {
     },
   });
 
+  setRefreshCookie(params.res, refreshToken, params.remember);
   const accessToken = signAccessToken({ sub: params.userId, role: params.role });
   return { accessToken, refreshToken };
 }
@@ -269,7 +289,7 @@ router.post(
   validateBody(loginSchema),
   loginEmailRateLimit,
   asyncHandler<z.infer<typeof loginSchema>>(async (req, res) => {
-    const { email, password } = req.body;
+    const { email, password, remember = true } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
     const matched = await verifyPassword(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
@@ -312,6 +332,8 @@ router.post(
       userId: user.id,
       role: user.role,
       req,
+      res,
+      remember,
     });
 
     ok(res, {
@@ -326,13 +348,36 @@ router.post(
   '/refresh',
   validateBody(refreshSchema),
   asyncHandler<z.infer<typeof refreshSchema>>(async (req, res) => {
-    const { refreshToken } = req.body;
-    let payload: { sub: string; jti: string };
+    // The token comes from the body (existing clients, and a one-time migration of a session that
+    // still lives in localStorage) or, failing that, from the HttpOnly cookie. Only the cookie
+    // path is something a browser attaches by itself, so only that path has to prove the request
+    // came from the app.
+    const fromBody = req.body.refreshToken;
+    const refreshToken = fromBody ?? readRefreshCookie(req);
+    const viaCookie = fromBody === undefined;
+
+    if (!refreshToken) {
+      fail(res, 'Invalid refresh token.', 401);
+      return;
+    }
+    if (viaCookie && !cameFromTrustedOrigin(req)) {
+      fail(res, 'Request origin not allowed.', 403, 'ORIGIN_NOT_ALLOWED');
+      return;
+    }
+
+    // A refusal on the cookie path also drops the cookie: it is dead, and the browser would
+    // otherwise keep sending it on every refresh attempt.
+    const deny = (message: string) => {
+      if (viaCookie) clearRefreshCookie(res);
+      fail(res, message, 401);
+    };
+
+    let payload: { sub: string; jti: string; remember: boolean };
 
     try {
       payload = verifyRefreshToken(refreshToken);
     } catch {
-      fail(res, 'Invalid refresh token.', 401);
+      deny('Invalid refresh token.');
       return;
     }
 
@@ -343,7 +388,7 @@ router.post(
     });
 
     if (!tokenRecord) {
-      fail(res, 'Refresh token expired or revoked.', 401);
+      deny('Refresh token expired or revoked.');
       return;
     }
 
@@ -365,7 +410,7 @@ router.post(
           'refresh token reuse detected',
         );
       }
-      fail(res, 'Session invalidated. Please sign in again.', 401);
+      deny('Session invalidated. Please sign in again.');
     };
 
     // A token spent a moment ago is usually not theft but a second tab that asked at the same
@@ -376,8 +421,9 @@ router.post(
       revokedAt: Date | null;
       replacedByTokenId: string | null;
     }): Promise<boolean> => {
-      const successor = await successorWithinReuseInterval(spent);
+      const successor = await successorWithinReuseInterval(spent, payload.remember);
       if (!successor) return false;
+      setRefreshCookie(res, successor, payload.remember);
       ok(res, {
         accessToken: signAccessToken({ sub: tokenRecord.userId, role: tokenRecord.user.role }),
         refreshToken: successor,
@@ -391,18 +437,21 @@ router.post(
     }
 
     if (tokenRecord.expiresAt <= new Date()) {
-      fail(res, 'Refresh token expired or revoked.', 401);
+      deny('Refresh token expired or revoked.');
       return;
     }
 
     if (tokenRecord.id !== payload.jti) {
-      fail(res, 'Refresh token mismatch.', 401);
+      deny('Refresh token mismatch.');
       return;
     }
 
     const newRefreshId = crypto.randomUUID();
     const issuedAt = new Date();
-    const newRefreshToken = signRefreshToken({ sub: tokenRecord.userId, jti: newRefreshId }, issuedAt);
+    const newRefreshToken = signRefreshToken(
+      { sub: tokenRecord.userId, jti: newRefreshId, remember: payload.remember },
+      issuedAt,
+    );
     const newHash = hashToken(newRefreshToken);
     const expiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_DAYS * 24 * 60 * 60 * 1000);
     const meta = getRequestMeta(req);
@@ -445,6 +494,7 @@ router.post(
       role: tokenRecord.user.role,
     });
 
+    setRefreshCookie(res, newRefreshToken, payload.remember);
     ok(res, {
       accessToken,
       refreshToken: newRefreshToken,
@@ -456,19 +506,31 @@ router.post(
   '/logout',
   validateBody(refreshSchema),
   asyncHandler<z.infer<typeof refreshSchema>>(async (req, res) => {
-    const { refreshToken } = req.body;
-    const tokenHash = hashToken(refreshToken);
+    const fromBody = req.body.refreshToken;
+    const refreshToken = fromBody ?? readRefreshCookie(req);
 
-    await prisma.refreshToken.updateMany({
-      where: {
-        tokenHash,
-        revokedAt: null,
-      },
-      data: {
-        revokedAt: new Date(),
-      },
-    });
+    // Signing someone out is a nuisance rather than a theft, but a cookie request still has to
+    // come from the app (see /refresh).
+    if (fromBody === undefined && refreshToken && !cameFromTrustedOrigin(req)) {
+      fail(res, 'Request origin not allowed.', 403, 'ORIGIN_NOT_ALLOWED');
+      return;
+    }
 
+    if (refreshToken) {
+      await prisma.refreshToken.updateMany({
+        where: {
+          tokenHash: hashToken(refreshToken),
+          revokedAt: null,
+        },
+        data: {
+          revokedAt: new Date(),
+        },
+      });
+    }
+
+    // Always, and also when there was nothing to revoke: the point is that the browser stops
+    // holding a session.
+    clearRefreshCookie(res);
     ok(res, { message: 'Logged out successfully.' });
   }),
 );
@@ -674,7 +736,13 @@ router.post(
     // token being handed back. Re-authenticating instead would cost a second bcrypt verify and
     // spend from the login rate limiter, which is the wrong thing to charge someone for
     // rotating their own password.
-    const tokens = await createSessionTokens({ userId: user.id, role: user.role, req });
+    const tokens = await createSessionTokens({
+      userId: user.id,
+      role: user.role,
+      req,
+      res,
+      remember: sessionIsRemembered(req),
+    });
 
     dispatchEmail(
       sendPasswordResetCompletedEmail({ email: user.email, name: user.name }),
@@ -720,6 +788,7 @@ router.post(
     dispatchEmail(sendAccountDeletedEmail({ email: user.email, name: user.name }), 'account deleted');
 
     await anonymizeUser(userId);
+    clearRefreshCookie(res);
     ok(res, { message: 'Your account has been deleted.' });
   }),
 );
