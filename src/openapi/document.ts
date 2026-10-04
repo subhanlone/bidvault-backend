@@ -214,7 +214,18 @@ const documentInput = {
     // PATCH /listings/{listingId} now fill for those two rules so the failure can be shown at
     // the field. Purely additive -- oasdiff: new path, optional response property added. The two
     // fields stay on /settings/public for now: removal is frontend first, then a major bump.
-    version: '9.1.0',
+    //
+    // 10.0.0, 2026-10-04, major: GET /settings/public no longer returns minListingPrice and
+    // maxBidIncrement (oasdiff: response-required-property-removed, an error). The last step of an
+    // expand/contract move: 9.1.0 added the seller-only GET /listings/limits, the frontend moved to
+    // it (frontend #26, deployed to production 2026-10-04) and stopped reading these two fields,
+    // and only then were they removed here. Major, not minor, on purpose: the server's response
+    // really did change, and any caller still reading them would now get undefined -- there is
+    // none (the one consumer is generated from this document and no longer references them, which
+    // grep confirmed), but "nobody reads it" is the argument COMPATIBILITY.md warns sounds the
+    // same from inside a real break. The reason they left: they are rules for sellers and were
+    // being served to every anonymous visitor (OWASP API3).
+    version: '10.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -909,7 +920,7 @@ const documentInput = {
     '/settings/public': {
       get: {
         tags: ['Settings'],
-        summary: 'Unauthenticated — the maintenance gate and listing limits the UI needs',
+        summary: 'Unauthenticated — the maintenance gate and the support contact',
         responses: { 200: okBody(S.PublicSettingsDto, 'Public settings') },
       },
     },

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "9.1.0",
+    "version": "10.0.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually."
   },
   "servers": [
@@ -4073,7 +4073,7 @@
         "tags": [
           "Settings"
         ],
-        "summary": "Unauthenticated — the maintenance gate and listing limits the UI needs",
+        "summary": "Unauthenticated — the maintenance gate and the support contact",
         "responses": {
           "200": {
             "description": "Public settings",
@@ -7477,23 +7477,11 @@
             "type": "string",
             "format": "email",
             "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
-          },
-          "minListingPrice": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
-          },
-          "maxBidIncrement": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
           }
         },
         "required": [
           "maintenanceMode",
-          "supportEmail",
-          "minListingPrice",
-          "maxBidIncrement"
+          "supportEmail"
         ],
         "additionalProperties": false
       },
