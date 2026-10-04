@@ -14,7 +14,7 @@ interface UserDirectoryEntry {
 }
 
 const mail = vi.hoisted(() => ({
-  send: vi.fn(async (_message: { subject: string; html: string }) => ({
+  send: vi.fn((_message: { subject: string; html: string }) => Promise.resolve({
     data: { id: 'email_test' },
     error: null,
   })),

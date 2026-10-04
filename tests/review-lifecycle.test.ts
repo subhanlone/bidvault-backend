@@ -29,7 +29,7 @@ interface SellerReviewsDto {
 
 vi.mock('resend', () => ({
   Resend: class {
-    emails = { send: vi.fn(async () => ({ data: { id: 'email_test' }, error: null })) };
+    emails = { send: vi.fn(() => Promise.resolve({ data: { id: 'email_test' }, error: null })) };
   },
 }));
 

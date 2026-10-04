@@ -20,8 +20,8 @@ vi.mock('../src/services/email.service.js', async () => {
   );
   return {
     ...actual,
-    sendAuctionEndedEmail: vi.fn(async () => undefined),
-    sendReserveNotMetEmail: vi.fn(async () => undefined),
+    sendAuctionEndedEmail: vi.fn(() => Promise.resolve()),
+    sendReserveNotMetEmail: vi.fn(() => Promise.resolve()),
   };
 });
 

@@ -17,10 +17,10 @@ vi.mock('../src/services/email.service.js', async () => {
   );
   return {
     ...actual,
-    sendItemShippedEmail: vi.fn(async () => undefined),
-    sendDeliveryConfirmedEmail: vi.fn(async () => undefined),
-    sendDisputeRaisedEmail: vi.fn(async () => undefined),
-    sendDisputeResolvedEmail: vi.fn(async () => undefined),
+    sendItemShippedEmail: vi.fn(() => Promise.resolve()),
+    sendDeliveryConfirmedEmail: vi.fn(() => Promise.resolve()),
+    sendDisputeRaisedEmail: vi.fn(() => Promise.resolve()),
+    sendDisputeResolvedEmail: vi.fn(() => Promise.resolve()),
   };
 });
 

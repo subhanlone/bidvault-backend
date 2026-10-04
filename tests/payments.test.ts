@@ -19,7 +19,7 @@ vi.mock('../src/services/email.service.js', async () => {
   const actual = await vi.importActual<typeof import('../src/services/email.service.js')>(
     '../src/services/email.service.js',
   );
-  return { ...actual, sendPaymentCompletedEmail: vi.fn(async () => undefined) };
+  return { ...actual, sendPaymentCompletedEmail: vi.fn(() => Promise.resolve()) };
 });
 
 const { createApp } = await import('../src/app.js');
