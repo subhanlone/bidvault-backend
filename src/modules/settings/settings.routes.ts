@@ -9,14 +9,14 @@ import { getPlatformSettings, updatePlatformSettings } from '../../services/sett
 
 const router = Router();
 
-// Public — needed by the frontend before auth (maintenance gate + footer contact), and by the
-// create-listing form so it can enforce the same limits POST /listings does.
+// Public — only what a visitor who has not signed in needs: the maintenance gate and the footer's
+// support contact. Everything else is cherry-picked in on purpose, never spread from the settings
+// row (OWASP API3: keep returned data to the bare minimum the endpoint's requirement calls for).
 //
-// minListingPrice and maxBidIncrement were previously admin-only. The seller's form therefore had
-// no way to know them and could only discover a violation from a 400 on final submit — two steps
-// after the offending field, with no inline error and nothing to indicate what value is legal.
-// These two are safe to publish: they are platform rules a seller has to satisfy anyway, not
-// private data. reviewTimeoutHours and emailNotifsEnabled stay admin-only.
+// minListingPrice and maxBidIncrement used to ride along here so the create-listing form could
+// check against them. They are rules for sellers, so they moved to the seller-only
+// GET /listings/limits (contract 9.1.0) and were removed from here once the frontend had stopped
+// reading them (10.0.0). reviewTimeoutHours and emailNotifsEnabled stay admin-only.
 router.get(
   '/public',
   asyncHandler(async (_req, res) => {
@@ -24,8 +24,6 @@ router.get(
     ok(res, {
       maintenanceMode: s.maintenanceMode,
       supportEmail: s.supportEmail,
-      minListingPrice: s.minListingPrice,
-      maxBidIncrement: s.maxBidIncrement,
     });
   }),
 );

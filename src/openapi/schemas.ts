@@ -213,8 +213,6 @@ export const PublicSettingsDto = z
   .object({
     maintenanceMode: z.boolean(),
     supportEmail: z.email(),
-    minListingPrice: z.number().int(),
-    maxBidIncrement: z.number().int(),
   })
   .meta({ id: 'PublicSettings' });
 

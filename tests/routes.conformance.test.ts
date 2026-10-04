@@ -745,6 +745,9 @@ describe('settings', () => {
     hit('get', '/settings/public');
     const res = await request(app).get(api('/settings/public'));
     expect(res.status).toBe(200);
+    // Exactly what an anonymous visitor needs. The listing limits are sellers' business and live
+    // on GET /listings/limits; nothing else may be spread in from the settings row.
+    expect(Object.keys(resData<Record<string, unknown>>(res)).sort()).toEqual(['maintenanceMode', 'supportEmail']);
   });
 
   it('GET /settings', async () => {
