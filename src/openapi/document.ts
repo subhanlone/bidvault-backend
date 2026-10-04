@@ -225,13 +225,21 @@ const documentInput = {
     // grep confirmed), but "nobody reads it" is the argument COMPATIBILITY.md warns sounds the
     // same from inside a real break. The reason they left: they are rules for sellers and were
     // being served to every anonymous visitor (OWASP API3).
-    version: '10.0.0',
+    //
+    // 10.0.1, 2026-10-05, patch: documentation only. Every response under /api/v1 now carries
+    // `Cache-Control: no-store` (see middleware/no-store.ts) and the description above says so.
+    // Nothing in the wire contract's shapes changed: a header was added to responses and no
+    // schema, status or field moved, which is COMPATIBILITY.md's "patch" (docs, descriptions).
+    version: '10.0.1',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
       'Every route is rate limited to 300 requests per minute per client address and answers ' +
       '429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that ' +
-      'carry a tighter limit of their own declare 429 individually.',
+      'carry a tighter limit of their own declare 429 individually.\n\n' +
+      'Every response, errors included, carries `Cache-Control: no-store`: what this API returns ' +
+      'is about the signed-in caller (and the sign-in routes return the tokens themselves), so ' +
+      'it is not meant to be stored by any cache.',
   },
   servers: [
     { url: 'https://bidvault-backend-production.up.railway.app/api/v1', description: 'Production' },

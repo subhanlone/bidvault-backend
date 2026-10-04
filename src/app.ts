@@ -24,6 +24,7 @@ import { probeDatabase, probeRedis, getWorkerHeartbeatAgeSeconds } from './servi
 import { document } from './openapi/document.js';
 import { AppError } from './errors/app-error.js';
 import { globalRateLimit } from './middleware/rate-limit.js';
+import { noStore } from './middleware/no-store.js';
 
 /**
  * Every module router, paired with the prefix it mounts under.
@@ -88,6 +89,9 @@ export function createApp() {
       });
     });
   }
+
+  // First thing on the API, so even a refused origin, a 429 or a 404 is marked no-store. See the file.
+  app.use('/api/v1', noStore);
 
   app.use(
     cors({
