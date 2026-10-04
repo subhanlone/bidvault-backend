@@ -18,10 +18,18 @@ type AsyncHandler<ReqBody = unknown> = (
   req: Req<ReqBody>,
   res: Response,
   next: NextFunction,
-) => Promise<unknown>;
+) => unknown;
 
+// A handler may be async or plain: a route that never awaits anything (it only answers) has no
+// business being `async` just to satisfy this wrapper -- `require-await` rightly objects to that.
+// Whatever it does, a rejection or a synchronous throw goes to `next`, so the error handler sees
+// both. The handler is still called synchronously, exactly as before.
 export function asyncHandler<ReqBody = unknown>(handler: AsyncHandler<ReqBody>) {
   return (req: Req<ReqBody>, res: Response, next: NextFunction): void => {
-    handler(req, res, next).catch(next);
+    try {
+      Promise.resolve(handler(req, res, next)).catch(next);
+    } catch (err) {
+      next(err);
+    }
   };
 }

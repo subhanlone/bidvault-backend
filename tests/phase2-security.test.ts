@@ -21,7 +21,7 @@ interface UploadSignatureDto {
 }
 
 const mail = vi.hoisted(() => ({
-  send: vi.fn(async (_message: { subject: string; html: string }) => ({
+  send: vi.fn((_message: { subject: string; html: string }) => Promise.resolve({
     data: { id: 'email_test' },
     error: null,
   })),
@@ -581,8 +581,8 @@ describe('socket and Cloudinary abuse controls', () => {
         handlers.set(event, handler);
         return fake;
       }),
-      join: vi.fn(async (room: string) => { rooms.add(room); }),
-      leave: vi.fn(async (room: string) => { rooms.delete(room); }),
+      join: vi.fn((room: string) => { rooms.add(room); return Promise.resolve(); }),
+      leave: vi.fn((room: string) => { rooms.delete(room); return Promise.resolve(); }),
       disconnect: vi.fn(),
     };
     const existingAuction = await prisma.auction.findUniqueOrThrow({

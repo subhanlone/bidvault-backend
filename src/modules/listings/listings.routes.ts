@@ -198,7 +198,7 @@ router.post(
   '/upload-signature',
   requireAuth(['SELLER']),
   uploadSignatureRateLimit,
-  asyncHandler(async (req, res) => {
+  asyncHandler((req, res) => {
     const timestamp = Math.round(Date.now() / 1000);
     const folder = 'bidvault/listings';
     const publicId = `listing-${req.auth!.userId}-${crypto.randomUUID()}`;

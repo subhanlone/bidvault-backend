@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import request from 'supertest';
 import { resData } from './helpers/api.js';
 
-const mail = vi.hoisted(() => ({ send: vi.fn(async () => ({ data: { id: 'email_test' }, error: null })) }));
+const mail = vi.hoisted(() => ({ send: vi.fn(() => Promise.resolve({ data: { id: 'email_test' }, error: null })) }));
 
 vi.mock('resend', () => ({
   Resend: class {

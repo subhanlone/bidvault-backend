@@ -53,11 +53,9 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-call': 'warn',
       '@typescript-eslint/no-unsafe-return': 'warn',
 
-      // `require-await` fires on async route handlers that only ever return, which is a
-      // normal Express shape here.
-      '@typescript-eslint/require-await': 'off',
-      // Template literals carrying numbers/ids are pervasive and intentional.
-      '@typescript-eslint/restrict-template-expressions': 'off',
+      // Template literals carrying numbers/ids are pervasive and intentional, so numbers are allowed;
+      // anything else (an object, undefined, a Date) printing as "[object Object]" is a real bug.
+      '@typescript-eslint/restrict-template-expressions': ['error', { allowNumber: true }],
     },
   },
   {
