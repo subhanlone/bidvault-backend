@@ -28,6 +28,10 @@ const isProduction = base.includes('railway.app') || base.includes('bidvault.tec
 
 type Role = 'buyer' | 'seller' | 'admin';
 
+// Not imported from src/modules/auth/refresh-cookie.ts: that module reads the server's
+// environment at load, and this script runs against a remote server without one.
+const REFRESH_COOKIE = 'bv_refresh';
+
 let failures = 0;
 let checked = 0;
 const skipped: string[] = [];
@@ -110,12 +114,19 @@ async function signIn(role: Role): Promise<{ access: string; refresh: string } |
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
-  const body = (await res.json()) as { data?: { accessToken: string; refreshToken: string } };
+  const body = (await res.json()) as { data?: { accessToken: string } };
   if (res.status !== 200 || !body.data?.accessToken) {
     fail(`login as ${role}`, `status ${res.status} — check VERIFY_${role.toUpperCase()}_*`);
     return null;
   }
-  return { access: body.data.accessToken, refresh: body.data.refreshToken };
+  // The refresh token is only ever in the HttpOnly cookie, never in the body.
+  const cookie = res.headers.getSetCookie().find((c) => c.startsWith(`${REFRESH_COOKIE}=`));
+  const refresh = cookie?.slice(REFRESH_COOKIE.length + 1).split(';')[0];
+  if (!refresh) {
+    fail(`login as ${role}`, `no ${REFRESH_COOKIE} cookie in the response`);
+    return null;
+  }
+  return { access: body.data.accessToken, refresh };
 }
 
 /** Revokes the refresh token this run created, so it leaves nothing behind. */

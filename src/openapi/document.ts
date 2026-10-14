@@ -230,7 +230,24 @@ const documentInput = {
     // `Cache-Control: no-store` (see middleware/no-store.ts) and the description above says so.
     // Nothing in the wire contract's shapes changed: a header was added to responses and no
     // schema, status or field moved, which is COMPATIBILITY.md's "patch" (docs, descriptions).
-    version: '10.0.1',
+    // 11.0.0, 2026-10-14, major: login (Session), POST /auth/refresh (RefreshedTokens) and
+    // POST /auth/change-password (PasswordChanged) no longer return `refreshToken` in the body
+    // (oasdiff: response-required-property-removed, an error). The refresh token now reaches the
+    // client only as the HttpOnly `bv_refresh` cookie set by the same response; see the note on
+    // SessionDto in schemas.ts for the standards behind it (ASVS 3.3.4, the OAuth browser-apps
+    // draft). The last step of an expand/contract move: the cookie shipped with backend #20
+    // (2026-10-04, additive, no version bump), the frontend moved to it and stopped reading the
+    // body field (frontend #20, deployed to production 2026-10-04; `grep refreshToken
+    // frontend/src` finds only the legacy-session path that SENDS a stored token), and only now
+    // is the field removed. Major, not minor, on purpose: the server's
+    // responses really changed, and any caller that read the field would now get undefined. None
+    // exists -- the one consumer is generated from this document, and scripts/verify-contract.ts,
+    // the one other reader, moved to the cookie in the same change -- but "nobody reads it" is
+    // the argument COMPATIBILITY.md warns sounds the same from inside a real break.
+    // The REQUEST side is unchanged: POST /auth/refresh and /auth/logout still accept
+    // `refreshToken` in the body, which is how a session stored by a pre-cookie frontend is moved
+    // onto the cookie once. That path is removable separately, later.
+    version: '11.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -328,7 +345,7 @@ const documentInput = {
         tags: ['Auth'],
         summary: 'Rotates the refresh token',
         requestBody: jsonRequest(R.refreshSchema),
-        responses: { 200: okBody(S.RefreshedTokensDto, 'New token pair'), 401: unauthorized },
+        responses: { 200: okBody(S.RefreshedTokensDto, 'New access token; the rotated refresh token is set as the HttpOnly cookie'), 401: unauthorized },
       },
     },
     '/auth/logout': {

@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import request from 'supertest';
 import type { AuctionSocket } from '../src/socket/auction-subscriptions.js';
 import { resData, resError } from './helpers/api.js';
+import { refreshTokenOf } from './helpers/refresh-cookie.js';
 
 interface UploadSignatureDto {
   signature: string;
@@ -282,14 +283,16 @@ describe('enumeration resistance and session recovery', () => {
       .send({ currentPassword: PASSWORD, newPassword: 'Correct-Horse-Battery-Staple-42!' });
 
     expect(changed.status).toBe(200);
-    const changedTokens = resData<{ accessToken: string; refreshToken: string }>(changed);
+    const changedTokens = resData<{ accessToken: string }>(changed);
     expect(typeof changedTokens.accessToken).toBe('string');
-    expect(typeof changedTokens.refreshToken).toBe('string');
+    // The replacement refresh token is the cookie, not a body field.
+    expect(changedTokens).not.toHaveProperty('refreshToken');
+    const replacement = refreshTokenOf(changed);
 
     // The replacement works -- the usability half, and the half that was missing.
     const fresh = await request(app)
       .post(api('/auth/refresh'))
-      .send({ refreshToken: changedTokens.refreshToken });
+      .send({ refreshToken: replacement });
     expect(fresh.status).toBe(200);
     expect(typeof resData<{ accessToken: string }>(fresh).accessToken).toBe('string');
 
@@ -361,9 +364,9 @@ describe('enumeration resistance and session recovery', () => {
     // successor again, which only reproduces the issued token if it was issued the way the
     // routes issue it. Hand-built rows would prove nothing here.
     const login = async () =>
-      resData<{ refreshToken: string }>(
+      refreshTokenOf(
         await request(app).post(api('/auth/login')).send({ email: w.buyer.email, password: PASSWORD }),
-      ).refreshToken;
+      );
     const refresh = (refreshToken: string) =>
       request(app).post(api('/auth/refresh')).send({ refreshToken });
     const liveSessions = () =>
@@ -393,7 +396,7 @@ describe('enumeration resistance and session recovery', () => {
       const attempts = await Promise.all(Array.from({ length: 4 }, () => refresh(first)));
 
       expect(attempts.map((res) => res.status)).toEqual([200, 200, 200, 200]);
-      const successors = new Set(attempts.map((res) => resData<{ refreshToken: string }>(res).refreshToken));
+      const successors = new Set(attempts.map((res) => refreshTokenOf(res)));
       expect(successors.size).toBe(1);
       expect(await liveSessions()).toBe(1);
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -402,11 +405,11 @@ describe('enumeration resistance and session recovery', () => {
 
     it('answers a repeat inside the interval with the same successor, and that successor works', async () => {
       const first = await login();
-      const won = resData<{ refreshToken: string }>(await refresh(first)).refreshToken;
+      const won = refreshTokenOf(await refresh(first));
 
       const repeat = await refresh(first);
       expect(repeat.status).toBe(200);
-      expect(resData<{ refreshToken: string }>(repeat).refreshToken).toBe(won);
+      expect(refreshTokenOf(repeat)).toBe(won);
       expect(await liveSessions()).toBe(1);
 
       expect((await refresh(won)).status).toBe(200);
@@ -414,7 +417,7 @@ describe('enumeration resistance and session recovery', () => {
 
     it('still treats a token two generations back as a replay', async () => {
       const first = await login();
-      const second = resData<{ refreshToken: string }>(await refresh(first)).refreshToken;
+      const second = refreshTokenOf(await refresh(first));
       expect((await refresh(second)).status).toBe(200);
 
       // `first` was spent a moment ago, but its successor has itself been spent: it is not the
