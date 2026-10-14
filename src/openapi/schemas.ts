@@ -503,21 +503,29 @@ export const PlatformSettingsDto = z
   })
   .meta({ id: 'PlatformSettings' });
 
+/**
+ * None of the three session responses below carries the refresh token. It travels only in the
+ * HttpOnly `bv_refresh` cookie, set by the same response: ASVS 3.3.4 asks that a token not meant
+ * for page script reach the client only through Set-Cookie, and the browser-apps draft's reason
+ * is that a refresh token the page never sees cannot be copied out of it. Until 11.0.0 these
+ * bodies repeated it "for a transition"; see the version history in document.ts.
+ */
 export const SessionDto = z
-  .object({ accessToken: z.string(), refreshToken: z.string(), user: UserDto })
+  .object({ accessToken: z.string(), user: UserDto })
   .meta({ id: 'Session' });
 
 export const RefreshedTokensDto = z
-  .object({ accessToken: z.string(), refreshToken: z.string() })
+  .object({ accessToken: z.string() })
   .meta({ id: 'RefreshedTokens' });
 
 /**
  * Changing a password revokes every session the account has, including the one that asked, so a
- * replacement pair is handed back with the confirmation. Without it the caller keeps working
- * until its access token expires and is then signed out mid-task by its own successful request.
+ * replacement session is handed back with the confirmation: a new access token in the body and a
+ * new refresh cookie on the response. Without it the caller keeps working until its access token
+ * expires and is then signed out mid-task by its own successful request.
  */
 export const PasswordChangedDto = z
-  .object({ message: z.string(), accessToken: z.string(), refreshToken: z.string() })
+  .object({ message: z.string(), accessToken: z.string() })
   .meta({ id: 'PasswordChanged' });
 
 /**

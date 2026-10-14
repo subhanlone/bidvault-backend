@@ -1,10 +1,12 @@
 /**
  * The refresh token as an HttpOnly cookie (OWASP: no credentials in localStorage/sessionStorage).
  *
- * The JSON body still carries the token pair -- existing clients read it, and a session that
- * still lives in localStorage migrates onto the cookie by sending its token in the body once --
- * so everything here is about the cookie: its attributes, the CSRF defence on the cookie-only
- * path, "remember me" surviving rotation, and the reuse interval handing back the same cookie.
+ * The refresh token is ONLY in the cookie: no response body carries it (contract 11.0.0, ASVS
+ * 3.3.4). What still goes the other way is a session stored by a pre-cookie frontend, which
+ * migrates onto the cookie by sending its token in the REQUEST body once. So everything here is
+ * about the cookie: its attributes, the CSRF defence on the cookie-only path, "remember me"
+ * surviving rotation, the reuse interval handing back the same cookie -- and that the body never
+ * repeats it.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
@@ -25,14 +27,16 @@ const { resetRateLimits } = await import('../src/middleware/rate-limit.js');
 const { verifyRefreshToken } = await import('../src/utils/jwt.js');
 const { hashToken } = await import('../src/utils/token-hash.js');
 const { seedWorld, PASSWORD } = await import('./helpers/world.js');
+const { REFRESH_COOKIE: COOKIE, refreshCookieLine, cookieValue, refreshTokenOf } = await import(
+  './helpers/refresh-cookie.js'
+);
 
 type World = Awaited<ReturnType<typeof seedWorld>>;
-type Tokens = { accessToken: string; refreshToken: string };
+type Tokens = { accessToken: string };
 
 const app = createApp();
 const api = (path: string) => `/api/v1${path}`;
 const ORIGIN = clientOrigins[0];
-const COOKIE = 'bv_refresh';
 
 let w: World;
 
@@ -61,14 +65,6 @@ const login = (remember?: boolean) =>
     .post(api('/auth/login'))
     .send({ email: w.buyer.email, password: PASSWORD, ...(remember === undefined ? {} : { remember }) });
 
-const setCookies = (res: request.Response): string[] => {
-  const raw = res.headers['set-cookie'] as unknown;
-  return Array.isArray(raw) ? (raw as string[]) : [];
-};
-/** The Set-Cookie header line for the refresh cookie, or undefined when the response sets none. */
-const refreshCookieLine = (res: request.Response) =>
-  setCookies(res).find((line) => line.startsWith(`${COOKIE}=`));
-const cookieValue = (line: string) => line.split(';')[0].slice(COOKIE.length + 1);
 const isCleared = (line: string) => cookieValue(line) === '' && /expires=thu, 01 jan 1970/i.test(line);
 
 /** What the browser does: send the cookie back, plus the Origin it always sends. */
@@ -92,9 +88,12 @@ describe('the refresh cookie', () => {
     expect(line).toMatch(/;\s*Max-Age=1209600/i);
     expect(line).not.toMatch(/;\s*Domain=/i);
 
-    // The body is unchanged: existing clients still read the pair from it, and it is the same token.
+    // The cookie is the only place the token is. The body gives the access token and the user,
+    // and nothing that would let page script copy the refresh token out of a response.
     const body = resData<Tokens>(res);
-    expect(cookieValue(line!)).toBe(body.refreshToken);
+    expect(body).not.toHaveProperty('refreshToken');
+    expect(typeof body.accessToken).toBe('string');
+    expect(verifyRefreshToken(cookieValue(line!)).sub).toBe(w.buyer.id);
   });
 
   it('login with remember:false sets a browser-session cookie (no Max-Age, no Expires)', async () => {
@@ -109,9 +108,8 @@ describe('the refresh cookie', () => {
 
     const res = await refreshByCookie(first);
     expect(res.status).toBe(200);
-    const body = resData<Tokens>(res);
-    expect(body.refreshToken).not.toBe(first);
-    expect(cookieValue(refreshCookieLine(res)!)).toBe(body.refreshToken);
+    expect(resData<Tokens>(res)).not.toHaveProperty('refreshToken');
+    expect(refreshTokenOf(res)).not.toBe(first);
 
     const spent = await prisma.refreshToken.findUniqueOrThrow({ where: { tokenHash: hashToken(first) } });
     expect(spent.revokedAt).toBeInstanceOf(Date);
@@ -132,13 +130,13 @@ describe('the refresh cookie', () => {
   });
 
   it('a body token still refreshes, with no Origin needed, and moves the session onto the cookie', async () => {
-    const first = resData<Tokens>(await login()).refreshToken;
+    const first = refreshTokenOf(await login());
 
     const res = await refreshByBody(first);
     expect(res.status).toBe(200);
-    const line = refreshCookieLine(res);
-    expect(line).toBeDefined();
-    expect(cookieValue(line!)).toBe(resData<Tokens>(res).refreshToken);
+    expect(resData<Tokens>(res)).not.toHaveProperty('refreshToken');
+    // The successor is on the cookie, and it is a new token, not the one that was sent.
+    expect(refreshTokenOf(res)).not.toBe(first);
   });
 
   it('with neither a body token nor a cookie it is a 401, not a crash', async () => {
@@ -161,7 +159,7 @@ describe('the refresh cookie', () => {
 
     const rotated = await refreshByCookie(first);
     expect(rotated.status).toBe(200);
-    const successor = resData<Tokens>(rotated).refreshToken;
+    const successor = refreshTokenOf(rotated);
     expect(verifyRefreshToken(successor).remember).toBe(false);
     const rotatedLine = refreshCookieLine(rotated)!;
     expect(rotatedLine).not.toMatch(/Max-Age=/i);
@@ -170,7 +168,7 @@ describe('the refresh cookie', () => {
     // which only works if re-signing reproduces the `rem` claim too.
     const repeat = await refreshByCookie(first);
     expect(repeat.status).toBe(200);
-    expect(resData<Tokens>(repeat).refreshToken).toBe(successor);
+    expect(resData<Tokens>(repeat)).not.toHaveProperty('refreshToken');
     const repeatLine = refreshCookieLine(repeat)!;
     expect(cookieValue(repeatLine)).toBe(successor);
     expect(repeatLine).not.toMatch(/Max-Age=/i);
@@ -179,7 +177,7 @@ describe('the refresh cookie', () => {
   it('a remembered session stays remembered through rotation', async () => {
     const first = cookieValue(refreshCookieLine(await login(true))!);
     const rotated = await refreshByCookie(first);
-    expect(verifyRefreshToken(resData<Tokens>(rotated).refreshToken).remember).toBe(true);
+    expect(verifyRefreshToken(refreshTokenOf(rotated)).remember).toBe(true);
     expect(refreshCookieLine(rotated)).toMatch(/Max-Age=1209600/i);
   });
 
@@ -213,8 +211,7 @@ describe('the refresh cookie', () => {
   });
 
   it('logout still works with a body token, and clears the cookie even when there was nothing to revoke', async () => {
-    const body = resData<Tokens>(await login());
-    const byBody = await request(app).post(api('/auth/logout')).send({ refreshToken: body.refreshToken });
+    const byBody = await request(app).post(api('/auth/logout')).send({ refreshToken: refreshTokenOf(await login()) });
     expect(byBody.status).toBe(200);
     expect(isCleared(refreshCookieLine(byBody)!)).toBe(true);
 
@@ -235,9 +232,10 @@ describe('the refresh cookie', () => {
       .send({ currentPassword: PASSWORD, newPassword: 'Correct-Horse-Battery-Staple-42!' });
     expect(changed.status).toBe(200);
 
+    expect(resData<Tokens>(changed)).not.toHaveProperty('refreshToken');
     const line = refreshCookieLine(changed);
     expect(line).toBeDefined();
-    expect(cookieValue(line!)).toBe(resData<Tokens>(changed).refreshToken);
+    expect(cookieValue(line!)).not.toBe(first);
     expect(line).not.toMatch(/Max-Age=/i);
   });
 });

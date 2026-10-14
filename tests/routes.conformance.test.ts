@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { resData, resError, type Paginated } from './helpers/api.js';
+import { refreshTokenOf } from './helpers/refresh-cookie.js';
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
@@ -131,7 +132,7 @@ describe('auth', () => {
       .send({ email: w.buyer.email, password: PASSWORD });
     const res = await request(app)
       .post(api('/auth/refresh'))
-      .send({ refreshToken: resData<{ refreshToken: string }>(login).refreshToken });
+      .send({ refreshToken: refreshTokenOf(login) });
     expect(res.status).toBe(200);
   });
 
@@ -142,7 +143,7 @@ describe('auth', () => {
       .send({ email: w.buyer.email, password: PASSWORD });
     const res = await request(app)
       .post(api('/auth/logout'))
-      .send({ refreshToken: resData<{ refreshToken: string }>(login).refreshToken });
+      .send({ refreshToken: refreshTokenOf(login) });
     expect(res.status).toBe(200);
   });
 

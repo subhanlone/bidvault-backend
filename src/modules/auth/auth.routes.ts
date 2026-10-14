@@ -142,15 +142,15 @@ function sessionIsRemembered(req: Request): boolean {
   }
 }
 
-/** Starts a session: the token pair in the body (still read by existing clients) and the refresh
- * token as an HttpOnly cookie, which is what the frontend will rely on instead of storage. */
+/** Starts a session: the refresh token goes out only as the HttpOnly cookie, and the caller gets
+ * the access token to return. The refresh token is never put in a response body (ASVS 3.3.4). */
 async function createSessionTokens(params: {
   userId: string;
   role: 'BUYER' | 'SELLER' | 'ADMIN';
   req: Request;
   res: Response;
   remember: boolean;
-}): Promise<{ accessToken: string; refreshToken: string }> {
+}): Promise<{ accessToken: string }> {
   const refreshTokenId = crypto.randomUUID();
   const issuedAt = new Date();
   const refreshToken = signRefreshToken(
@@ -175,7 +175,7 @@ async function createSessionTokens(params: {
 
   setRefreshCookie(params.res, refreshToken, params.remember);
   const accessToken = signAccessToken({ sub: params.userId, role: params.role });
-  return { accessToken, refreshToken };
+  return { accessToken };
 }
 
 router.post(
@@ -328,7 +328,7 @@ router.post(
       });
     }
 
-    const { accessToken, refreshToken } = await createSessionTokens({
+    const { accessToken } = await createSessionTokens({
       userId: user.id,
       role: user.role,
       req,
@@ -338,7 +338,6 @@ router.post(
 
     ok(res, {
       accessToken,
-      refreshToken,
       user: sanitizeUser(user),
     });
   }),
@@ -426,7 +425,6 @@ router.post(
       setRefreshCookie(res, successor, payload.remember);
       ok(res, {
         accessToken: signAccessToken({ sub: tokenRecord.userId, role: tokenRecord.user.role }),
-        refreshToken: successor,
       });
       return true;
     };
@@ -495,10 +493,7 @@ router.post(
     });
 
     setRefreshCookie(res, newRefreshToken, payload.remember);
-    ok(res, {
-      accessToken,
-      refreshToken: newRefreshToken,
-    });
+    ok(res, { accessToken });
   }),
 );
 
@@ -749,7 +744,7 @@ router.post(
       'password changed',
     );
 
-    ok(res, { message: 'Password changed successfully.', ...tokens });
+    ok(res, { message: 'Password changed successfully.', accessToken: tokens.accessToken });
   }),
 );
 
