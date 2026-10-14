@@ -116,6 +116,8 @@ export const AuctionDto = z
     /** null until the seller has a rating. */
     sellerRating: z.number().nullable(),
     sellerSales: z.number().int().nullable(),
+    /** When the seller's account was created ("Member since"), an ISO date-time. */
+    sellerMemberSince: isoDateTime,
     startPrice: z.number().int(),
     currentBid: z.number().int(),
     minIncrement: z.number().int(),
@@ -125,6 +127,8 @@ export const AuctionDto = z
      */
     reserveMet: z.boolean().nullable(),
     bidCount: z.number().int(),
+    /** How many people have this auction on their watchlist (0 when nobody does). */
+    watcherCount: z.number().int(),
     startTime: isoDateTime,
     endTime: isoDateTime,
     status: AuctionStatus,

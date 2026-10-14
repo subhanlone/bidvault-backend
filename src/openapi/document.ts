@@ -247,7 +247,18 @@ const documentInput = {
     // The REQUEST side is unchanged: POST /auth/refresh and /auth/logout still accept
     // `refreshToken` in the body, which is how a session stored by a pre-cookie frontend is moved
     // onto the cookie once. That path is removable separately, later.
-    version: '11.0.0',
+    //
+    // 11.1.0, 2026-10-14, minor: Phase 8 (LIFECYCLE-IMPLEMENTATION-PLAN.md), the data half of
+    // seller visibility. Additive only. New: GET /auctions/mine (B2, the seller's own auctions,
+    // cursor-paginated, status defaulting to ACTIVE). B1's auction numbers for the seller are
+    // served by this auction endpoint, NOT added to ListingDto: a listing is the submission and
+    // review state that exists before any auction, so ListingDto keeps only the link (isLive,
+    // auctionId) and the live numbers stay on the auction.
+    // AuctionDto gains sellerMemberSince (the seller account's creation date) and watcherCount (how
+    // many watchlists hold the auction): trust signals modelled on what eBay shows beside an item.
+    // The two new AuctionDto fields are required in responses, which oasdiff reports as a
+    // warning, not a break: no existing client can fail to parse a response for gaining a field.
+    version: '11.1.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -460,6 +471,21 @@ const documentInput = {
           }).extend(R.paginationQuerySchema.shape),
         },
         responses: { 200: okBody(S.PaginatedAuctionsDto, 'A page of matching auctions') },
+      },
+    },
+    '/auctions/mine': {
+      get: {
+        tags: ['Auctions'],
+        security: [{ bearerAuth: [] }],
+        summary:
+          "Cursor-paginated. The signed-in seller's own auctions; status defaults to ACTIVE (soonest-ending first), " +
+          'CLOSED and CANCELLED list the most recently ended first',
+        requestParams: { query: R.mineAuctionsQuerySchema },
+        responses: {
+          200: okBody(S.PaginatedAuctionsDto, "A page of the seller's auctions"),
+          401: unauthorized,
+          403: forbidden,
+        },
       },
     },
     '/auctions/mine/bids': {

@@ -278,3 +278,8 @@ export const paginationQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).optional(),
   cursor: z.string().optional(),
 });
+
+/** GET /auctions/mine: the pagination pair plus which of the seller's auctions (default ACTIVE). */
+export const mineAuctionsQuerySchema = paginationQuerySchema.extend({
+  status: z.enum(['ACTIVE', 'CLOSED', 'CANCELLED']).optional(),
+});
