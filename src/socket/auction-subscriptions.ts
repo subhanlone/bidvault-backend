@@ -66,7 +66,16 @@ export type AuctionSocket = Socket<DefaultEventsMap, DefaultEventsMap, DefaultEv
 
 export function registerAuctionSubscriptions(socket: AuctionSocket): void {
   const bucket: SubscriptionBucket = {};
-  const pending = new Set<string>();
+  // Rooms whose existence lookup is in flight, and the LAST command received for each of them.
+  //
+  // The lookup is asynchronous, and socket.leave() on a room the socket has not joined yet does
+  // nothing. Packets that arrive together run their handlers before any promise reaction (Socket.IO
+  // dispatches each one in process.nextTick, and Node drains that queue before the microtasks), so
+  // an unsubscribe that follows a subscribe in the same flush used to run first and the join then
+  // went through anyway: the socket kept receiving a room it had asked to leave. The join therefore
+  // re-checks the latest command when the lookup answers, and whatever the interleaving the last
+  // command wins (subscribe, unsubscribe, subscribe, subscribe, unsubscribe, subscribe = subscribed).
+  const pending = new Map<string, 'join' | 'leave'>();
 
   socket.on('auction:subscribe', (auctionId: unknown) => {
     if (typeof auctionId !== 'string' || !auctionId.trim() || auctionId.length > 128) return;
@@ -76,15 +85,21 @@ export function registerAuctionSubscriptions(socket: AuctionSocket): void {
     }
 
     const room = `auction:${auctionId}`;
-    if (socket.rooms.has(room) || pending.has(room)) return;
+    if (pending.has(room)) {
+      // A lookup is already running for this room: only the wish changes (this also reinstates a
+      // subscribe that an unsubscribe had cancelled), no second lookup is started.
+      pending.set(room, 'join');
+      return;
+    }
+    if (socket.rooms.has(room)) return;
     const joinedAuctionRooms = [...socket.rooms].filter((name) => name.startsWith('auction:')).length;
     if (joinedAuctionRooms + pending.size >= MAX_AUCTION_ROOMS) return;
 
-    pending.add(room);
+    pending.set(room, 'join');
     void auctionCache
       .has(auctionId)
       .then((exists) => {
-        if (exists && socket.connected) void socket.join(room);
+        if (exists && socket.connected && pending.get(room) === 'join') void socket.join(room);
       })
       .catch((err: unknown) => {
         console.error('[socket] auction:subscribe lookup failed:', err instanceof Error ? err.message : err);
@@ -93,8 +108,11 @@ export function registerAuctionSubscriptions(socket: AuctionSocket): void {
   });
 
   socket.on('auction:unsubscribe', (auctionId: unknown) => {
-    if (typeof auctionId === 'string' && auctionId.length <= 128) {
-      void socket.leave(`auction:${auctionId}`);
-    }
+    if (typeof auctionId !== 'string' || auctionId.length > 128) return;
+    const room = `auction:${auctionId}`;
+    // Only a room with a lookup in flight is recorded, so unsubscribing arbitrary names cannot grow
+    // the map. A cancelled lookup keeps counting towards the room cap until it answers.
+    if (pending.has(room)) pending.set(room, 'leave');
+    void socket.leave(room);
   });
 }
