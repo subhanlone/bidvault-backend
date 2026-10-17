@@ -41,12 +41,33 @@ export async function buildSellerStatsMap(sellerIds: string[]) {
   return map;
 }
 
+/**
+ * How many watchlists hold each of the given auctions, in one grouped query. An auction nobody
+ * watches is absent from the map (callers read it as 0). Public on purpose: it is an aggregate,
+ * the same "43 watching" social proof eBay shows beside an item, and names nobody.
+ */
+export async function buildWatcherCountMap(auctionIds: string[]) {
+  const map = new Map<string, number>();
+  const unique = [...new Set(auctionIds)];
+  if (unique.length === 0) return map;
+
+  const rows = await prisma.watchlist.groupBy({
+    by: ['auctionId'],
+    where: { auctionId: { in: unique } },
+    _count: { auctionId: true },
+  });
+  for (const r of rows) map.set(r.auctionId, r._count.auctionId);
+  return map;
+}
+
 // Return type is the published contract, not inferred. If this mapper and
 // openapi/schemas.ts drift apart, the build breaks here rather than the frontend
 // silently receiving a shape its generated types say is impossible.
 export function toAuctionDto(
   auction: Prisma.AuctionGetPayload<{ include: { seller: true } }>,
-  statsMap?: Map<string, { rating: number | null; salesCount: number }>,
+  statsMap: Map<string, { rating: number | null; salesCount: number }> | undefined,
+  // Required, so a route that serves an auction cannot forget the count: it would not compile.
+  watcherCounts: Map<string, number>,
 ): AuctionDtoType {
   const stats = statsMap?.get(auction.sellerId);
   return {
@@ -61,6 +82,7 @@ export function toAuctionDto(
     sellerName: auction.seller.name,
     sellerRating: stats?.rating ?? null,
     sellerSales: stats ? stats.salesCount : null,
+    sellerMemberSince: auction.seller.createdAt.toISOString(),
     startPrice: auction.startPrice,
     currentBid: auction.currentBid,
     minIncrement: auction.minIncrement,
@@ -79,6 +101,7 @@ export function toAuctionDto(
         ? null
         : (auction.reserveMet ?? auction.currentBid >= auction.reservePrice),
     bidCount: auction.bidCount,
+    watcherCount: watcherCounts.get(auction.id) ?? 0,
     startTime: auction.startTime.toISOString(),
     endTime: auction.endTime.toISOString(),
     status: auction.status,

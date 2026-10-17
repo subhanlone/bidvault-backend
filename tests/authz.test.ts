@@ -78,6 +78,7 @@ const OPERATIONS: Op[] = [
     allow: ['BUYER', 'SELLER', 'ADMIN'], body: () => ({ password: 'test-password-123' }) },
 
   // ---- auctions -------------------------------------------------------------------------
+  { method: 'get', contractPath: '/auctions/mine', url: () => '/auctions/mine', allow: ['SELLER'] },
   { method: 'get', contractPath: '/auctions/mine/bids', url: () => '/auctions/mine/bids', allow: ['BUYER'] },
   { method: 'post', contractPath: '/auctions/{auctionId}/bids',
     url: (w) => `/auctions/${w.liveAuctionId}/bids`, allow: ['BUYER'], body: () => ({ amount: 30_000 }) },
@@ -360,6 +361,17 @@ describe('one user cannot reach another user\'s data', () => {
     const res = await request(app).get(api('/listings/mine')).set(bearer(w.seller.token)).expect(200);
     const ids = resData<Paginated<{ listingId: string }>>(res).items.map((l) => l.listingId);
     expect(ids).not.toContain(w.otherSellerListingId);
+  });
+
+  it('GET /auctions/mine returns only the seller auctions, in every status', async () => {
+    for (const status of ['ACTIVE', 'CLOSED', 'CANCELLED']) {
+      const res = await request(app).get(api(`/auctions/mine?status=${status}`)).set(bearer(w.seller.token)).expect(200);
+      const sellers = new Set(resData<Paginated<{ sellerId: string }>>(res).items.map((a) => a.sellerId));
+      expect([...sellers].every((id) => id === w.seller.id)).toBe(true);
+    }
+    const other = await request(app).get(api('/auctions/mine?status=CLOSED')).set(bearer(w.otherSeller.token)).expect(200);
+    const otherIds = resData<Paginated<{ auctionId: string }>>(other).items.map((a) => a.auctionId);
+    expect(otherIds).not.toContain(w.closedAuctionId);
   });
 
   it('GET /auctions/mine/bids returns only the caller\'s bids', async () => {

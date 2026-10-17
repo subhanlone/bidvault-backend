@@ -4,7 +4,7 @@ import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { buildSellerStatsMap, toAuctionDto } from '../auctions/auction-dto.js';
+import { buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from '../auctions/auction-dto.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 
 const router = Router();
@@ -44,8 +44,9 @@ router.get(
 
     const { pageRows, nextCursor } = slicePage(rows, limit, (e) => e.createdAt, (e) => e.auctionId);
     const statsMap = await buildSellerStatsMap(pageRows.map((e) => e.auction.sellerId));
+    const watchers = await buildWatcherCountMap(pageRows.map((e) => e.auctionId));
     ok(res, {
-      items: pageRows.map((entry) => toAuctionDto(entry.auction, statsMap)),
+      items: pageRows.map((entry) => toAuctionDto(entry.auction, statsMap, watchers)),
       nextCursor,
     });
   }),

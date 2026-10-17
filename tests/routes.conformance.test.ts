@@ -296,6 +296,15 @@ describe('auctions', () => {
     expect(res.status).toBe(201);
   });
 
+  it('GET /auctions/mine', async () => {
+    hit('get', '/auctions/mine');
+    const res = await request(app).get(api('/auctions/mine')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    const page = resData<Paginated<unknown>>(res);
+    expect(Array.isArray(page.items)).toBe(true);
+    expect(page).toHaveProperty('nextCursor');
+  });
+
   it('GET /auctions/mine/bids', async () => {
     hit('get', '/auctions/mine/bids');
     const res = await request(app).get(api('/auctions/mine/bids')).set(auth(w.buyer.token));

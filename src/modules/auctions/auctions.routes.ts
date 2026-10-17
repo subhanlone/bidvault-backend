@@ -10,7 +10,7 @@ import { validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 import { placeBidSchema, cancelAuctionSchema } from '../../openapi/requests.js';
 import type { BidDtoType, BidWithAuctionDtoType } from '../../openapi/schemas.js';
-import { buildSellerStatsMap, toAuctionDto } from './auction-dto.js';
+import { buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from './auction-dto.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
 
@@ -73,7 +73,53 @@ router.get(
 
     const { pageRows, nextCursor } = slicePage(rows, limit, (a) => a.endTime, (a) => a.id);
     const statsMap = await buildSellerStatsMap(pageRows.map(a => a.sellerId));
-    ok(res, { items: pageRows.map(a => toAuctionDto(a, statsMap)), nextCursor });
+    const watchers = await buildWatcherCountMap(pageRows.map(a => a.id));
+    ok(res, { items: pageRows.map(a => toAuctionDto(a, statsMap, watchers)), nextCursor });
+  }),
+);
+
+// B2, Phase 8: the seller counterpart of /mine/bids -- "which of my auctions are live right now".
+// Registered before /:auctionId, which would otherwise take "mine" for an auction id.
+router.get(
+  '/mine',
+  requireAuth(['SELLER']),
+  asyncHandler(async (req, res) => {
+    const sellerId = req.auth!.userId;
+    const limit = parseLimit(req.query.limit);
+    const cursor = decodeCursor(req.query.cursor);
+    const requested = req.query.status as string | undefined;
+    // Same rule as the public list: an unknown value falls back to ACTIVE instead of failing.
+    const status: AuctionStatus =
+      requested === 'CLOSED' || requested === 'CANCELLED' ? requested : 'ACTIVE';
+
+    // A live auction is watched in the order it will end (soonest first); a finished one is a
+    // history, newest first. The cursor compares in the direction of the sort.
+    const ascending = status === 'ACTIVE';
+    const order = ascending ? 'asc' : 'desc';
+    const beyond = ascending ? 'gt' : 'lt';
+
+    const where: Prisma.AuctionWhereInput = cursor
+      ? {
+          sellerId,
+          status,
+          OR: [
+            { endTime: { [beyond]: new Date(cursor.sortValue) } },
+            { endTime: new Date(cursor.sortValue), id: { [beyond]: cursor.id } },
+          ],
+        }
+      : { sellerId, status };
+
+    const rows = await prisma.auction.findMany({
+      where,
+      include: { seller: true },
+      orderBy: [{ endTime: order }, { id: order }],
+      take: limit + 1,
+    });
+
+    const { pageRows, nextCursor } = slicePage(rows, limit, (a) => a.endTime, (a) => a.id);
+    const statsMap = await buildSellerStatsMap([sellerId]);
+    const watchers = await buildWatcherCountMap(pageRows.map((a) => a.id));
+    ok(res, { items: pageRows.map((a) => toAuctionDto(a, statsMap, watchers)), nextCursor });
   }),
 );
 
@@ -104,6 +150,7 @@ router.get(
 
     const { pageRows, nextCursor } = slicePage(rows, limit, (b) => b.createdAt, (b) => b.id);
     const statsMap = await buildSellerStatsMap(pageRows.map(b => b.auction.sellerId));
+    const watchers = await buildWatcherCountMap(pageRows.map(b => b.auctionId));
 
     ok(res, {
       items: pageRows.map((bid): BidWithAuctionDtoType => ({
@@ -117,7 +164,7 @@ router.get(
         buyerName: bid.buyer!.name,
         amount: bid.amount,
         timestamp: bid.createdAt.toISOString(),
-        auction: toAuctionDto(bid.auction, statsMap),
+        auction: toAuctionDto(bid.auction, statsMap, watchers),
       })),
       nextCursor,
     });
@@ -138,7 +185,8 @@ router.get(
     }
 
     const statsMap = await buildSellerStatsMap([auction.sellerId]);
-    const dto = toAuctionDto(auction, statsMap);
+    const watchers = await buildWatcherCountMap([auction.id]);
+    const dto = toAuctionDto(auction, statsMap, watchers);
     ok(res, dto);
   }),
 );
