@@ -1,4 +1,4 @@
-import { Prisma, type Listing } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import type { Server } from 'socket.io';
 import { prisma } from '../db/prisma.js';
 import { getPlatformSettings } from './settings.service.js';
@@ -212,32 +212,60 @@ export type OfferNextBidderResult =
   | { kind: 'no-other-bidder' };
 
 /**
+ * The highest bid on an auction by a buyer who is not in `excludeBuyerIds`: the person a
+ * second-chance offer would go to. Exported so the seller-items read model previews the very same
+ * choice offerToNextBidder will make, rather than a second copy of the rule that could drift.
+ *
+ * "not null" and "not in" are both spelled out (rather than relying on how `notIn` alone treats a
+ * NULL buyerId) so an anonymised bidder (BV-018) is excluded the same unambiguous way
+ * close-auction.ts excludes one from its own winner-selection query.
+ */
+export async function findNextBid(db: Prisma.TransactionClient, auctionId: string, excludeBuyerIds: string[]) {
+  return db.bid.findFirst({
+    where: { AND: [{ auctionId }, { buyerId: { not: null } }, { buyerId: { notIn: excludeBuyerIds } }] },
+    orderBy: [{ amount: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    include: { buyer: true },
+  });
+}
+
+/**
  * Re-targets the same transaction row at the next-highest bidder, at their own last bid — not
  * a new row, because AuctionTransaction.auctionId is @@unique (one transaction slot per
  * auction, ever). The defaulting winner's row already occupies that slot; nothing about it
  * (review/dispute/ledgerEntry) can exist yet, since none of those are reachable before a
  * transaction is ever paid, so re-pointing it at someone else is safe.
+ *
+ * The row is re-targeted in place, which overwrites winnerId, so the people it has already been
+ * taken away from are kept in previousWinnerIds and never offered it again. A sale whose item has
+ * already been relisted is refused: it is live in a new auction, and offering the old one to the
+ * runner-up as well would sell the same item twice.
  */
 export async function offerToNextBidder(
   transactionId: string,
   sellerId: string,
 ): Promise<OfferNextBidderResult> {
   const outcome = await prisma.$transaction(async (tx) => {
-    const [row] = await tx.$queryRaw<Array<{ id: string; auctionId: string; sellerId: string; winnerId: string; status: string }>>`
-      SELECT id, "auctionId", "sellerId", "winnerId", status FROM "AuctionTransaction" WHERE id = ${transactionId} FOR UPDATE
+    const [row] = await tx.$queryRaw<
+      Array<{ id: string; auctionId: string; sellerId: string; winnerId: string; status: string; previousWinnerIds: string[] | null }>
+    >`
+      SELECT id, "auctionId", "sellerId", "winnerId", status, "previousWinnerIds" FROM "AuctionTransaction" WHERE id = ${transactionId} FOR UPDATE
     `;
     if (!row) return { kind: 'not-found' as const };
     if (row.sellerId !== sellerId) return { kind: 'forbidden' as const };
     if (row.status !== 'VOIDED') return { kind: 'wrong-state' as const };
 
-    // Both conditions spelled out explicitly (rather than relying on how `not` alone treats a
-    // NULL buyerId) so an anonymised bidder (BV-018) is excluded the same unambiguous way
-    // close-auction.ts excludes one from its own winner-selection query.
-    const nextBid = await tx.bid.findFirst({
-      where: { AND: [{ auctionId: row.auctionId }, { buyerId: { not: null } }, { buyerId: { not: row.winnerId } }] },
-      orderBy: [{ amount: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
-      include: { buyer: true },
+    const auction = await tx.auction.findUniqueOrThrow({
+      where: { id: row.auctionId },
+      select: { title: true, listingId: true },
     });
+    const alreadyRelisted = await tx.listing.findUnique({
+      where: { relistedFromId: auction.listingId },
+      select: { id: true },
+    });
+    if (alreadyRelisted) return { kind: 'wrong-state' as const };
+
+    const alreadyOffered = [...(row.previousWinnerIds ?? []), row.winnerId];
+    const nextBid = await findNextBid(tx, row.auctionId, alreadyOffered);
     if (!nextBid || nextBid.buyerId === null || nextBid.buyer === null) {
       return { kind: 'no-other-bidder' as const };
     }
@@ -246,6 +274,7 @@ export async function offerToNextBidder(
       where: { id: row.id },
       data: {
         winnerId: nextBid.buyerId,
+        previousWinnerIds: alreadyOffered,
         finalAmount: nextBid.amount,
         status: 'PENDING',
         paymentReference: null,
@@ -255,8 +284,6 @@ export async function offerToNextBidder(
         shippedAt: null,
       },
     });
-
-    const auction = await tx.auction.findUniqueOrThrow({ where: { id: row.auctionId }, select: { title: true } });
 
     await tx.notification.create({
       data: {
@@ -294,55 +321,93 @@ export type RelistResult =
  * skips PENDING review and goes straight to APPROVED + an ACTIVE auction, same as
  * approveOneListing's shape but without its admin-approval emails, which would misdescribe
  * what just happened.
+ *
+ * A sale can be relisted once: the new Listing records relistedFromId, which is @unique, so a
+ * second attempt (a double click, two tabs, a retry) fails that constraint and is reported as
+ * wrong-state. A relisted sale is likewise refused by offerToNextBidder.
  */
 export async function relistFromVoidedTransaction(
   transactionId: string,
   sellerId: string,
 ): Promise<RelistResult> {
-  const tx0 = await prisma.auctionTransaction.findUnique({
-    where: { id: transactionId },
-    select: { sellerId: true, status: true, auction: { include: { listing: true } } },
-  });
-  if (!tx0) return { kind: 'not-found' };
-  if (tx0.sellerId !== sellerId) return { kind: 'forbidden' };
-  if (tx0.status !== 'VOIDED') return { kind: 'wrong-state' };
-
-  const original = tx0.auction.listing;
   const startTime = new Date();
-  const endTime = new Date(startTime.getTime() + original.durationDays * 24 * 60 * 60 * 1000);
+  const result = await createRelist(transactionId, sellerId, startTime);
+  if (result.kind !== 'ok') return { kind: result.kind };
 
-  const result = await prisma.$transaction(async (dbTx) => {
-    let listing: Listing | undefined;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        listing = await dbTx.listing.create({
-          data: {
-            listingCode: generateListingCode(),
-            sellerId: original.sellerId,
-            title: original.title,
-            category: original.category,
-            condition: original.condition,
-            description: original.description,
-            startPrice: original.startPrice,
-            reservePrice: original.reservePrice,
-            minIncrement: original.minIncrement,
-            durationDays: original.durationDays,
-            imageUrl: original.imageUrl,
-            emoji: original.emoji,
-            attributes: original.attributes ?? undefined,
-            status: 'APPROVED',
-          },
-        });
-        break;
-      } catch (err) {
-        const isCodeCollision =
-          err instanceof Prisma.PrismaClientKnownRequestError &&
-          err.code === 'P2002' &&
-          (err.meta?.target as string[] | undefined)?.includes('listingCode');
-        if (!isCodeCollision || attempt === 2) throw err;
-      }
+  try {
+    await scheduleAuctionLifecycle({ auctionId: result.auctionId, endTime: result.endTime });
+  } catch (err) {
+    console.error(`[auction-control] Failed to schedule lifecycle for relisted auction ${result.auctionId}:`, err);
+  }
+
+  return { kind: 'ok', listingId: result.listingId, auctionId: result.auctionId };
+}
+
+function isUniqueViolation(err: unknown, field: string): boolean {
+  return (
+    err instanceof Prisma.PrismaClientKnownRequestError &&
+    err.code === 'P2002' &&
+    ((err.meta?.target as string[] | undefined)?.includes(field) ?? false)
+  );
+}
+
+// BV-014: listingCode is random and unique, so a collision is internal and says nothing about what
+// the seller did. A unique violation aborts a Postgres transaction ("current transaction is
+// aborted" for every later statement), so the retry has to be a whole new transaction, not a
+// second insert inside the first. The other unique violation, relistedFromId, means this sale was
+// already relisted and is an answer, not something to retry.
+async function createRelist(transactionId: string, sellerId: string, startTime: Date) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await relistOnce(transactionId, sellerId, startTime);
+    } catch (err) {
+      if (isUniqueViolation(err, 'relistedFromId')) return { kind: 'wrong-state' as const };
+      if (!isUniqueViolation(err, 'listingCode') || attempt === 2) throw err;
     }
-    if (!listing) throw new Error('unreachable: relist listing-creation loop exited without a result');
+  }
+  throw new Error('unreachable: relist retry loop exited without a result');
+}
+
+async function relistOnce(transactionId: string, sellerId: string, startTime: Date) {
+  return prisma.$transaction(async (dbTx) => {
+    // The same row lock offerToNextBidder takes, so the two serialise: whichever runs second
+    // sees the other's effect (a relist, or a sale that is PENDING again) and is refused. The
+    // checks used to run before the transaction and never marked the sale, which let a relist
+    // run any number of times.
+    const [row] = await dbTx.$queryRaw<Array<{ id: string; sellerId: string; status: string }>>`
+      SELECT id, "sellerId", status FROM "AuctionTransaction" WHERE id = ${transactionId} FOR UPDATE
+    `;
+    if (!row) return { kind: 'not-found' as const };
+    if (row.sellerId !== sellerId) return { kind: 'forbidden' as const };
+    if (row.status !== 'VOIDED') return { kind: 'wrong-state' as const };
+
+    const sale = await dbTx.auctionTransaction.findUniqueOrThrow({
+      where: { id: transactionId },
+      select: { auction: { include: { listing: true } } },
+    });
+    const original = sale.auction.listing;
+
+    const endTime = new Date(startTime.getTime() + original.durationDays * 24 * 60 * 60 * 1000);
+
+    const listing = await dbTx.listing.create({
+      data: {
+        listingCode: generateListingCode(),
+        sellerId: original.sellerId,
+        title: original.title,
+        category: original.category,
+        condition: original.condition,
+        description: original.description,
+        startPrice: original.startPrice,
+        reservePrice: original.reservePrice,
+        minIncrement: original.minIncrement,
+        durationDays: original.durationDays,
+        imageUrl: original.imageUrl,
+        emoji: original.emoji,
+        attributes: original.attributes ?? undefined,
+        relistedFromId: original.id,
+        status: 'APPROVED',
+      },
+    });
 
     const auction = await dbTx.auction.create({
       data: {
@@ -374,16 +439,8 @@ export async function relistFromVoidedTransaction(
       },
     });
 
-    return { listingId: listing.id, auctionId: auction.id };
+    return { kind: 'ok' as const, listingId: listing.id, auctionId: auction.id, endTime };
   });
-
-  try {
-    await scheduleAuctionLifecycle({ auctionId: result.auctionId, endTime });
-  } catch (err) {
-    console.error(`[auction-control] Failed to schedule lifecycle for relisted auction ${result.auctionId}:`, err);
-  }
-
-  return { kind: 'ok', ...result };
 }
 
 // ---------------------------------------------------------------------------
