@@ -6,6 +6,7 @@ import { prisma } from './db/prisma.js';
 import { redisConnection } from './infra/redis.js';
 import { verifyAccessToken } from './utils/jwt.js';
 import { registerAuctionSubscriptions, type AuctionSocketData } from './socket/auction-subscriptions.js';
+import { registerSellerRoom } from './socket/seller-room.js';
 import { subscribeToSettingsInvalidation } from './services/settings.service.js';
 
 void subscribeToSettingsInvalidation();
@@ -43,6 +44,7 @@ io.use((socket, next) => {
 
 io.on('connection', (socket) => {
   registerAuctionSubscriptions(socket);
+  registerSellerRoom(socket);
 });
 
 httpServer.listen(env.PORT, () => {

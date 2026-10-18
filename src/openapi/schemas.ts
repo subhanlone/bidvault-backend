@@ -76,8 +76,20 @@ export const NotificationType = z
     // C6/C3, Phase 7.
     'REVIEW_REPLY',
     'LISTING_REMOVED',
+    // Phase 8, B3: the seller is told of a bid. One unread row per auction, kept up to date.
+    'BID_RECEIVED',
   ])
-  .meta({ id: 'NotificationType' });
+  .meta({
+    id: 'NotificationType',
+    // The server checks every notification against this closed list before sending it, but the
+    // contract it publishes is an open set: values are added in nearly every phase, and a closed
+    // `enum` makes each addition a "response enum value added" warning from oasdiff, which advises
+    // x-extensible-enum for exactly this. Clients are told to expect values they do not know.
+    override: ({ jsonSchema }) => {
+      jsonSchema['x-extensible-enum'] = jsonSchema.enum;
+      delete jsonSchema.enum;
+    },
+  });
 
 /**
  * Category-specific listing attributes.

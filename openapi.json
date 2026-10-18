@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "11.3.0",
+    "version": "11.4.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -8075,7 +8075,7 @@
       },
       "NotificationType": {
         "type": "string",
-        "enum": [
+        "x-extensible-enum": [
           "BID_OUTBID",
           "AUCTION_WON",
           "RESERVE_NOT_MET",
@@ -8090,7 +8090,8 @@
           "SECOND_CHANCE_OFFER",
           "LISTING_RELISTED",
           "REVIEW_REPLY",
-          "LISTING_REMOVED"
+          "LISTING_REMOVED",
+          "BID_RECEIVED"
         ]
       },
       "NotificationRead": {
