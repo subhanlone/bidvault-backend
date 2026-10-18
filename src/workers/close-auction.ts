@@ -1,5 +1,6 @@
 import { AuctionStatus } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
+import { getPlatformSettings, paymentDueAtFrom } from '../services/settings.service.js';
 import { dispatchEmail, sendAuctionEndedEmail, sendReserveNotMetEmail } from '../services/email.service.js';
 
 /**
@@ -32,6 +33,8 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
   });
 
   if (!auction) return { alreadyClosed: false, reserveMet: null, sold: false };
+
+  const { paymentDeadlineHours } = await getPlatformSettings();
 
   // NEW-09: the winning bid is read inside the transaction under a FOR UPDATE lock, so two
   // retries cannot both see status=ACTIVE and create duplicate transactions.
@@ -113,6 +116,8 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
           sellerId: auction.sellerId,
           finalAmount: winBid.amount,
           status: 'PENDING',
+          // The buyer's payment clock starts now; the payment sweep voids the sale if it runs out.
+          paymentDueAt: paymentDueAtFrom(new Date(), paymentDeadlineHours),
         },
       });
 

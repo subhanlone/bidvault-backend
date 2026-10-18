@@ -329,6 +329,13 @@ model AuctionTransaction {
   // urgency signal there is. null on a sale that has not been paid, and on one created before
   // this column existed.
   paidAt            DateTime?
+  // When the buyer who owes this sale must have paid, or the payment sweep voids it. Set when the
+  // sale is created and again by every second-chance offer, because an offer re-targets this same
+  // row at a new buyer and `createdAt` (the sale's own date) does not move: measured from there
+  // the new buyer's deadline would already have passed and the next sweep would void the offer.
+  // null on a sale created before this column existed; the sweep then falls back to `createdAt`
+  // plus the current paymentDeadlineHours, exactly as it did.
+  paymentDueAt      DateTime?
   // Every winner this sale has already been taken away from, oldest first. offerToNextBidder
   // re-targets this one row at a lower bidder (auctionId is @@unique), which overwrites winnerId,
   // so without this list nothing remembers who defaulted and the offer could go back to them.

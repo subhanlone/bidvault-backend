@@ -72,6 +72,14 @@ async function fetchSettings(): Promise<PlatformSettingsData> {
   return row ? toData(row) : DEFAULTS;
 }
 
+/**
+ * The moment a sale that starts waiting for payment at `from` runs out of time. Lives here, not in
+ * auction-control.service, so close-auction.ts can use it without importing the queue module.
+ */
+export function paymentDueAtFrom(from: Date, paymentDeadlineHours: number): Date {
+  return new Date(from.getTime() + paymentDeadlineHours * 60 * 60 * 1000);
+}
+
 /** Reads the singleton settings row, falling back to defaults if it doesn't exist yet. Cached for TTL_MS. */
 export async function getPlatformSettings(): Promise<PlatformSettingsData> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.data;

@@ -285,7 +285,12 @@ const documentInput = {
     // response. The real-time half
     // is a Socket.IO event (`bid:received`, to the seller's own room), which is outside this
     // document and carries the auction id, the bid count and the current bid, never a bidder.
-    version: '11.4.0',
+    //
+    // 11.4.1, 2026-10-19, patch: documentation only. POST /payments/{transactionId}/pay already
+    // answered 409 for a sale that was already paid; it now answers the same 409 (a different
+    // message) for a sale that was voided, which it used to charge. The response shape is the
+    // same, and the 409 was already documented, so only its description changes.
+    version: '11.4.1',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -824,7 +829,7 @@ const documentInput = {
           401: unauthorized,
           403: forbidden,
           404: notFound,
-          409: errBody('The transaction is already paid'),
+          409: errBody('The transaction is already paid, or can no longer be paid (it was voided)'),
         },
       },
     },
