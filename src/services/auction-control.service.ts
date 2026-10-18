@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import type { Server } from 'socket.io';
 import { prisma } from '../db/prisma.js';
-import { getPlatformSettings } from './settings.service.js';
+import { getPlatformSettings, paymentDueAtFrom } from './settings.service.js';
 import { generateListingCode } from '../modules/listings/listings.routes.js';
 import { scheduleAuctionLifecycle, cancelScheduledJob } from '../queues/auction-lifecycle.queue.js';
 import {
@@ -137,12 +137,31 @@ export async function cancelAuction(
 // Payment deadline sweep (A3)
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether a waiting sale has run out of time. A sale carries its own due date (`paymentDueAt`: set
+ * when it is created and again by every second-chance offer). One created before that column
+ * existed has none, and is measured the way every sale used to be: from `createdAt`, with today's
+ * paymentDeadlineHours.
+ */
+function isPaymentOverdue(
+  row: { paymentDueAt: Date | null; createdAt: Date },
+  now: Date,
+  paymentDeadlineHours: number,
+): boolean {
+  if (row.paymentDueAt) return row.paymentDueAt < now;
+  return row.createdAt.getTime() < now.getTime() - paymentDeadlineHours * 60 * 60 * 1000;
+}
+
 export async function findOverduePayments(): Promise<string[]> {
   const { paymentDeadlineHours } = await getPlatformSettings();
-  const cutoff = new Date(Date.now() - paymentDeadlineHours * 60 * 60 * 1000);
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - paymentDeadlineHours * 60 * 60 * 1000);
 
   const rows = await prisma.auctionTransaction.findMany({
-    where: { status: 'PENDING', createdAt: { lt: cutoff } },
+    where: {
+      status: 'PENDING',
+      OR: [{ paymentDueAt: { lt: now } }, { paymentDueAt: null, createdAt: { lt: cutoff } }],
+    },
     select: { id: true },
   });
   return rows.map((r) => r.id);
@@ -151,12 +170,16 @@ export async function findOverduePayments(): Promise<string[]> {
 export type VoidOverduePaymentResult = { kind: 'ok' } | { kind: 'not-found' } | { kind: 'wrong-state' };
 
 export async function voidOverduePayment(transactionId: string): Promise<VoidOverduePaymentResult> {
+  const { paymentDeadlineHours } = await getPlatformSettings();
   const outcome = await prisma.$transaction(async (tx) => {
-    const [row] = await tx.$queryRaw<Array<{ id: string; status: string }>>`
-      SELECT id, status FROM "AuctionTransaction" WHERE id = ${transactionId} FOR UPDATE
+    const [row] = await tx.$queryRaw<Array<{ id: string; status: string; paymentDueAt: Date | null; createdAt: Date }>>`
+      SELECT id, status, "paymentDueAt", "createdAt" FROM "AuctionTransaction" WHERE id = ${transactionId} FOR UPDATE
     `;
     if (!row) return { kind: 'not-found' as const };
     if (row.status !== 'PENDING') return { kind: 'wrong-state' as const };
+    // The sweep read its list a moment ago. Since then the seller may have offered the item to
+    // someone else, which gave this same row a fresh deadline: decided again here, under the lock.
+    if (!isPaymentOverdue(row, new Date(), paymentDeadlineHours)) return { kind: 'wrong-state' as const };
 
     await tx.auctionTransaction.update({ where: { id: row.id }, data: { status: 'VOIDED', lastPaymentError: null } });
 
@@ -229,6 +252,21 @@ export async function findNextBid(db: Prisma.TransactionClient, auctionId: strin
 }
 
 /**
+ * Locks the item's original listing and says whether an admin has taken it down. Both recovery
+ * actions refuse a removed item: the takedown is the moderators' decision, and a fresh
+ * (auto-approved) copy or a second sale would undo it. The lock is the listing row's, the same one
+ * a takedown's UPDATE needs, so a takedown running at the same moment is ordered before or after
+ * the recovery action, never in the middle of it. My Items already shows no such action on a
+ * removed item; this is the endpoint refusing it too.
+ */
+async function isOriginalListingRemoved(tx: Prisma.TransactionClient, listingId: string): Promise<boolean> {
+  const [row] = await tx.$queryRaw<Array<{ status: string }>>`
+    SELECT status FROM "Listing" WHERE id = ${listingId} FOR UPDATE
+  `;
+  return row?.status === 'REMOVED';
+}
+
+/**
  * Re-targets the same transaction row at the next-highest bidder, at their own last bid — not
  * a new row, because AuctionTransaction.auctionId is @@unique (one transaction slot per
  * auction, ever). The defaulting winner's row already occupies that slot; nothing about it
@@ -244,6 +282,7 @@ export async function offerToNextBidder(
   transactionId: string,
   sellerId: string,
 ): Promise<OfferNextBidderResult> {
+  const { paymentDeadlineHours } = await getPlatformSettings();
   const outcome = await prisma.$transaction(async (tx) => {
     const [row] = await tx.$queryRaw<
       Array<{ id: string; auctionId: string; sellerId: string; winnerId: string; status: string; previousWinnerIds: string[] | null }>
@@ -263,6 +302,7 @@ export async function offerToNextBidder(
       select: { id: true },
     });
     if (alreadyRelisted) return { kind: 'wrong-state' as const };
+    if (await isOriginalListingRemoved(tx, auction.listingId)) return { kind: 'wrong-state' as const };
 
     const alreadyOffered = [...(row.previousWinnerIds ?? []), row.winnerId];
     const nextBid = await findNextBid(tx, row.auctionId, alreadyOffered);
@@ -277,6 +317,8 @@ export async function offerToNextBidder(
         previousWinnerIds: alreadyOffered,
         finalAmount: nextBid.amount,
         status: 'PENDING',
+        // A new buyer, a new deadline: createdAt is the sale's own date and stays where it is.
+        paymentDueAt: paymentDueAtFrom(new Date(), paymentDeadlineHours),
         paymentReference: null,
         paidAt: null,
         lastPaymentError: null,
@@ -387,6 +429,7 @@ async function relistOnce(transactionId: string, sellerId: string, startTime: Da
       select: { auction: { include: { listing: true } } },
     });
     const original = sale.auction.listing;
+    if (await isOriginalListingRemoved(dbTx, original.id)) return { kind: 'wrong-state' as const };
 
     const endTime = new Date(startTime.getTime() + original.durationDays * 24 * 60 * 60 * 1000);
 

@@ -27,6 +27,11 @@ const router = Router();
 // succeeded at COMPLETED and nothing after that ever un-succeeds it except a dispute resolving
 // to REFUNDED, which is its own terminal state, not a reason to accept a second payment.
 const PAID_STATUSES: TransactionStatus[] = ['COMPLETED', 'SHIPPED', 'DELIVERED', 'DISPUTED', 'REFUNDED'];
+// The only states a charge may be taken in: waiting for payment, or waiting for a retry after a
+// decline. VOIDED is deliberately not here -- the sale was given up on (by the sweep or an admin),
+// and from then on it may have been offered to someone else or relisted, so a late payment would
+// leave the same item sold twice.
+const PAYABLE_STATUSES: TransactionStatus[] = ['PENDING', 'FAILED'];
 
 router.get(
   '/my-wins',
@@ -227,6 +232,9 @@ router.post(
       if (PAID_STATUSES.includes(row.status)) {
         return { kind: 'already-paid' as const };
       }
+      if (!PAYABLE_STATUSES.includes(row.status)) {
+        return { kind: 'not-payable' as const };
+      }
 
       const charge = chargeCard(cardNumber);
 
@@ -265,6 +273,7 @@ router.post(
     if (outcome.kind === 'not-found') { fail(res, 'Transaction not found.', 404); return; }
     if (outcome.kind === 'forbidden') { fail(res, 'Forbidden.', 403); return; }
     if (outcome.kind === 'already-paid') { fail(res, 'This purchase has already been paid for.', 409); return; }
+    if (outcome.kind === 'not-payable') { fail(res, 'This purchase can no longer be paid.', 409); return; }
 
     if (outcome.kind === 'declined') {
       // A decline is an ordinary business outcome, not a request error — same reasoning as

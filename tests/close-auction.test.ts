@@ -30,6 +30,7 @@ const { prisma } = await import('../src/db/prisma.js');
 const { redisConnection } = await import('../src/infra/redis.js');
 const { seedWorld } = await import('./helpers/world.js');
 const email = await import('../src/services/email.service.js');
+const { getPlatformSettings } = await import('../src/services/settings.service.js');
 
 type World = Awaited<ReturnType<typeof seedWorld>>;
 let w: World;
@@ -107,6 +108,17 @@ describe('closeAuction', () => {
       finalAmount: 6_000,
       status: 'PENDING',
     });
+  });
+
+  it("starts the winner's payment clock: the sale gets its own due date", async () => {
+    const id = await endingAuction({ reservePrice: null, topBid: 6_000 });
+    const { paymentDeadlineHours } = await getPlatformSettings();
+
+    await closeAuction(id);
+
+    const sale = await transactionFor(id);
+    expect(sale?.paymentDueAt).not.toBeNull();
+    expect(Math.abs(sale!.paymentDueAt!.getTime() - (Date.now() + paymentDeadlineHours * 60 * 60 * 1000))).toBeLessThan(60_000);
   });
 
   // ---- BV-018 ---------------------------------------------------------------------------
