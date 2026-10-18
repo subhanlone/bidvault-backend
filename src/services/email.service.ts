@@ -559,7 +559,7 @@ export async function sendPaymentDeadlineVoidedEmail(
       ${infoRow('Winning bid', pkr)}
     </table>
     ${divider()}
-    ${p("You can offer the item to the next-highest bidder at their own bid, or relist it, from My Sales.")}
+    ${p("You can offer the item to the next-highest bidder at their own bid, or relist it, from My Items.")}
   `));
 }
 
@@ -636,7 +636,7 @@ export async function sendPaymentCompletedEmail(
   // the actual address here rather than the old hollow instruction.
   const sellerBody = `
     ${h1('Payment received')}
-    ${p(`Hi ${seller.name}, the buyer has completed payment for your item. Ship it to the address below, then mark it shipped from My Sales.`)}
+    ${p(`Hi ${seller.name}, the buyer has completed payment for your item. Ship it to the address below, then mark it shipped from My Items.`)}
     ${divider()}
     <table width="100%" cellpadding="0" cellspacing="0">
       ${infoRow('Item', details.auctionTitle)}
@@ -678,7 +678,7 @@ export async function sendDeliveryConfirmedEmail(
   const pkr = (n: number) => `PKR ${n.toLocaleString()}`;
   await send(seller.email, `Delivery confirmed — payout released for "${details.auctionTitle}"`, base('Payout released', `
     ${h1('Payout released')}
-    ${p(`Hi ${seller.name}, ${details.auto ? 'the confirm-receipt window has passed with no dispute raised, so' : 'the buyer has confirmed receipt, so'} your payout for "${details.auctionTitle}" has been sent to your connected account.`)}
+    ${p(`Hi ${seller.name}, ${details.auto ? 'the confirm-receipt window has passed with no dispute raised, so' : 'the buyer has confirmed receipt, so'} your payout for "${details.auctionTitle}" has been added to your earnings.`)}
     ${divider()}
     <table width="100%" cellpadding="0" cellspacing="0">
       ${infoRow('Item', details.auctionTitle)}

@@ -137,14 +137,45 @@ describe('the notification', () => {
     expect(outbid).toHaveLength(1);
   });
 
-  it('two simultaneous bids still leave one unread notification, showing the real bid count', async () => {
-    await Promise.all([bid(w.otherBuyer.token, 22_000), bid(w.buyer.token, 23_000)]);
+  it('two bids that are both accepted at the same moment still leave one unread notification, with the real figures', async () => {
+    // Two requests fired together only sometimes overlap, and when the larger one wins the lock
+    // first the smaller is refused, leaving one bid and a test that proves nothing. So the auction
+    // row's lock is held here while both bids are sent, one after the other, and released once both
+    // are queued on it. Neither bid has a notification to update when it arrives: the first creates
+    // it, the second must find it and update it instead of adding another.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let held!: () => void;
+    const holding = new Promise<void>((resolve) => { held = resolve; });
+    const holder = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Auction" WHERE id = ${w.liveAuctionId} FOR UPDATE`;
+      held();
+      await gate;
+    });
+    await holding;
 
+    const waitingOnALock = async () =>
+      Number((await prisma.$queryRaw<[{ n: bigint }]>`
+        SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'
+      `)[0].n);
+    const untilQueued = async (count: number) => {
+      for (let i = 0; i < 100 && (await waitingOnALock()) < count; i += 1) await new Promise((r) => setTimeout(r, 50));
+      expect(await waitingOnALock()).toBeGreaterThanOrEqual(count);
+    };
+
+    const first = bid(w.otherBuyer.token, 22_000).then((res) => res);
+    await untilQueued(1);
+    const second = bid(w.buyer.token, 23_000).then((res) => res);
+    await untilQueued(2);
+    release();
+    await holder;
+    const responses = await Promise.all([first, second]);
+
+    expect(responses.map((r) => r.status)).toEqual([201, 201]);
     const rows = await received();
-    const auction = await prisma.auction.findUniqueOrThrow({ where: { id: w.liveAuctionId } });
     expect(rows).toHaveLength(1);
-    expect(rows[0].message).toContain(`${auction.bidCount} bids`);
-    expect(rows[0].message).toContain(`PKR ${auction.currentBid.toLocaleString()}`);
+    expect(rows[0].message).toContain('3 bids');
+    expect(rows[0].message).toContain('PKR 23,000');
   });
 
   it('a refused bid notifies nobody', async () => {
