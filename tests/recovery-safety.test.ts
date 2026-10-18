@@ -213,3 +213,56 @@ describe('the payment clock after a second-chance offer', () => {
     expect((await voidOverduePayment(w.transactionId)).kind).toBe('ok');
   });
 });
+
+describe('a takedown that is in progress at the same moment', () => {
+  // The admin's takedown is one UPDATE of the listing row. Here that UPDATE is made inside a
+  // transaction that is held open, then the recovery action is started: it must wait for the
+  // takedown (the row lock) and, once it commits, see the removal. Without the lock it would read
+  // the listing as still APPROVED, and a removed item would come back as a live copy.
+  async function whileTakedownIsHeld<T>(recovery: () => Promise<T>) {
+    const auction = await prisma.auction.findUniqueOrThrow({ where: { id: w.closedAuctionId } });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let held!: () => void;
+    const holding = new Promise<void>((resolve) => { held = resolve; });
+
+    const takedown = prisma.$transaction(async (tx) => {
+      await tx.listing.update({ where: { id: auction.listingId }, data: { status: 'REMOVED', rejectionReason: 'Counterfeit' } });
+      held();
+      await gate;
+    });
+    await holding;
+
+    let settled = false;
+    const running = recovery().then((result) => { settled = true; return result; });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const waitedForTakedown = !settled;
+
+    release();
+    await takedown;
+    return { waitedForTakedown, result: await running, listingId: auction.listingId };
+  }
+
+  it('makes a relist wait, then refuse', async () => {
+    await setStatus('VOIDED');
+
+    const { waitedForTakedown, result, listingId } = await whileTakedownIsHeld(() =>
+      relistFromVoidedTransaction(w.transactionId, w.seller.id));
+
+    expect(waitedForTakedown).toBe(true);
+    expect(result.kind).toBe('wrong-state');
+    expect(await prisma.listing.count({ where: { relistedFromId: listingId } })).toBe(0);
+  });
+
+  it('makes an offer to the next bidder wait, then refuse', async () => {
+    await prisma.bid.create({ data: { auctionId: w.closedAuctionId, buyerId: w.otherBuyer.id, amount: 7_000 } });
+    await setStatus('VOIDED');
+
+    const { waitedForTakedown, result } = await whileTakedownIsHeld(() =>
+      offerToNextBidder(w.transactionId, w.seller.id));
+
+    expect(waitedForTakedown).toBe(true);
+    expect(result.kind).toBe('wrong-state');
+    expect((await txRow()).winnerId).toBe(w.buyer.id);
+  });
+});
