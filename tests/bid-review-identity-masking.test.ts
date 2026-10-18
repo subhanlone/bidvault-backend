@@ -143,8 +143,12 @@ describe('public bid feed', () => {
     // The bidder's own direct response keeps full identity -- it's their own action.
     expect(resData<{ buyerId: string }>(res).buyerId).toBe(w.buyer.id);
 
-    expect(emit).toHaveBeenCalledTimes(1);
-    const [, payload] = emit.mock.calls[0] as [string, { auctionId: string; bid: Record<string, unknown> }];
+    // The seller's own room is also told (bid:received, numbers only, tests/bid-received-notification
+    // .test.ts), so find the live-bidding broadcast by its event name instead of assuming it is the
+    // only emit.
+    const placed = emit.mock.calls.filter(([event]) => event === 'bid:placed');
+    expect(placed).toHaveLength(1);
+    const [, payload] = placed[0] as [string, { auctionId: string; bid: Record<string, unknown> }];
     expect(payload.bid).not.toHaveProperty('buyerId');
     expect(payload.bid.buyerName).toBe('Bidder 1');
   });

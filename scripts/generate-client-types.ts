@@ -94,6 +94,14 @@ function toType(schema: Schema, indent: string, path: string): string {
     return (schema.enum as unknown[]).map(quote).join(' | ');
   }
 
+  // An open set (oasdiff's `x-extensible-enum`): the values listed, for completion and for the
+  // code that handles them, and any other string, because the server may send one added since this
+  // file was generated. `string & Record<never, never>` is the usual way to keep the listed values
+  // visible in the editor instead of collapsing the union to `string`.
+  if (Array.isArray(schema['x-extensible-enum'])) {
+    return [...(schema['x-extensible-enum'] as unknown[]).map(quote), '(string & Record<never, never>)'].join(' | ');
+  }
+
   const type = schema.type;
   if (Array.isArray(type)) {
     // e.g. type: ["string","null"]
@@ -152,7 +160,7 @@ function toType(schema: Schema, indent: string, path: string): string {
   // JSON Schema says that means "any value"; zod-openapi emits it for z.unknown().
   // Checked explicitly rather than used as a fallback, so a schema with a type we do not
   // handle still throws instead of silently degrading to `unknown`.
-  const TYPE_BEARING = ['type', '$ref', 'enum', 'const', 'anyOf', 'oneOf', 'allOf', 'properties', 'items', 'additionalProperties'];
+  const TYPE_BEARING = ['type', '$ref', 'enum', 'x-extensible-enum', 'const', 'anyOf', 'oneOf', 'allOf', 'properties', 'items', 'additionalProperties'];
   if (!TYPE_BEARING.some((k) => k in schema)) return 'unknown';
 
   throw new Error(

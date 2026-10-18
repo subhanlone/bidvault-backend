@@ -282,6 +282,11 @@ model Notification {
   title     String
   message   String
   isRead    Boolean  @default(false)
+  // The auction a BID_RECEIVED notification is about: one unread row per seller per auction is kept
+  // up to date as bids arrive (a busy auction would otherwise bury everything else in the 50 rows
+  // GET /notifications returns). null for every other type. No foreign key on purpose: it is a
+  // grouping key, never joined, and must not stop an auction from being removed.
+  auctionId String?
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 

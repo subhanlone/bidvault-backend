@@ -274,7 +274,18 @@ const documentInput = {
     // renders and never re-derives a rule. Nothing existing changed: every action a row offers is
     // an endpoint that already exists (plus the client-side "List again", which fills the create
     // form from the row's `listing` block).
-    version: '11.3.0',
+    //
+    // 11.4.0, 2026-10-19, minor: the seller is told of a bid (Phase 8, B3). Additive only.
+    // NotificationType gains BID_RECEIVED: one unread notification per auction, kept up to date as
+    // bids arrive, so GET /notifications can now return that type. NotificationType is also now
+    // declared `x-extensible-enum` instead of a closed `enum` (oasdiff's own advice for a response
+    // enum that keeps growing, and the reason this addition raised a warning): the server still
+    // sends only the listed values, but clients are told to expect others, and the generated client
+    // type is open (the listed values plus any string). Nothing else changed in any request or
+    // response. The real-time half
+    // is a Socket.IO event (`bid:received`, to the seller's own room), which is outside this
+    // document and carries the auction id, the bid count and the current bid, never a bidder.
+    version: '11.4.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +

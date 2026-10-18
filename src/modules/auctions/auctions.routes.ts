@@ -13,6 +13,7 @@ import type { BidDtoType, BidWithAuctionDtoType } from '../../openapi/schemas.js
 import { buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from './auction-dto.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import { escapeLike } from '../../utils/escape-like.js';
+import { sellerRoom } from '../../socket/seller-room.js';
 import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
 
 const CANCEL_ERROR_STATUS: Record<Exclude<CancelAuctionResult['kind'], 'ok'>, [string, number]> = {
@@ -276,6 +277,8 @@ router.post(
     let result: {
       bid: Prisma.BidGetPayload<{ include: { buyer: true } }>;
       auctionTitle: string;
+      sellerId: string;
+      bidCount: number;
     };
 
     try {
@@ -361,7 +364,28 @@ router.post(
           }
         }
 
-        return { bid: createdBid, auctionTitle: row.title };
+        // Phase 8, B3: tell the seller, in the app. One unread notification per auction is kept
+        // up to date rather than one per bid: GET /notifications returns the newest 50, and a busy
+        // auction would otherwise fill all of them and bury a payment or an approval. Once the
+        // seller reads it the next bid starts a fresh one. Done under the auction row lock above,
+        // so two simultaneous bids cannot both see "no unread one yet" and create two.
+        const bidCount = row.bidCount + 1;
+        const bidsText = bidCount === 1 ? '1 bid' : `${bidCount} bids`;
+        const sellerText = {
+          title: 'New bid on your auction',
+          message: `"${row.title}" now has ${bidsText}. Latest: PKR ${amount.toLocaleString()}.`,
+        };
+        const refreshed = await tx.notification.updateMany({
+          where: { userId: row.sellerId, type: 'BID_RECEIVED', auctionId: row.id, isRead: false },
+          data: { ...sellerText, createdAt: new Date() },
+        });
+        if (refreshed.count === 0) {
+          await tx.notification.create({
+            data: { userId: row.sellerId, type: 'BID_RECEIVED', auctionId: row.id, ...sellerText },
+          });
+        }
+
+        return { bid: createdBid, auctionTitle: row.title, sellerId: row.sellerId, bidCount };
       });
     } catch (err) {
       if (err instanceof BidError) {
@@ -387,6 +411,13 @@ router.post(
     // it "that was you".
     const io = req.app.get('io') as Server | undefined;
     if (io) {
+      // To the seller's own room, so their Live Auctions screen and notification bell update at once.
+      // The numbers only: no bidder, masked or not, since nothing here needs one.
+      io.to(sellerRoom(result.sellerId)).emit('bid:received', {
+        auctionId,
+        bidCount: result.bidCount,
+        currentBid: bid.amount,
+      });
       const firstAppearances = await prisma.bid.findMany({
         where: { auctionId, buyerId: { not: null } },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
