@@ -127,7 +127,10 @@ export function deriveStage(f: ItemFacts): SellerItemStage {
     case 'CANCELLED':
       return 'CANCELLED';
     case 'CLOSED':
-      return f.reserveMet === false ? 'ENDED_RESERVE_NOT_MET' : 'ENDED_NO_BIDS';
+      // reserveMet is false for an auction that closed with no bids at all (nothing reached the
+      // reserve), but "reserve not met" says a bid fell short, and the screen would show a top bid
+      // nobody placed. No bids is its own, plainer outcome.
+      return f.reserveMet === false && (f.bidCount ?? 0) > 0 ? 'ENDED_RESERVE_NOT_MET' : 'ENDED_NO_BIDS';
     case undefined:
       // Approved with no auction should not happen (approval creates both together); showing it
       // as still under review is the honest reading rather than an unexplained gap.
@@ -217,11 +220,13 @@ const STAGE_WHERE: Record<SellerItemStage, ListingWhere> = {
   }),
   LIVE: noSaleAnd(approvedWithAuction({ status: 'ACTIVE' })),
   CANCELLED: noSaleAnd(approvedWithAuction({ status: 'CANCELLED' })),
-  ENDED_RESERVE_NOT_MET: noSaleAnd(approvedWithAuction({ status: 'CLOSED', reserveMet: false })),
-  // Explicit null-or-true rather than NOT false: in SQL, NOT (reserveMet = false) is unknown for a
-  // NULL, which would silently drop every auction that ended with no reserve set.
+  ENDED_RESERVE_NOT_MET: noSaleAnd(approvedWithAuction({ status: 'CLOSED', reserveMet: false, bidCount: { gt: 0 } })),
+  // The complement of the line above, spelled out. Explicit null-or-true rather than NOT false: in
+  // SQL, NOT (reserveMet = false) is unknown for a NULL, which would silently drop every auction
+  // that ended with no reserve set. And a reserve auction with no bids (reserveMet false, bidCount 0)
+  // belongs here, not above.
   ENDED_NO_BIDS: noSaleAnd(
-    approvedWithAuction({ status: 'CLOSED', OR: [{ reserveMet: null }, { reserveMet: true }] }),
+    approvedWithAuction({ status: 'CLOSED', OR: [{ reserveMet: null }, { reserveMet: true }, { bidCount: { lte: 0 } }] }),
   ),
 };
 

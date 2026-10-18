@@ -112,6 +112,28 @@ async function walkAllPages(
   return seen;
 }
 
+describe('the pagination helpers', () => {
+  it('a limit below one is never rounded down to nothing', async () => {
+    const { parseLimit } = await import('../src/utils/pagination.js');
+    expect(parseLimit('0.5')).toBe(1);
+    expect(parseLimit('1.9')).toBe(1);
+    expect(parseLimit('7')).toBe(7);
+    expect(parseLimit('1000')).toBe(100);
+    for (const bad of ['0', '-3', 'abc', '', undefined, 'NaN', 'Infinity']) expect(parseLimit(bad)).toBe(24);
+  });
+
+  it('a cursor whose sort value is not a date is no cursor', async () => {
+    const { decodeCursor } = await import('../src/utils/pagination.js');
+    const encode = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    expect(decodeCursor(encode({ sortValue: 'not-a-date', id: 'x' }))).toBeUndefined();
+    expect(decodeCursor(encode({ sortValue: '', id: 'x' }))).toBeUndefined();
+    expect(decodeCursor(encode({ sortValue: '2026-10-18T10:00:00.000Z', id: 'x' }))).toEqual({
+      sortValue: '2026-10-18T10:00:00.000Z',
+      id: 'x',
+    });
+  });
+});
+
 describe('GET /auctions pagination', () => {
   it('respects an explicit limit and reports a cursor when more rows exist', async () => {
     const tiedEnd = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);

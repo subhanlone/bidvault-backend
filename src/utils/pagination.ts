@@ -13,7 +13,8 @@ const DEFAULT_LIMIT = 24;
 export function parseLimit(raw: unknown, def = DEFAULT_LIMIT, max = MAX_LIMIT): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return def;
-  return Math.min(Math.floor(n), max);
+  // At least one: 0.5 is a positive number but rounds down to a page that can never hold a row.
+  return Math.min(Math.max(Math.floor(n), 1), max);
 }
 
 export interface DecodedCursor {
@@ -22,7 +23,11 @@ export interface DecodedCursor {
   id: string;
 }
 
-/** A malformed or tampered cursor is treated as "no cursor" -- first page -- not an error. */
+/**
+ * A malformed or tampered cursor is treated as "no cursor" -- first page -- not an error. That
+ * includes a well-formed one whose sort value is not a date: every caller turns it into a Date for
+ * the query, and an Invalid Date there is a 500.
+ */
 export function decodeCursor(raw: unknown): DecodedCursor | undefined {
   if (typeof raw !== 'string' || !raw) return undefined;
   try {
@@ -30,7 +35,8 @@ export function decodeCursor(raw: unknown): DecodedCursor | undefined {
     if (
       decoded && typeof decoded === 'object' &&
       typeof (decoded as DecodedCursor).sortValue === 'string' &&
-      typeof (decoded as DecodedCursor).id === 'string'
+      typeof (decoded as DecodedCursor).id === 'string' &&
+      Number.isFinite(Date.parse((decoded as DecodedCursor).sortValue))
     ) {
       return decoded as DecodedCursor;
     }
