@@ -146,10 +146,10 @@ model Listing {
   submittedAt     DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
   // Set only on a Listing that auction-control.service's relistFromVoidedTransaction created: the
-  // Listing whose unpaid sale it replaced. The once-only rule is enforced by that function (it
-  // checks under the sale's row lock, which also serialises it against offerToNextBidder); @unique
-  // is the database-level backstop. Restrict: the original is the historical record of the sale
-  // that fell through.
+  // Listing whose unpaid sale it replaced. @unique is what makes a relist once-only: that function
+  // takes the sale's row lock (which also serialises it against offerToNextBidder), creates the
+  // new Listing, and reports a violation of this constraint as wrong-state. Restrict: the
+  // original is the historical record of the sale that fell through.
   relistedFromId  String?       @unique
   relistedFrom    Listing?      @relation("ListingRelist", fields: [relistedFromId], references: [id], onDelete: Restrict)
   // The relist of this listing, if one exists (the other side of relistedFromId).

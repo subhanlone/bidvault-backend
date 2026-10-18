@@ -1,4 +1,4 @@
-import { Prisma, type Listing } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import type { Server } from 'socket.io';
 import { prisma } from '../db/prisma.js';
 import { getPlatformSettings } from './settings.service.js';
@@ -321,14 +321,55 @@ export type RelistResult =
  * skips PENDING review and goes straight to APPROVED + an ACTIVE auction, same as
  * approveOneListing's shape but without its admin-approval emails, which would misdescribe
  * what just happened.
+ *
+ * A sale can be relisted once: the new Listing records relistedFromId, which is @unique, so a
+ * second attempt (a double click, two tabs, a retry) fails that constraint and is reported as
+ * wrong-state. A relisted sale is likewise refused by offerToNextBidder.
  */
 export async function relistFromVoidedTransaction(
   transactionId: string,
   sellerId: string,
 ): Promise<RelistResult> {
   const startTime = new Date();
+  const result = await createRelist(transactionId, sellerId, startTime);
+  if (result.kind !== 'ok') return { kind: result.kind };
 
-  const result = await prisma.$transaction(async (dbTx) => {
+  try {
+    await scheduleAuctionLifecycle({ auctionId: result.auctionId, endTime: result.endTime });
+  } catch (err) {
+    console.error(`[auction-control] Failed to schedule lifecycle for relisted auction ${result.auctionId}:`, err);
+  }
+
+  return { kind: 'ok', listingId: result.listingId, auctionId: result.auctionId };
+}
+
+function isUniqueViolation(err: unknown, field: string): boolean {
+  return (
+    err instanceof Prisma.PrismaClientKnownRequestError &&
+    err.code === 'P2002' &&
+    ((err.meta?.target as string[] | undefined)?.includes(field) ?? false)
+  );
+}
+
+// BV-014: listingCode is random and unique, so a collision is internal and says nothing about what
+// the seller did. A unique violation aborts a Postgres transaction ("current transaction is
+// aborted" for every later statement), so the retry has to be a whole new transaction, not a
+// second insert inside the first. The other unique violation, relistedFromId, means this sale was
+// already relisted and is an answer, not something to retry.
+async function createRelist(transactionId: string, sellerId: string, startTime: Date) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await relistOnce(transactionId, sellerId, startTime);
+    } catch (err) {
+      if (isUniqueViolation(err, 'relistedFromId')) return { kind: 'wrong-state' as const };
+      if (!isUniqueViolation(err, 'listingCode') || attempt === 2) throw err;
+    }
+  }
+  throw new Error('unreachable: relist retry loop exited without a result');
+}
+
+async function relistOnce(transactionId: string, sellerId: string, startTime: Date) {
+  return prisma.$transaction(async (dbTx) => {
     // The same row lock offerToNextBidder takes, so the two serialise: whichever runs second
     // sees the other's effect (a relist, or a sale that is PENDING again) and is refused. The
     // checks used to run before the transaction and never marked the sale, which let a relist
@@ -345,46 +386,28 @@ export async function relistFromVoidedTransaction(
       select: { auction: { include: { listing: true } } },
     });
     const original = sale.auction.listing;
-    const alreadyRelisted = await dbTx.listing.findUnique({
-      where: { relistedFromId: original.id },
-      select: { id: true },
-    });
-    if (alreadyRelisted) return { kind: 'wrong-state' as const };
 
     const endTime = new Date(startTime.getTime() + original.durationDays * 24 * 60 * 60 * 1000);
 
-    let listing: Listing | undefined;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        listing = await dbTx.listing.create({
-          data: {
-            listingCode: generateListingCode(),
-            sellerId: original.sellerId,
-            title: original.title,
-            category: original.category,
-            condition: original.condition,
-            description: original.description,
-            startPrice: original.startPrice,
-            reservePrice: original.reservePrice,
-            minIncrement: original.minIncrement,
-            durationDays: original.durationDays,
-            imageUrl: original.imageUrl,
-            emoji: original.emoji,
-            attributes: original.attributes ?? undefined,
-            relistedFromId: original.id,
-            status: 'APPROVED',
-          },
-        });
-        break;
-      } catch (err) {
-        const isCodeCollision =
-          err instanceof Prisma.PrismaClientKnownRequestError &&
-          err.code === 'P2002' &&
-          (err.meta?.target as string[] | undefined)?.includes('listingCode');
-        if (!isCodeCollision || attempt === 2) throw err;
-      }
-    }
-    if (!listing) throw new Error('unreachable: relist listing-creation loop exited without a result');
+    const listing = await dbTx.listing.create({
+      data: {
+        listingCode: generateListingCode(),
+        sellerId: original.sellerId,
+        title: original.title,
+        category: original.category,
+        condition: original.condition,
+        description: original.description,
+        startPrice: original.startPrice,
+        reservePrice: original.reservePrice,
+        minIncrement: original.minIncrement,
+        durationDays: original.durationDays,
+        imageUrl: original.imageUrl,
+        emoji: original.emoji,
+        attributes: original.attributes ?? undefined,
+        relistedFromId: original.id,
+        status: 'APPROVED',
+      },
+    });
 
     const auction = await dbTx.auction.create({
       data: {
@@ -418,16 +441,6 @@ export async function relistFromVoidedTransaction(
 
     return { kind: 'ok' as const, listingId: listing.id, auctionId: auction.id, endTime };
   });
-
-  if (result.kind !== 'ok') return { kind: result.kind };
-
-  try {
-    await scheduleAuctionLifecycle({ auctionId: result.auctionId, endTime: result.endTime });
-  } catch (err) {
-    console.error(`[auction-control] Failed to schedule lifecycle for relisted auction ${result.auctionId}:`, err);
-  }
-
-  return { kind: 'ok', listingId: result.listingId, auctionId: result.auctionId };
 }
 
 // ---------------------------------------------------------------------------

@@ -17,6 +17,15 @@ vi.mock('resend', () => ({
   },
 }));
 
+// A real listingCode collision has odds of about 1 in 10^12, so the only way to exercise the
+// retry is to make the generator hand out a code that is already taken. Everything else about it
+// stays real; with nothing queued it is the original function.
+const codes = vi.hoisted(() => ({ next: [] as string[] }));
+vi.mock('../src/modules/listings/listings.routes.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/modules/listings/listings.routes.js')>();
+  return { ...actual, generateListingCode: () => codes.next.shift() ?? actual.generateListingCode() };
+});
+
 const { prisma } = await import('../src/db/prisma.js');
 const { redisConnection } = await import('../src/infra/redis.js');
 const { takeViolations } = await import('../src/middleware/response-contract.js');
@@ -142,6 +151,24 @@ describe('a voided sale can be relisted once', () => {
     const results = await Promise.all([relist(), relist()]);
 
     expect(results.map((r) => r.kind).sort()).toEqual(['ok', 'wrong-state']);
+    expect(await prisma.listing.count()).toBe(listingsBefore + 1);
+  });
+});
+
+describe('relist survives a listingCode collision', () => {
+  it('retries with a fresh code instead of failing the whole relist', async () => {
+    await setStatus('VOIDED');
+    // The generator's first answer is a code another listing already holds.
+    const taken = await prisma.listing.findUniqueOrThrow({ where: { id: await originalListingId() } });
+    codes.next.push(taken.listingCode);
+    const listingsBefore = await prisma.listing.count();
+
+    const result = await relist();
+
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    const created = await prisma.listing.findUniqueOrThrow({ where: { id: result.listingId } });
+    expect(created.listingCode).not.toBe(taken.listingCode);
     expect(await prisma.listing.count()).toBe(listingsBefore + 1);
   });
 });
