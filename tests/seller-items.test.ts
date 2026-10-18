@@ -16,6 +16,18 @@ vi.mock('resend', () => ({
   },
 }));
 
+// Pass-through spies: what the routes call to find the next bidder is counted, never replaced.
+const lookups = vi.hoisted(() => ({ one: vi.fn(), many: vi.fn() }));
+vi.mock('../src/services/auction-control.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/auction-control.service.js')>();
+  const many = (actual as Record<string, unknown>).findNextBidAmounts as ((...a: unknown[]) => unknown) | undefined;
+  return {
+    ...actual,
+    findNextBid: lookups.one.mockImplementation(actual.findNextBid),
+    ...(many ? { findNextBidAmounts: lookups.many.mockImplementation(many) } : {}),
+  };
+});
+
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db/prisma.js');
 const { redisConnection } = await import('../src/infra/redis.js');
@@ -489,6 +501,110 @@ describe('payment defaulted: the next bidder preview', () => {
   });
 });
 
+describe('payment defaulted: one lookup for the whole page', () => {
+  async function defaultedWith(bids: Array<[string | null, number]>, previous: string[] = []) {
+    const item = await seedItem('PAYMENT_DEFAULTED');
+    for (const [buyerId, amount] of bids) await prisma.bid.create({ data: { auctionId: item.auctionId!, buyerId, amount } });
+    if (previous.length) {
+      await prisma.auctionTransaction.update({ where: { id: item.txId! }, data: { previousWinnerIds: previous } });
+    }
+    return item;
+  }
+
+  it('asks once for the page, not once per row', async () => {
+    const items = [];
+    for (let i = 0; i < 6; i += 1) {
+      items.push(await defaultedWith([[w.buyer.id, 8_000 + i], [w.otherBuyer.id, 7_000 + i]]));
+    }
+    lookups.one.mockClear();
+    lookups.many.mockClear();
+
+    const rows = (await listTab(w.seller.token, 'action', '', 50)).items;
+
+    const defaulted = rows.filter((r) => r.stage === 'PAYMENT_DEFAULTED');
+    expect(defaulted).toHaveLength(6);
+    expect(lookups.one).not.toHaveBeenCalled();
+    expect(lookups.many).toHaveBeenCalledTimes(1);
+    items.forEach((item, i) => {
+      expect(rows.find((r) => r.itemId === item.listingId)?.sale?.nextBidderOffer).toBe(7_000 + i);
+    });
+  });
+
+  it('asks nothing when no row on the page is a defaulted sale', async () => {
+    await seedItem('LIVE');
+    lookups.many.mockClear();
+
+    await listTab(w.seller.token, 'live');
+
+    expect(lookups.many).not.toHaveBeenCalled();
+  });
+
+  it('names the same offer the offer itself would make, in every awkward case', async () => {
+    const { findNextBid } = await import('../src/services/auction-control.service.js');
+    const cases: Array<{ bids: Array<[string | null, number]>; previous?: string[] }> = [
+      { bids: [[w.buyer.id, 8_000], [w.otherBuyer.id, 7_000], [thirdBuyerId, 6_000]] },
+      { bids: [[w.buyer.id, 8_000], [w.otherBuyer.id, 7_000], [thirdBuyerId, 7_000]] }, // a tie
+      { bids: [[w.buyer.id, 8_000], [null, 7_500], [w.otherBuyer.id, 7_000]] }, // an anonymised bidder is skipped
+      { bids: [[w.buyer.id, 8_000], [w.otherBuyer.id, 7_000], [thirdBuyerId, 6_000]], previous: [w.otherBuyer.id] },
+      { bids: [[w.buyer.id, 8_000], [w.otherBuyer.id, 7_000]], previous: [w.otherBuyer.id] }, // nobody left
+      { bids: [[w.buyer.id, 8_000]] },
+      { bids: [[w.otherBuyer.id, 9_000], [w.buyer.id, 8_000], [w.otherBuyer.id, 5_000]], previous: [w.otherBuyer.id] }, // a defaulter's lower bid too
+    ];
+    const seeded = [];
+    for (const c of cases) seeded.push({ item: await defaultedWith(c.bids, c.previous), previous: c.previous ?? [] });
+
+    const rows = (await listTab(w.seller.token, 'action', '', 50)).items;
+
+    for (const { item, previous } of seeded) {
+      const row = rows.find((r) => r.itemId === item.listingId)!;
+      const expected = await findNextBid(prisma, item.auctionId!, [...previous, w.buyer.id]);
+      expect(row.sale?.nextBidderOffer).toBe(expected?.amount ?? null);
+      expect(row.actions.includes('OFFER_NEXT_BIDDER')).toBe(expected !== null);
+    }
+  });
+});
+
+describe('a reserve auction that closed with no bids', () => {
+  it('is "ended with no bids", not "reserve not met" with a top bid that nobody placed', async () => {
+    const item = await seedItem('ENDED_NO_BIDS', {
+      spec: { listing: 'APPROVED', auction: { status: 'CLOSED', reserveMet: false, bidCount: 0 } },
+    });
+
+    const row = (await listTab(w.seller.token, 'unsold')).items.find((i) => i.itemId === item.listingId);
+
+    expect(row?.stage).toBe('ENDED_NO_BIDS');
+    expect(row?.actions).toEqual(['LIST_AGAIN']);
+  });
+});
+
+describe('paging input that is not a whole number or a real cursor', () => {
+  it('a fractional limit still returns one row, with a cursor for the rest', async () => {
+    await seedItem('LIVE');
+    await seedItem('LIVE');
+
+    const res = await getItems(w.seller.token, '?tab=live&limit=0.5');
+
+    expect(res.status).toBe(200);
+    const page = resData<Paginated<Row>>(res);
+    expect(page.items).toHaveLength(1);
+    expect(page.nextCursor).not.toBeNull();
+  });
+
+  it('a cursor whose date is not a date is read as no cursor: the first page, not a 500', async () => {
+    await seedItem('LIVE');
+    await seedItem('LIVE');
+    const bad = Buffer.from(JSON.stringify({ sortValue: 'not-a-date', id: 'x' })).toString('base64url');
+
+    const res = await getItems(w.seller.token, `?tab=live&cursor=${bad}`);
+    const first = await getItems(w.seller.token, '?tab=live');
+
+    expect(res.status).toBe(200);
+    expect(resData<Paginated<Row>>(res).items.map((i) => i.itemId)).toEqual(
+      resData<Paginated<Row>>(first).items.map((i) => i.itemId),
+    );
+  });
+});
+
 describe('what a row carries', () => {
   it('has the actions each stage allows and the facts the screen shows', async () => {
     const expected = await seedAllStages();
@@ -561,11 +677,20 @@ describe('search', () => {
     expect(pages).toBe(3);
   });
 
-  it('over 100 characters is a 400', async () => {
+  it('over 100 characters is a 400 in the documented validation shape', async () => {
+    takeViolations();
     const res = await getItems(w.seller.token, `?tab=live&search=${'x'.repeat(101)}`);
     expect(res.status).toBe(400);
-    expect(resError(res).error).toMatch(/100 characters/);
+    expect(resError(res).error).toBe('Validation error');
+    expect((res.body as { details: unknown }).details).toEqual({ search: [expect.stringMatching(/100 characters/)] });
+    // The response is checked against the published schema as it leaves the server.
+    expect(takeViolations()).toEqual([]);
     expect((await getItems(w.seller.token, `?tab=live&search=${'x'.repeat(100)}`)).status).toBe(200);
+  });
+
+  it('counts the characters sent, as the published schema does: padding cannot hide an overlong search', async () => {
+    const padded = `${'x'.repeat(100)}${'%20'.repeat(5)}`;
+    expect((await getItems(w.seller.token, `?tab=live&search=${padded}`)).status).toBe(400);
   });
 
   it('an empty or blank search is no filter', async () => {

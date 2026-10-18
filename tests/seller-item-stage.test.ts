@@ -42,6 +42,7 @@ const CASES: Array<[string, SellerItemStage, SellerItemTab, ItemFacts]> = [
   ['buyer never paid, then removed', 'REMOVED', 'closed', facts({ listingStatus: 'REMOVED', auctionStatus: 'CLOSED', txnStatus: 'VOIDED' })],
   ['reserve not met', 'ENDED_RESERVE_NOT_MET', 'unsold', facts({ auctionStatus: 'CLOSED', reserveMet: false, bidCount: 2 })],
   ['no bids', 'ENDED_NO_BIDS', 'unsold', facts({ auctionStatus: 'CLOSED', reserveMet: null, bidCount: 0 })],
+  ['reserve set but no bids', 'ENDED_NO_BIDS', 'unsold', facts({ auctionStatus: 'CLOSED', reserveMet: false, bidCount: 0 })],
   ['cancelled auction', 'CANCELLED', 'unsold', facts({ auctionStatus: 'CANCELLED' })],
 ];
 

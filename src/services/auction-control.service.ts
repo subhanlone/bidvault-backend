@@ -252,6 +252,31 @@ export async function findNextBid(db: Prisma.TransactionClient, auctionId: strin
 }
 
 /**
+ * What findNextBid would find, for many unpaid sales in one query, as the amount only: the
+ * seller-items list previews the offer for every defaulted sale on a page, and one lookup per row
+ * made a page of them a page of queries. Each sale brings its own exclusions (the current winner
+ * and everyone it was already taken away from), so they travel with it as JSON rather than as one
+ * shared list. The rule is findNextBid's, written in SQL: a bid by a real (not anonymised) buyer
+ * who is not excluded, highest amount; seller-items.test.ts checks the two agree on ties,
+ * anonymised bidders and earlier defaulters. A sale nobody could be offered to has no entry.
+ */
+export async function findNextBidAmounts(
+  sales: Array<{ auctionId: string; excludeBuyerIds: string[] }>,
+): Promise<Map<string, number>> {
+  if (sales.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<Array<{ auctionId: string; amount: number | null }>>`
+    SELECT t."auctionId", (
+      SELECT max(b.amount) FROM "Bid" b
+      WHERE b."auctionId" = t."auctionId"
+        AND b."buyerId" IS NOT NULL
+        AND b."buyerId" <> ALL (t."excludeBuyerIds")
+    ) AS amount
+    FROM jsonb_to_recordset(${JSON.stringify(sales)}::jsonb) AS t("auctionId" text, "excludeBuyerIds" text[])
+  `;
+  return new Map(rows.flatMap((r) => (r.amount === null ? [] : [[r.auctionId, r.amount] as const])));
+}
+
+/**
  * Locks the item's original listing and says whether an admin has taken it down. Both recovery
  * actions refuse a removed item: the takedown is the moderators' decision, and a fresh
  * (auto-approved) copy or a second sale would undo it. The lock is the listing row's, the same one

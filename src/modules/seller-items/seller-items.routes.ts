@@ -2,14 +2,14 @@ import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
-import { failField, ok } from '../../utils/response.js';
+import { failValidation, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { decodeCursor, parseLimit, slicePage, type DecodedCursor } from '../../utils/pagination.js';
 import { escapeLike } from '../../utils/escape-like.js';
 import { SELLER_ITEMS_SEARCH_MAX } from '../../openapi/requests.js';
 import type { SellerItemDtoType, SellerItemsSummaryDtoType } from '../../openapi/schemas.js';
 import { buildWatcherCountMap } from '../auctions/auction-dto.js';
-import { findNextBid } from '../../services/auction-control.service.js';
+import { findNextBidAmounts } from '../../services/auction-control.service.js';
 import { disputeResponseDueAt } from '../../services/fulfillment.service.js';
 import { getPlatformSettings } from '../../services/settings.service.js';
 import {
@@ -139,79 +139,86 @@ function factsOf(row: ItemRow, hasNextBidder: boolean): ItemFacts {
 
 async function toDtos(rows: ItemRow[]): Promise<SellerItemDtoType[]> {
   const auctionIds = rows.flatMap((r) => (r.auction ? [r.auction.id] : []));
-  const [watchers, settings] = await Promise.all([buildWatcherCountMap(auctionIds), getPlatformSettings()]);
 
-  return Promise.all(
-    rows.map(async (row) => {
-      const auction = row.auction ?? undefined;
-      const sale = auction?.transactions[0];
+  // The one stage that needs more than the row: who an unpaid sale could be offered to. Asked once
+  // for the whole page, by the same rule as the offer itself (findNextBid), so the preview cannot
+  // promise what the offer would refuse.
+  const defaulted = rows.flatMap((row) => {
+    const auction = row.auction ?? undefined;
+    const sale = auction?.transactions[0];
+    return auction && sale && deriveStage(factsOf(row, false)) === 'PAYMENT_DEFAULTED'
+      ? [{ auctionId: auction.id, excludeBuyerIds: [...sale.previousWinnerIds, sale.winnerId] }]
+      : [];
+  });
 
-      // The one stage that needs a second query: who an unpaid sale could be offered to, chosen by
-      // the same findNextBid the offer itself uses, so the preview cannot promise what the offer
-      // would refuse.
-      let next = null;
-      if (auction && sale && deriveStage(factsOf(row, false)) === 'PAYMENT_DEFAULTED') {
-        next = await findNextBid(prisma, auction.id, [...sale.previousWinnerIds, sale.winnerId]);
-      }
+  const [watchers, settings, offers] = await Promise.all([
+    buildWatcherCountMap(auctionIds),
+    getPlatformSettings(),
+    defaulted.length > 0 ? findNextBidAmounts(defaulted) : new Map<string, number>(),
+  ]);
 
-      const facts = factsOf(row, next !== null);
-      const stage = deriveStage(facts);
+  return rows.map((row) => {
+    const auction = row.auction ?? undefined;
+    const sale = auction?.transactions[0];
+    const next = auction ? (offers.get(auction.id) ?? null) : null;
 
-      return {
-        itemId: row.id,
-        listingCode: row.listingCode,
-        title: row.title,
-        category: row.category,
-        condition: row.condition,
-        emoji: row.emoji ?? '📦',
-        imageUrl: row.imageUrl ?? undefined,
-        tab: STAGE_TAB[stage],
-        stage,
-        actions: allowedActions(stage, facts),
-        listing: {
-          description: row.description,
-          startPrice: row.startPrice,
-          reservePrice: row.reservePrice ?? undefined,
-          minIncrement: row.minIncrement,
-          durationDays: row.durationDays,
-          submittedAt: row.submittedAt.toISOString(),
-          rejectionReason: row.rejectionReason ?? undefined,
-          attributes: (row.attributes as Record<string, string | number> | null) ?? undefined,
-        },
-        auction: auction && {
-          auctionId: auction.id,
-          status: auction.status,
-          currentBid: auction.currentBid,
-          bidCount: auction.bidCount,
-          watcherCount: watchers.get(auction.id) ?? 0,
-          reserveMet: auction.reserveMet,
-          startTime: auction.startTime.toISOString(),
-          endTime: auction.endTime.toISOString(),
-        },
-        sale: sale && {
-          transactionId: sale.id,
-          status: sale.status,
-          finalAmount: sale.finalAmount,
-          buyerName: sale.winner.name,
-          deliveryAddress: sale.deliveryAddress ?? undefined,
-          deliveryPhone: sale.deliveryPhone ?? undefined,
-          paidAt: sale.paidAt?.toISOString(),
-          shippedAt: sale.shippedAt?.toISOString(),
-          reviewDeadlineAt: sale.shippedAt
-            ? new Date(sale.shippedAt.getTime() + settings.reviewTimeoutHours * 60 * 60 * 1000).toISOString()
-            : undefined,
-          disputeReason: sale.dispute?.reason,
-          disputeResponseDueAt: sale.dispute ? disputeResponseDueAt(sale.dispute.createdAt).toISOString() : undefined,
-          disputeSellerResponse: sale.dispute?.sellerResponse ?? undefined,
-          disputeSellerRespondedAt: sale.dispute?.sellerRespondedAt?.toISOString(),
-          payoutAt: sale.ledgerEntry?.createdAt.toISOString(),
-          reviewStars: sale.review?.stars,
-          nextBidderOffer: next?.amount ?? null,
-        },
-        relistedAs: row.relistedAs ? { listingId: row.relistedAs.id, listingCode: row.relistedAs.listingCode } : undefined,
-      };
-    }),
-  );
+    const facts = factsOf(row, next !== null);
+    const stage = deriveStage(facts);
+
+    return {
+      itemId: row.id,
+      listingCode: row.listingCode,
+      title: row.title,
+      category: row.category,
+      condition: row.condition,
+      emoji: row.emoji ?? '📦',
+      imageUrl: row.imageUrl ?? undefined,
+      tab: STAGE_TAB[stage],
+      stage,
+      actions: allowedActions(stage, facts),
+      listing: {
+        description: row.description,
+        startPrice: row.startPrice,
+        reservePrice: row.reservePrice ?? undefined,
+        minIncrement: row.minIncrement,
+        durationDays: row.durationDays,
+        submittedAt: row.submittedAt.toISOString(),
+        rejectionReason: row.rejectionReason ?? undefined,
+        attributes: (row.attributes as Record<string, string | number> | null) ?? undefined,
+      },
+      auction: auction && {
+        auctionId: auction.id,
+        status: auction.status,
+        currentBid: auction.currentBid,
+        bidCount: auction.bidCount,
+        watcherCount: watchers.get(auction.id) ?? 0,
+        reserveMet: auction.reserveMet,
+        startTime: auction.startTime.toISOString(),
+        endTime: auction.endTime.toISOString(),
+      },
+      sale: sale && {
+        transactionId: sale.id,
+        status: sale.status,
+        finalAmount: sale.finalAmount,
+        buyerName: sale.winner.name,
+        deliveryAddress: sale.deliveryAddress ?? undefined,
+        deliveryPhone: sale.deliveryPhone ?? undefined,
+        paidAt: sale.paidAt?.toISOString(),
+        shippedAt: sale.shippedAt?.toISOString(),
+        reviewDeadlineAt: sale.shippedAt
+          ? new Date(sale.shippedAt.getTime() + settings.reviewTimeoutHours * 60 * 60 * 1000).toISOString()
+          : undefined,
+        disputeReason: sale.dispute?.reason,
+        disputeResponseDueAt: sale.dispute ? disputeResponseDueAt(sale.dispute.createdAt).toISOString() : undefined,
+        disputeSellerResponse: sale.dispute?.sellerResponse ?? undefined,
+        disputeSellerRespondedAt: sale.dispute?.sellerRespondedAt?.toISOString(),
+        payoutAt: sale.ledgerEntry?.createdAt.toISOString(),
+        reviewStars: sale.review?.stars,
+        nextBidderOffer: next,
+      },
+      relistedAs: row.relistedAs ? { listingId: row.relistedAs.id, listingCode: row.relistedAs.listingCode } : undefined,
+    };
+  });
 }
 
 router.get(
@@ -225,9 +232,13 @@ router.get(
     // on a list instead of an error.
     const tab = SELLER_ITEM_TABS.find((t) => t === req.query.tab) ?? 'action';
 
-    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
-    if (search.length > SELLER_ITEMS_SEARCH_MAX) {
-      failField(res, 'search', `Search must be ${SELLER_ITEMS_SEARCH_MAX} characters or fewer.`, 400);
+    // The length limit is the published schema's (maxLength on the raw value), so it is checked
+    // before trimming: a request the contract calls invalid must not be accepted just because the
+    // excess is whitespace.
+    const rawSearch = typeof req.query.search === 'string' ? req.query.search : '';
+    const search = rawSearch.trim();
+    if (rawSearch.length > SELLER_ITEMS_SEARCH_MAX) {
+      failValidation(res, { search: [`Search must be ${SELLER_ITEMS_SEARCH_MAX} characters or fewer.`] });
       return;
     }
 
