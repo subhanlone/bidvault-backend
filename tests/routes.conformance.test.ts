@@ -647,6 +647,20 @@ describe('payments', () => {
     expect(resData<{ status: string }>(res).status).toBe('DISPUTED');
   });
 
+  it('POST /payments/{transactionId}/dispute/response', async () => {
+    hit('post', '/payments/{transactionId}/dispute/response');
+    await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'DISPUTED' } });
+    await prisma.dispute.create({
+      data: { transactionId: w.transactionId, raisedByUserId: w.buyer.id, reason: 'Item never arrived.' },
+    });
+    const res = await request(app)
+      .post(api(`/payments/${w.transactionId}/dispute/response`))
+      .set(auth(w.seller.token))
+      .send({ response: 'Shipped with tracking; the courier marked it delivered.' });
+    expect(res.status).toBe(200);
+    expect(resData<{ transactionId: string }>(res).transactionId).toBe(w.transactionId);
+  });
+
   it('POST /payments/{transactionId}/offer-next-bidder', async () => {
     hit('post', '/payments/{transactionId}/offer-next-bidder');
     await prisma.bid.create({ data: { auctionId: w.closedAuctionId, buyerId: w.otherBuyer.id, amount: 7_000 } });

@@ -198,6 +198,12 @@ export const raiseDisputeSchema = z
   .object({ reason: z.string().trim().min(10).max(1000) })
   .meta({ id: 'RaiseDisputeRequest' });
 
+// The seller's one response to that dispute: the same bounds as the buyer's reason, so neither
+// side can write more than the other.
+export const respondToDisputeSchema = z
+  .object({ response: z.string().trim().min(10).max(1000) })
+  .meta({ id: 'RespondToDisputeRequest' });
+
 // ---- reviews ----------------------------------------------------------------------
 
 export const createReviewSchema = z

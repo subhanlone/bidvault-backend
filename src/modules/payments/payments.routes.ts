@@ -6,7 +6,7 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
-import { payTransactionSchema, raiseDisputeSchema } from '../../openapi/requests.js';
+import { payTransactionSchema, raiseDisputeSchema, respondToDisputeSchema } from '../../openapi/requests.js';
 import { dispatchEmail, sendPaymentCompletedEmail } from '../../services/email.service.js';
 import { chargeCard } from '../../services/payment-gateway.service.js';
 import { getPlatformSettings } from '../../services/settings.service.js';
@@ -15,7 +15,9 @@ import {
   markShipped,
   confirmDelivery,
   raiseDispute,
+  respondToDispute,
   REVENUE_STATUSES,
+  type RespondToDisputeResult,
 } from '../../services/fulfillment.service.js';
 import { offerToNextBidder, relistFromVoidedTransaction } from '../../services/auction-control.service.js';
 
@@ -339,6 +341,28 @@ router.post(
       return;
     }
     ok(res, { transactionId: req.params.transactionId, status: 'DISPUTED' });
+  }),
+);
+
+const DISPUTE_RESPONSE_ERROR_STATUS: Record<Exclude<RespondToDisputeResult['kind'], 'ok'>, [string, number]> = {
+  'not-found': ['Transaction not found.', 404],
+  forbidden: ['Forbidden.', 403],
+  'no-open-dispute': ['There is no open dispute on this sale to respond to.', 409],
+  'already-responded': ['You have already responded to this dispute.', 409],
+};
+
+router.post(
+  '/:transactionId/dispute/response',
+  requireAuth(['SELLER']),
+  validateBody(respondToDisputeSchema),
+  asyncHandler<z.infer<typeof respondToDisputeSchema>>(async (req, res) => {
+    const result = await respondToDispute(req.params.transactionId, req.auth!.userId, req.body.response);
+    if (result.kind !== 'ok') {
+      const [message, status] = DISPUTE_RESPONSE_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { transactionId: req.params.transactionId, sellerRespondedAt: result.respondedAt.toISOString() });
   }),
 );
 

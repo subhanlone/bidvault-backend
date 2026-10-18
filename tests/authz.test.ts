@@ -144,6 +144,11 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/payments/{transactionId}/dispute',
     url: (w) => `/payments/${w.transactionId}/dispute`, allow: ['BUYER'],
     body: () => ({ reason: 'Authz probe dispute reason.' }) },
+  // w.transactionId has no dispute, so the seller's own call ends at 409 here; the success path,
+  // the ownership check and the one-response rule are in tests/dispute-response.test.ts.
+  { method: 'post', contractPath: '/payments/{transactionId}/dispute/response',
+    url: (w) => `/payments/${w.transactionId}/dispute/response`, allow: ['SELLER'],
+    body: () => ({ response: 'Authz probe dispute response.' }) },
   // Phase 6 (A5): w.transactionId is PENDING, not VOIDED, so neither route's happy path fires
   // here — see tests/payment-deadline-recovery.test.ts for that and the ownership check.
   { method: 'post', contractPath: '/payments/{transactionId}/offer-next-bidder',

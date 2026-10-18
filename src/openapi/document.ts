@@ -258,7 +258,15 @@ const documentInput = {
     // many watchlists hold the auction): trust signals modelled on what eBay shows beside an item.
     // The two new AuctionDto fields are required in responses, which oasdiff reports as a
     // warning, not a break: no existing client can fail to parse a response for gaining a field.
-    version: '11.1.0',
+    //
+    // 11.2.0, 2026-10-18, minor: the seller's response to a dispute. Additive only. New: POST
+    // /payments/{transactionId}/dispute/response (the seller's one response, 10 to 1000
+    // characters like the buyer's reason, final once sent, refused when there is no open dispute
+    // or one was already sent). AdminDispute (GET /admin/disputes) gains sellerResponse and
+    // sellerRespondedAt (both optional) and responseDueAt, createdAt plus a 3 day soft window.
+    // responseDueAt is required in responses, which oasdiff reports as a warning, not a break.
+    // The window is advice, not a rule: resolving a dispute is never held up by it.
+    version: '11.2.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -867,6 +875,27 @@ const documentInput = {
           403: forbidden,
           404: notFound,
           409: errBody('The transaction is not SHIPPED'),
+        },
+      },
+    },
+    '/payments/{transactionId}/dispute/response': {
+      post: {
+        tags: ['Payments'],
+        security: [{ bearerAuth: [] }],
+        summary:
+          "Seller's one response to the buyer's dispute on their own sale — final once sent, informs the admin, gates nothing",
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        requestBody: jsonRequest(R.respondToDisputeSchema),
+        responses: {
+          200: okBody(
+            z.object({ transactionId: z.string(), sellerRespondedAt: z.iso.datetime() }),
+            'Response recorded',
+          ),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('There is no open dispute on this sale, or the seller has already responded'),
         },
       },
     },

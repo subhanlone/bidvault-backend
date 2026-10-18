@@ -432,6 +432,12 @@ export const AdminDisputeDto = z
     finalAmount: z.number().int(),
     reason: z.string(),
     createdAt: isoDateTime,
+    // The seller's one response, absent until they send it. It never blocks resolving.
+    sellerResponse: z.string().optional(),
+    sellerRespondedAt: isoDateTime.optional(),
+    // createdAt + the soft response window. After it the admin may decide without a response, but
+    // nothing stops them deciding earlier either.
+    responseDueAt: isoDateTime,
   })
   .meta({ id: 'AdminDispute' });
 

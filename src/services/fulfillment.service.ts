@@ -190,6 +190,18 @@ export async function confirmDelivery(
 // Dispute
 // ---------------------------------------------------------------------------
 
+/**
+ * How long the seller is told they have to respond to a dispute. A soft window: it is shown to
+ * the seller ("respond within 3 days") and to the admin (answered, or window passed), but nothing
+ * waits for it or enforces it -- resolveDispute works at any time, with or without a response.
+ * eBay gives a seller 3 business days and Stripe 7 to 21 days; calendar days keep this simple.
+ */
+export const DISPUTE_RESPONSE_WINDOW_DAYS = 3;
+
+export function disputeResponseDueAt(raisedAt: Date): Date {
+  return new Date(raisedAt.getTime() + DISPUTE_RESPONSE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+}
+
 export type RaiseDisputeResult =
   | { kind: 'ok' }
   | { kind: 'not-found' }
@@ -213,7 +225,7 @@ export async function raiseDispute(
     });
 
     await tx.auctionTransaction.update({ where: { id: row.id }, data: { status: 'DISPUTED' } });
-    await tx.dispute.create({
+    const dispute = await tx.dispute.create({
       data: { transactionId: row.id, raisedByUserId: buyerId, reason },
     });
 
@@ -222,21 +234,74 @@ export async function raiseDispute(
         userId: row.sellerId,
         type: 'DISPUTE_RAISED',
         title: 'A dispute was raised',
-        message: `The buyer reported a problem with "${full.auction.title}": "${reason}"`,
+        message: `The buyer reported a problem with "${full.auction.title}": "${reason}". You can respond within ${DISPUTE_RESPONSE_WINDOW_DAYS} days.`,
       },
     });
 
-    return { kind: 'ok' as const, auctionTitle: full.auction.title, seller: full.seller };
+    return {
+      kind: 'ok' as const,
+      auctionTitle: full.auction.title,
+      seller: full.seller,
+      respondBy: disputeResponseDueAt(dispute.createdAt),
+    };
   });
 
   if (outcome.kind === 'ok') {
     dispatchEmail(
-      sendDisputeRaisedEmail(outcome.seller, { auctionTitle: outcome.auctionTitle, reason }),
+      sendDisputeRaisedEmail(outcome.seller, {
+        auctionTitle: outcome.auctionTitle,
+        reason,
+        respondBy: outcome.respondBy,
+        windowDays: DISPUTE_RESPONSE_WINDOW_DAYS,
+      }),
       `dispute-raised (${transactionId})`,
     );
     return { kind: 'ok' };
   }
   return outcome;
+}
+
+export type RespondToDisputeResult =
+  | { kind: 'ok'; respondedAt: Date }
+  | { kind: 'not-found' }
+  | { kind: 'forbidden' }
+  | { kind: 'no-open-dispute' }
+  | { kind: 'already-responded' };
+
+/**
+ * The seller's one response to a dispute on their own sale: stored once, never edited, and only
+ * while the dispute is OPEN. It informs the admin's decision and gates nothing.
+ *
+ * The Dispute row is locked, not the transaction: resolveDispute locks that same row, so a
+ * response and a resolution cannot interleave -- a response is stored before the admin's decision
+ * commits or is refused, never written onto a dispute that has already been decided.
+ */
+export async function respondToDispute(
+  transactionId: string,
+  sellerId: string,
+  response: string,
+): Promise<RespondToDisputeResult> {
+  return prisma.$transaction(async (tx) => {
+    const sale = await tx.auctionTransaction.findUnique({
+      where: { id: transactionId },
+      select: { sellerId: true },
+    });
+    if (!sale) return { kind: 'not-found' as const };
+    if (sale.sellerId !== sellerId) return { kind: 'forbidden' as const };
+
+    const [dispute] = await tx.$queryRaw<Array<{ id: string; status: string; sellerResponse: string | null }>>`
+      SELECT id, status, "sellerResponse" FROM "Dispute" WHERE "transactionId" = ${transactionId} FOR UPDATE
+    `;
+    if (!dispute || dispute.status !== 'OPEN') return { kind: 'no-open-dispute' as const };
+    if (dispute.sellerResponse !== null) return { kind: 'already-responded' as const };
+
+    const respondedAt = new Date();
+    await tx.dispute.update({
+      where: { id: dispute.id },
+      data: { sellerResponse: response, sellerRespondedAt: respondedAt },
+    });
+    return { kind: 'ok' as const, respondedAt };
+  });
 }
 
 // ---------------------------------------------------------------------------
