@@ -210,6 +210,10 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/reviews/{reviewId}/reply', url: () => '/reviews/placeholder-review-id/reply',
     allow: ['SELLER'], body: () => ({ reply: 'Authz probe' }) },
 
+  // ---- seller items (read model; ownership scoping and ordering are in tests/seller-items.test.ts) --
+  { method: 'get', contractPath: '/seller/items', url: () => '/seller/items?tab=live', allow: ['SELLER'] },
+  { method: 'get', contractPath: '/seller/items/summary', url: () => '/seller/items/summary', allow: ['SELLER'] },
+
   // ---- settings --------------------------------------------------------------------------
   { method: 'get', contractPath: '/settings', url: () => '/settings', allow: ['ADMIN'] },
   { method: 'put', contractPath: '/settings', url: () => '/settings', allow: ['ADMIN'],

@@ -710,6 +710,29 @@ describe('notifications', () => {
   });
 });
 
+// ---- seller items -----------------------------------------------------------------
+
+describe('seller items', () => {
+  it('GET /seller/items', async () => {
+    hit('get', '/seller/items');
+    // The seeded seller has a live auction, so the live tab is not empty and a real row is validated
+    // against the documented SellerItem shape by the response-contract middleware.
+    const res = await request(app).get(api('/seller/items?tab=live')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    const page = resData<Paginated<{ stage: string }>>(res);
+    expect(page.items.length).toBeGreaterThan(0);
+    expect(page.items.every((i) => i.stage === 'LIVE')).toBe(true);
+    expect(page).toHaveProperty('nextCursor');
+  });
+
+  it('GET /seller/items/summary', async () => {
+    hit('get', '/seller/items/summary');
+    const res = await request(app).get(api('/seller/items/summary')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(resData<{ counts: Record<string, number> }>(res).counts.live).toBe(1);
+  });
+});
+
 // ---- reviews ----------------------------------------------------------------------
 
 describe('reviews', () => {
