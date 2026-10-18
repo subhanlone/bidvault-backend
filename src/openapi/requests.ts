@@ -3,6 +3,8 @@ import { strictEmail, lookupEmail } from '../config/email.js';
 import { isAcceptablePassword } from '../security/password-policy.js';
 // Side-effect-free (only imports zod), same as this module -- safe for api:contract codegen.
 import { CATEGORIES } from '../modules/listings/category-attributes.js';
+// Side-effect-free too (type-only imports from Prisma).
+import { SELLER_ITEM_TABS } from '../modules/seller-items/seller-item-stage.js';
 
 /**
  * Every request body the API accepts.
@@ -283,6 +285,19 @@ export const resolveDisputeSchema = z
 export const paginationQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).optional(),
   cursor: z.string().optional(),
+});
+
+/** The longest search a seller may send to GET /seller/items. */
+export const SELLER_ITEMS_SEARCH_MAX = 100;
+
+/**
+ * GET /seller/items: the pagination pair, which tab (a missing or unknown value means "action",
+ * like /auctions/mine's status, so a stale link lands on a list instead of an error), and an
+ * optional search over title and listing code inside that tab.
+ */
+export const sellerItemsQuerySchema = paginationQuerySchema.extend({
+  tab: z.enum(SELLER_ITEM_TABS).optional(),
+  search: z.string().max(SELLER_ITEMS_SEARCH_MAX).optional(),
 });
 
 /** GET /auctions/mine: the pagination pair plus which of the seller's auctions (default ACTIVE). */

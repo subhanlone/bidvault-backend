@@ -12,6 +12,7 @@ import adminRoutes from './modules/admin/admin.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
 import reviewRoutes from './modules/reviews/reviews.routes.js';
 import settingsRoutes from './modules/settings/settings.routes.js';
+import sellerItemsRoutes from './modules/seller-items/seller-items.routes.js';
 import { env, clientOrigins } from './config/env.js';
 import { maintenanceGuard } from './middleware/maintenance.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
@@ -48,6 +49,7 @@ export const routeMounts: Array<[string, express.Router]> = [
   ['/api/v1/notifications', notificationRoutes],
   ['/api/v1/reviews', reviewRoutes],
   ['/api/v1/settings', settingsRoutes],
+  ['/api/v1/seller/items', sellerItemsRoutes],
 ];
 
 export function createApp() {

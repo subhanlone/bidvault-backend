@@ -266,7 +266,15 @@ const documentInput = {
     // sellerRespondedAt (both optional) and responseDueAt, createdAt plus a 3 day soft window.
     // responseDueAt is required in responses, which oasdiff reports as a warning, not a break.
     // The window is advice, not a rule: resolving a dispute is never held up by it.
-    version: '11.2.0',
+    //
+    // 11.3.0, 2026-10-18, minor: the seller's "My Items" read model. Additive only. New: GET
+    // /seller/items (cursor-paginated, one row per listing whatever its stage, six tabs, optional
+    // search) and GET /seller/items/summary (the tab counts), both SELLER only. A row carries its
+    // stage, tab and the actions allowed right now, decided once on the server, so the screen
+    // renders and never re-derives a rule. Nothing existing changed: every action a row offers is
+    // an endpoint that already exists (plus the client-side "List again", which fills the create
+    // form from the row's `listing` block).
+    version: '11.3.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -491,6 +499,36 @@ const documentInput = {
         requestParams: { query: R.mineAuctionsQuerySchema },
         responses: {
           200: okBody(S.PaginatedAuctionsDto, "A page of the seller's auctions"),
+          401: unauthorized,
+          403: forbidden,
+        },
+      },
+    },
+    '/seller/items': {
+      get: {
+        tags: ['Seller'],
+        security: [{ bearerAuth: [] }],
+        summary:
+          "Cursor-paginated. The signed-in seller's inventory, one row per listing whatever its stage, split into six tabs " +
+          '(a missing or unknown tab means action). Live and action list the soonest-ending first, sold and unsold the most ' +
+          'recently ended first, review and closed the most recently submitted first. `search` matches title or listing code ' +
+          'inside the tab, with % and _ taken literally',
+        requestParams: { query: R.sellerItemsQuerySchema },
+        responses: {
+          200: okBody(S.PaginatedSellerItemsDto, "A page of the seller's items"),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+        },
+      },
+    },
+    '/seller/items/summary': {
+      get: {
+        tags: ['Seller'],
+        security: [{ bearerAuth: [] }],
+        summary: "How many items the signed-in seller has on each tab (the tab badges); never narrowed by a search",
+        responses: {
+          200: okBody(S.SellerItemsSummaryDto, 'Item counts per tab'),
           401: unauthorized,
           403: forbidden,
         },

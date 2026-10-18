@@ -1,4 +1,10 @@
 import { z } from 'zod';
+// Side-effect-free (type-only imports from Prisma), so safe for api:contract codegen.
+import {
+  SELLER_ITEM_ACTIONS,
+  SELLER_ITEM_STAGES,
+  SELLER_ITEM_TABS,
+} from '../modules/seller-items/seller-item-stage.js';
 
 /**
  * BV-029: the envelope every cursor-paginated list endpoint answers with. `nextCursor` is
@@ -636,8 +642,101 @@ export const PaginatedBidsDto = paginated('PaginatedBids', PublicBidDto);
 export const PaginatedListingsDto = paginated('PaginatedListings', ListingDto);
 export const PaginatedAdminUsersDto = paginated('PaginatedAdminUsers', AdminUserDto);
 
+// ---- seller "My Items" (read model) ------------------------------------------------------
+// One Listing -> at most one Auction -> at most one sale (all three links are unique), so one
+// listing is exactly one row. `stage`, `tab` and `actions` are decided once on the server
+// (modules/seller-items/seller-item-stage.ts); the screen renders them and never re-derives a
+// rule. Only ever served to the owning seller, which is why the reserve price is in it.
+
+export const SellerItemTab = z.enum(SELLER_ITEM_TABS).meta({ id: 'SellerItemTab' });
+export const SellerItemStage = z.enum(SELLER_ITEM_STAGES).meta({ id: 'SellerItemStage' });
+export const SellerItemAction = z.enum(SELLER_ITEM_ACTIONS).meta({ id: 'SellerItemAction' });
+
+export const SellerItemDto = z
+  .object({
+    /** The listing's id. */
+    itemId: z.string(),
+    listingCode: z.string(),
+    title: z.string(),
+    category: z.string(),
+    condition: ItemCondition,
+    emoji: z.string(),
+    imageUrl: z.string().optional(),
+    tab: SellerItemTab,
+    stage: SellerItemStage,
+    /** What the seller may do right now; first is the primary action. */
+    actions: z.array(SellerItemAction),
+    /** The submitted form, complete enough to pre-fill a new listing from it ("List again"). */
+    listing: z.object({
+      description: z.string(),
+      startPrice: z.number().int(),
+      reservePrice: z.number().int().optional(),
+      minIncrement: z.number().int(),
+      durationDays: z.number().int(),
+      submittedAt: isoDateTime,
+      /** The admin's reason, for a REJECTED or REMOVED listing. */
+      rejectionReason: z.string().optional(),
+      attributes: CategoryAttributes.optional(),
+    }),
+    auction: z
+      .object({
+        auctionId: z.string(),
+        status: AuctionStatus,
+        currentBid: z.number().int(),
+        bidCount: z.number().int(),
+        watcherCount: z.number().int(),
+        /** null: no reserve was set, or the auction has not closed yet. */
+        reserveMet: z.boolean().nullable(),
+        startTime: isoDateTime,
+        endTime: isoDateTime,
+      })
+      .optional(),
+    sale: z
+      .object({
+        transactionId: z.string(),
+        status: TransactionStatus,
+        finalAmount: z.number().int(),
+        buyerName: z.string(),
+        deliveryAddress: z.string().optional(),
+        deliveryPhone: z.string().optional(),
+        paidAt: isoDateTime.optional(),
+        shippedAt: isoDateTime.optional(),
+        reviewDeadlineAt: isoDateTime.optional(),
+        disputeReason: z.string().optional(),
+        /** createdAt + the soft response window; advice, nothing waits for it. */
+        disputeResponseDueAt: isoDateTime.optional(),
+        disputeSellerResponse: z.string().optional(),
+        disputeSellerRespondedAt: isoDateTime.optional(),
+        payoutAt: isoDateTime.optional(),
+        reviewStars: z.number().int().optional(),
+        /** What the next bidder would pay if offered an unpaid sale; null when there is nobody to offer to, or it is not an unpaid sale. */
+        nextBidderOffer: z.number().int().nullable(),
+      })
+      .optional(),
+    /** The new listing created from this one's unpaid sale. */
+    relistedAs: z.object({ listingId: z.string(), listingCode: z.string() }).optional(),
+  })
+  .meta({ id: 'SellerItem' });
+
+export const PaginatedSellerItemsDto = paginated('PaginatedSellerItems', SellerItemDto);
+
+export const SellerItemsSummaryDto = z
+  .object({
+    counts: z.object({
+      action: z.number().int(),
+      review: z.number().int(),
+      live: z.number().int(),
+      sold: z.number().int(),
+      unsold: z.number().int(),
+      closed: z.number().int(),
+    }),
+  })
+  .meta({ id: 'SellerItemsSummary' });
+
 export type UserDtoType = z.infer<typeof UserDto>;
 export type AuctionDtoType = z.infer<typeof AuctionDto>;
 export type ListingDtoType = z.infer<typeof ListingDto>;
+export type SellerItemDtoType = z.infer<typeof SellerItemDto>;
+export type SellerItemsSummaryDtoType = z.infer<typeof SellerItemsSummaryDto>;
 export type BidDtoType = z.infer<typeof BidDto>;
 export type BidWithAuctionDtoType = z.infer<typeof BidWithAuctionDto>;

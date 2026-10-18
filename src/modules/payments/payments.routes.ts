@@ -245,6 +245,7 @@ router.post(
           deliveryPhone,
           paymentReference: charge.reference,
           status: 'COMPLETED',
+          paidAt: new Date(),
           lastPaymentError: null,
         },
       });

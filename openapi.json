@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "11.2.0",
+    "version": "11.3.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -1120,6 +1120,175 @@
                     },
                     "data": {
                       "$ref": "#/components/schemas/PaginatedAuctions"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/seller/items": {
+      "get": {
+        "tags": [
+          "Seller"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Cursor-paginated. The signed-in seller's inventory, one row per listing whatever its stage, split into six tabs (a missing or unknown tab means action). Live and action list the soonest-ending first, sold and unsold the most recently ended first, review and closed the most recently submitted first. `search` matches title or listing code inside the tab, with % and _ taken literally",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tab",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "action",
+                "review",
+                "live",
+                "sold",
+                "unsold",
+                "closed"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the seller's items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/PaginatedSellerItems"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/seller/items/summary": {
+      "get": {
+        "tags": [
+          "Seller"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "How many items the signed-in seller has on each tab (the tab badges); never narrowed by a search",
+        "responses": {
+          "200": {
+            "description": "Item counts per tab",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/SellerItemsSummary"
                     }
                   },
                   "required": [
@@ -6657,6 +6826,401 @@
         },
         "description": "Category-specific fields; keys vary by category."
       },
+      "PaginatedSellerItems": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SellerItem"
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "additionalProperties": false
+      },
+      "SellerItem": {
+        "type": "object",
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "listingCode": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "condition": {
+            "$ref": "#/components/schemas/ItemCondition"
+          },
+          "emoji": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "type": "string"
+          },
+          "tab": {
+            "$ref": "#/components/schemas/SellerItemTab"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/SellerItemStage"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SellerItemAction"
+            }
+          },
+          "listing": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "startPrice": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "reservePrice": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "minIncrement": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "durationDays": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "submittedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "rejectionReason": {
+                "type": "string"
+              },
+              "attributes": {
+                "$ref": "#/components/schemas/CategoryAttributes"
+              }
+            },
+            "required": [
+              "description",
+              "startPrice",
+              "minIncrement",
+              "durationDays",
+              "submittedAt"
+            ],
+            "additionalProperties": false
+          },
+          "auction": {
+            "type": "object",
+            "properties": {
+              "auctionId": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/components/schemas/AuctionStatus"
+              },
+              "currentBid": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "bidCount": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "watcherCount": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "reserveMet": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "startTime": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "endTime": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              }
+            },
+            "required": [
+              "auctionId",
+              "status",
+              "currentBid",
+              "bidCount",
+              "watcherCount",
+              "reserveMet",
+              "startTime",
+              "endTime"
+            ],
+            "additionalProperties": false
+          },
+          "sale": {
+            "type": "object",
+            "properties": {
+              "transactionId": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/components/schemas/TransactionStatus"
+              },
+              "finalAmount": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "buyerName": {
+                "type": "string"
+              },
+              "deliveryAddress": {
+                "type": "string"
+              },
+              "deliveryPhone": {
+                "type": "string"
+              },
+              "paidAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "shippedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "reviewDeadlineAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "disputeReason": {
+                "type": "string"
+              },
+              "disputeResponseDueAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "disputeSellerResponse": {
+                "type": "string"
+              },
+              "disputeSellerRespondedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "payoutAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "reviewStars": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "nextBidderOffer": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "transactionId",
+              "status",
+              "finalAmount",
+              "buyerName",
+              "nextBidderOffer"
+            ],
+            "additionalProperties": false
+          },
+          "relistedAs": {
+            "type": "object",
+            "properties": {
+              "listingId": {
+                "type": "string"
+              },
+              "listingCode": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "listingId",
+              "listingCode"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "itemId",
+          "listingCode",
+          "title",
+          "category",
+          "condition",
+          "emoji",
+          "tab",
+          "stage",
+          "actions",
+          "listing"
+        ],
+        "additionalProperties": false
+      },
+      "SellerItemTab": {
+        "type": "string",
+        "enum": [
+          "action",
+          "review",
+          "live",
+          "sold",
+          "unsold",
+          "closed"
+        ]
+      },
+      "SellerItemStage": {
+        "type": "string",
+        "enum": [
+          "UNDER_REVIEW",
+          "REJECTED",
+          "REMOVED",
+          "LIVE",
+          "AWAITING_PAYMENT",
+          "NEEDS_SHIPPING",
+          "SHIPPED",
+          "DELIVERED",
+          "DISPUTE_AWAITING_RESPONSE",
+          "DISPUTED",
+          "REFUNDED",
+          "PAYMENT_DEFAULTED",
+          "RELISTED",
+          "ENDED_RESERVE_NOT_MET",
+          "ENDED_NO_BIDS",
+          "CANCELLED"
+        ]
+      },
+      "SellerItemAction": {
+        "type": "string",
+        "enum": [
+          "WITHDRAW",
+          "EDIT_RESUBMIT",
+          "CANCEL_AUCTION",
+          "MARK_SHIPPED",
+          "RESPOND_TO_DISPUTE",
+          "OFFER_NEXT_BIDDER",
+          "RELIST",
+          "LIST_AGAIN",
+          "VIEW_INVOICE"
+        ]
+      },
+      "TransactionStatus": {
+        "type": "string",
+        "enum": [
+          "PENDING",
+          "COMPLETED",
+          "FAILED",
+          "VOIDED",
+          "SHIPPED",
+          "DELIVERED",
+          "DISPUTED",
+          "REFUNDED"
+        ]
+      },
+      "SellerItemsSummary": {
+        "type": "object",
+        "properties": {
+          "counts": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "review": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "live": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "sold": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "unsold": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "closed": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "action",
+              "review",
+              "live",
+              "sold",
+              "unsold",
+              "closed"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "counts"
+        ],
+        "additionalProperties": false
+      },
       "PaginatedBidsWithAuction": {
         "type": "object",
         "properties": {
@@ -7208,19 +7772,6 @@
           "reviewed"
         ],
         "additionalProperties": false
-      },
-      "TransactionStatus": {
-        "type": "string",
-        "enum": [
-          "PENDING",
-          "COMPLETED",
-          "FAILED",
-          "VOIDED",
-          "SHIPPED",
-          "DELIVERED",
-          "DISPUTED",
-          "REFUNDED"
-        ]
       },
       "SellerStats": {
         "type": "object",
