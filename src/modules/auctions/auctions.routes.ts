@@ -12,6 +12,7 @@ import { placeBidSchema, cancelAuctionSchema } from '../../openapi/requests.js';
 import type { BidDtoType, BidWithAuctionDtoType } from '../../openapi/schemas.js';
 import { buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from './auction-dto.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
+import { escapeLike } from '../../utils/escape-like.js';
 import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
 
 const CANCEL_ERROR_STATUS: Record<Exclude<CancelAuctionResult['kind'], 'ok'>, [string, number]> = {
@@ -41,12 +42,13 @@ router.get(
     // what a direct API call returns by default. Still overridable: ?status=CLOSED etc. works.
     filters.status = status && ['ACTIVE', 'CLOSED', 'CANCELLED'].includes(status) ? status : 'ACTIVE';
     if (category) {
-      filters.category = { contains: category, mode: 'insensitive' };
+      filters.category = { contains: escapeLike(category), mode: 'insensitive' };
     }
     if (search) {
+      const term = escapeLike(search);
       filters.OR = [
-        { title: { contains: search, mode: 'insensitive' } },
-        { description: { contains: search, mode: 'insensitive' } },
+        { title: { contains: term, mode: 'insensitive' } },
+        { description: { contains: term, mode: 'insensitive' } },
       ];
     }
 
