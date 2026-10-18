@@ -8,6 +8,7 @@ import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
+import { escapeLike } from '../../utils/escape-like.js';
 import {
   voidTransactionSchema,
   anonymizeUserSchema,
@@ -405,9 +406,10 @@ router.get(
 
     const filters: Prisma.UserWhereInput = {};
     if (search) {
+      const term = escapeLike(search);
       filters.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
+        { name: { contains: term, mode: 'insensitive' } },
+        { email: { contains: term, mode: 'insensitive' } },
       ];
     }
 
