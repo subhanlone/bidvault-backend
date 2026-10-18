@@ -689,16 +689,23 @@ export async function sendDeliveryConfirmedEmail(
 
 export async function sendDisputeRaisedEmail(
   seller: { email: string; name: string },
-  details: { auctionTitle: string; reason: string },
+  details: { auctionTitle: string; reason: string; respondBy: Date; windowDays: number },
 ): Promise<void> {
   if (!(await alertsEnabled())) return;
+  const respondBy = details.respondBy.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'Asia/Karachi',
+  });
   await send(seller.email, `A dispute was raised — "${details.auctionTitle}"`, base('Dispute raised', `
     ${h1('The buyer has reported a problem')}
     ${p(`Hi ${seller.name}, the buyer has raised a dispute on "${details.auctionTitle}" instead of confirming receipt.`)}
     ${divider()}
     ${p(`Reason given: "${details.reason}"`)}
     ${divider()}
-    ${p('Your payout for this sale is on hold until an admin reviews it. No action is needed from you right now.')}
+    ${p('Your payout for this sale is on hold until an admin reviews it.')}
+    ${p(`You can add your side from My Items within ${details.windowDays} days, by ${respondBy}. You get one response and it is final once sent. An admin may decide after that date, with or without it.`)}
   `));
 }
 

@@ -361,16 +361,21 @@ model LedgerEntry {
 // SHIPPED (see TransactionStatus) -- is enough for a buyer-initiated report reviewed by an
 // admin; there is no need for a multi-message ticket thread on top of it yet.
 model Dispute {
-  id               String             @id @default(cuid())
-  transactionId    String             @unique
-  transaction      AuctionTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
-  raisedByUserId   String
-  reason           String
-  status           DisputeStatus      @default(OPEN)
-  resolvedByUserId String?
-  resolutionNote   String?
-  createdAt        DateTime           @default(now())
-  resolvedAt       DateTime?
+  id                String             @id @default(cuid())
+  transactionId     String             @unique
+  transaction       AuctionTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  raisedByUserId    String
+  reason            String
+  // The seller's one response (fulfillment.service's respondToDispute): written once, never edited,
+  // and only while the dispute is OPEN. It does not gate anything -- an admin can resolve with or
+  // without it, inside or after the DISPUTE_RESPONSE_WINDOW_DAYS window measured from createdAt.
+  sellerResponse    String?
+  sellerRespondedAt DateTime?
+  status            DisputeStatus      @default(OPEN)
+  resolvedByUserId  String?
+  resolutionNote    String?
+  createdAt         DateTime           @default(now())
+  resolvedAt        DateTime?
 
   @@index([status])
 }

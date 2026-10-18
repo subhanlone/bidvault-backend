@@ -19,7 +19,7 @@ import {
 } from '../../openapi/requests.js';
 import { checkAccountDeletable, anonymizeUser } from '../../services/account.service.js';
 import { dispatchEmail, sendAccountDeletedEmail } from '../../services/email.service.js';
-import { resolveDispute, REVENUE_STATUSES } from '../../services/fulfillment.service.js';
+import { disputeResponseDueAt, resolveDispute, REVENUE_STATUSES } from '../../services/fulfillment.service.js';
 import {
   cancelAuction,
   takedownListing,
@@ -362,6 +362,9 @@ router.get(
       finalAmount: d.transaction.finalAmount,
       reason: d.reason,
       createdAt: d.createdAt.toISOString(),
+      sellerResponse: d.sellerResponse ?? undefined,
+      sellerRespondedAt: d.sellerRespondedAt?.toISOString(),
+      responseDueAt: disputeResponseDueAt(d.createdAt).toISOString(),
     })));
   }),
 );
