@@ -319,6 +319,11 @@ model AuctionTransaction {
   // window (BV-040) is measured from here, not from COMPLETED -- the buyer's clock should not
   // run while the seller hasn't sent anything yet.
   shippedAt         DateTime?
+  // When the charge succeeded (POST /payments/:id/pay). Shown to the seller as "paid <time ago>":
+  // the platform has no ship-by deadline, so how long a paid sale has waited is the only
+  // urgency signal there is. null on a sale that has not been paid, and on one created before
+  // this column existed.
+  paidAt            DateTime?
   // Every winner this sale has already been taken away from, oldest first. offerToNextBidder
   // re-targets this one row at a lower bidder (auctionId is @@unique), which overwrites winnerId,
   // so without this list nothing remembers who defaulted and the offer could go back to them.

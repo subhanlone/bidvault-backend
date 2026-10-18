@@ -278,6 +278,7 @@ export async function offerToNextBidder(
         finalAmount: nextBid.amount,
         status: 'PENDING',
         paymentReference: null,
+        paidAt: null,
         lastPaymentError: null,
         deliveryAddress: null,
         deliveryPhone: null,
@@ -471,7 +472,9 @@ export async function takedownListing(
   if (listing.status !== 'APPROVED') return { kind: 'wrong-state' };
 
   await prisma.$transaction(async (tx) => {
-    await tx.listing.update({ where: { id: listing.id }, data: { status: 'REMOVED' } });
+    // The reason goes on the listing as well as into the audit log: the seller can read the
+    // listing, never the audit log, and a removal with no explanation is what they saw before.
+    await tx.listing.update({ where: { id: listing.id }, data: { status: 'REMOVED', rejectionReason: reason } });
     await tx.auditLog.create({
       data: {
         actorUserId: adminUserId,
