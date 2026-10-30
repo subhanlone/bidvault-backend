@@ -83,6 +83,8 @@ export function toAuctionDto(
     sellerRating: stats?.rating ?? null,
     sellerSales: stats ? stats.salesCount : null,
     sellerMemberSince: auction.seller.createdAt.toISOString(),
+    sellerCity: auction.seller.sellerCity,
+    sellerProvince: auction.seller.sellerProvince,
     startPrice: auction.startPrice,
     currentBid: auction.currentBid,
     minIncrement: auction.minIncrement,

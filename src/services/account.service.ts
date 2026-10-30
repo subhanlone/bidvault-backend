@@ -75,6 +75,18 @@ export async function anonymizeUser(userId: string): Promise<void> {
         notifyOutbid: false,
         notifyWins: false,
         notifyNews: false,
+        // B5: everything a person gave to become a seller goes, and so does the capability. The
+        // seller's past auctions and sales stay (they are records the platform must keep), but
+        // they now belong to a "Deleted user" with no city, phone or bio attached.
+        isSeller: false,
+        sellerSince: null,
+        sellerTermsAcceptedAt: null,
+        sellerTermsVersion: null,
+        ageConfirmedAt: null,
+        sellerCity: null,
+        sellerProvince: null,
+        sellerPhone: null,
+        sellerBio: null,
       },
     }),
     prisma.refreshToken.updateMany({

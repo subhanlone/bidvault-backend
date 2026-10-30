@@ -223,7 +223,7 @@ async function toDtos(rows: ItemRow[]): Promise<SellerItemDtoType[]> {
 
 router.get(
   '/',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
     const sellerId = req.auth!.userId;
     const limit = parseLimit(req.query.limit);
@@ -258,7 +258,7 @@ router.get(
 // The tab badges: always the whole inventory, whatever search the list is showing.
 router.get(
   '/summary',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
     const sellerId = req.auth!.userId;
     const entries = await Promise.all(

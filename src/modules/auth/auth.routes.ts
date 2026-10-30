@@ -3,7 +3,6 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import type { UserRole } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
@@ -18,7 +17,7 @@ import { validateBody } from '../../middleware/validate.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { env } from '../../config/env.js';
 import { OTP_EXPIRY_MS } from '../../config/otp.js';
-import type { UserDtoType } from '../../openapi/schemas.js';
+import { sanitizeUser } from './user-dto.js';
 import {
   registerSchema,
   verifyEmailSchema,
@@ -87,17 +86,6 @@ async function recordResetMiss(tokenId: string): Promise<void> {
 // Window length and its rationale live in config/otp.ts, shared with the email templates.
 
 // See toAuctionDto — the return type is the published contract, so drift is a build error.
-function sanitizeUser(user: { id: string; name: string; email: string; role: UserRole; isEmailVerified: boolean; createdAt: Date }): UserDtoType {
-  return {
-    userId: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    isEmailVerified: user.isEmailVerified,
-    createdAt: user.createdAt.toISOString(),
-  };
-}
-
 function getRequestMeta(req: Request): { ipAddress?: string; userAgent?: string } {
   const ipAddress = req.ip || req.socket.remoteAddress || undefined;
   const userAgent = req.headers['user-agent']?.slice(0, 255);
@@ -202,7 +190,11 @@ router.post(
           name,
           email: normalizedEmail,
           passwordHash: await hashPassword(password),
-          role,
+          // Every account starts as a plain one; the legacy SELLER value (older clients) also
+          // grants the capability, as the migration did for accounts that already existed.
+          role: role ?? 'BUYER',
+          isSeller: role === 'SELLER',
+          sellerSince: role === 'SELLER' ? new Date() : null,
           isEmailVerified: false,
         },
       });

@@ -733,6 +733,17 @@ describe('seller items', () => {
   });
 });
 
+describe('seller account', () => {
+  it('POST /seller/enroll', async () => {
+    hit('post', '/seller/enroll');
+    const res = await request(app).post(api('/seller/enroll')).set(auth(w.buyer.token)).send({
+      acceptTerms: true, termsVersion: '2026-10', confirmAdult: true, city: 'Lahore', province: 'Punjab',
+    });
+    expect(res.status).toBe(200);
+    expect(resData<{ user: { isSeller: boolean } }>(res).user.isSeller).toBe(true);
+  });
+});
+
 // ---- reviews ----------------------------------------------------------------------
 
 describe('reviews', () => {
@@ -793,8 +804,9 @@ describe('settings', () => {
     const res = await request(app).get(api('/settings/public'));
     expect(res.status).toBe(200);
     // Exactly what an anonymous visitor needs. The listing limits are sellers' business and live
-    // on GET /listings/limits; nothing else may be spread in from the settings row.
-    expect(Object.keys(resData<Record<string, unknown>>(res)).sort()).toEqual(['maintenanceMode', 'supportEmail']);
+    // on GET /listings/limits; nothing else may be spread in from the settings row. The seller terms
+    // version is the one thing a signed-in non-seller needs before they can enrol.
+    expect(Object.keys(resData<Record<string, unknown>>(res)).sort()).toEqual(['maintenanceMode', 'sellerTermsVersion', 'supportEmail']);
   });
 
   it('GET /settings', async () => {

@@ -333,7 +333,7 @@ describe('tabs', () => {
 
   it('a seller with no items gets empty tabs and zero counts', async () => {
     const fresh = await prisma.user.create({
-      data: { name: 'Fresh Seller', email: 'fresh-seller@test.local', passwordHash: 'x', role: 'SELLER', isEmailVerified: true },
+      data: { name: 'Fresh Seller', email: 'fresh-seller@test.local', passwordHash: 'x', role: 'SELLER', isSeller: true, isEmailVerified: true },
     });
     const token = signAccessToken({ sub: fresh.id, role: 'SELLER' });
 
@@ -406,11 +406,20 @@ describe('who can call it', () => {
     expect(total).toBe(await prisma.listing.count({ where: { sellerId: w.otherSeller.id } }));
   });
 
-  it('a buyer gets 403 and an anonymous caller 401', async () => {
-    expect((await getItems(w.buyer.token, '')).status).toBe(403);
+  it('an anonymous caller gets 401 and an admin 403; a buyer who never sold sees an empty inventory', async () => {
     expect((await getItems(undefined, '')).status).toBe(401);
-    expect((await request(app).get(api('/seller/items/summary')).set(auth(w.buyer.token))).status).toBe(403);
+    expect((await getItems(w.admin.token, '')).status).toBe(403);
     expect((await request(app).get(api('/seller/items/summary'))).status).toBe(401);
+    expect((await request(app).get(api('/seller/items/summary')).set(auth(w.admin.token))).status).toBe(403);
+
+    // One account buys and sells (B5), so there is no "not a seller" refusal here: the list is
+    // scoped to the caller's own listings, and a buyer has none.
+    const own = await getItems(w.buyer.token, '');
+    expect(own.status).toBe(200);
+    expect(resData<{ items: unknown[] }>(own).items).toEqual([]);
+    const summary = await request(app).get(api('/seller/items/summary')).set(auth(w.buyer.token));
+    expect(summary.status).toBe(200);
+    expect(Object.values(resData<{ counts: Record<string, number> }>(summary).counts).every((n) => n === 0)).toBe(true);
   });
 
   it('the response never contains sellerEmail', async () => {

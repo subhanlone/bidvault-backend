@@ -151,7 +151,7 @@ router.delete(
 // old review whenever they notice it.
 router.post(
   '/:reviewId/reply',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   validateBody(replyToReviewSchema),
   asyncHandler<z.infer<typeof replyToReviewSchema>>(async (req, res) => {
     const review = await prisma.sellerReview.findUnique({ where: { id: req.params.reviewId } });

@@ -1,3 +1,5 @@
+import { hasSellerCapability } from '../services/user-status.service.js';
+
 /**
  * The room a seller's own events are delivered to ("someone bid on your auction").
  *
@@ -12,8 +14,15 @@ interface RoomSocket {
   join: (room: string) => unknown;
 }
 
-export function registerSellerRoom(socket: RoomSocket): void {
-  if (socket.data.role === 'SELLER' && socket.data.userId) {
-    void socket.join(sellerRoom(socket.data.userId));
-  }
+/**
+ * Whether the account may list is read from the database (B5), not from the role in the token the
+ * socket connected with: a buyer who became a seller after signing in is a seller here too.
+ */
+export async function registerSellerRoom(
+  socket: RoomSocket,
+  isSeller: (userId: string) => Promise<boolean> = hasSellerCapability,
+): Promise<void> {
+  const { userId, role } = socket.data;
+  if (!userId || role === 'ADMIN') return;
+  if (await isSeller(userId)) await socket.join(sellerRoom(userId));
 }

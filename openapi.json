@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "11.4.1",
+    "version": "11.5.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -1312,6 +1312,103 @@
           },
           "403": {
             "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/seller/enroll": {
+      "post": {
+        "tags": [
+          "Seller"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Become a seller. Instant, no approval step. Needs the terms accepted (at the version in GET /settings/public), a confirmation of being 18 or older, and a city and province; phone and bio are optional. Idempotent: an account that is already a seller gets its record back unchanged",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollSellerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The account, now a seller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "$ref": "#/components/schemas/User"
+                        }
+                      },
+                      "required": [
+                        "user"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The seller terms changed since the form was shown",
             "content": {
               "application/json": {
                 "schema": {
@@ -5753,8 +5850,7 @@
         "required": [
           "name",
           "email",
-          "password",
-          "role"
+          "password"
         ]
       },
       "VerifyEmailRequest": {
@@ -5931,6 +6027,56 @@
           "ACTIVE",
           "CLOSED",
           "CANCELLED"
+        ]
+      },
+      "EnrollSellerRequest": {
+        "type": "object",
+        "properties": {
+          "acceptTerms": {
+            "type": "boolean",
+            "const": true
+          },
+          "termsVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "confirmAdult": {
+            "type": "boolean",
+            "const": true
+          },
+          "city": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 60
+          },
+          "province": {
+            "type": "string",
+            "enum": [
+              "Punjab",
+              "Sindh",
+              "Khyber Pakhtunkhwa",
+              "Balochistan",
+              "Islamabad Capital Territory",
+              "Gilgit-Baltistan",
+              "Azad Jammu and Kashmir"
+            ]
+          },
+          "phone": {
+            "type": "string",
+            "pattern": "^\\+?[0-9][0-9\\s-]{6,18}[0-9]$"
+          },
+          "bio": {
+            "type": "string",
+            "maxLength": 280
+          }
+        },
+        "required": [
+          "acceptTerms",
+          "termsVersion",
+          "confirmAdult",
+          "city",
+          "province"
         ]
       },
       "PlaceBidRequest": {
@@ -6476,6 +6622,21 @@
           "isEmailVerified": {
             "type": "boolean"
           },
+          "isSeller": {
+            "type": "boolean"
+          },
+          "sellerSince": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -6488,6 +6649,8 @@
           "email",
           "role",
           "isEmailVerified",
+          "isSeller",
+          "sellerSince",
           "createdAt"
         ],
         "additionalProperties": false
@@ -6713,6 +6876,26 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
           },
+          "sellerCity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sellerProvince": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "startPrice": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -6787,6 +6970,8 @@
           "sellerRating",
           "sellerSales",
           "sellerMemberSince",
+          "sellerCity",
+          "sellerProvince",
           "startPrice",
           "currentBid",
           "minIncrement",
@@ -7715,6 +7900,9 @@
           "sellerName": {
             "type": "string"
           },
+          "sellerPhone": {
+            "type": "string"
+          },
           "finalAmount": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -7980,6 +8168,9 @@
             "type": "string"
           },
           "sellerEmail": {
+            "type": "string"
+          },
+          "sellerPhone": {
             "type": "string"
           },
           "amount": {
@@ -8254,11 +8445,15 @@
             "type": "string",
             "format": "email",
             "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "sellerTermsVersion": {
+            "type": "string"
           }
         },
         "required": [
           "maintenanceMode",
-          "supportEmail"
+          "supportEmail",
+          "sellerTermsVersion"
         ],
         "additionalProperties": false
       },

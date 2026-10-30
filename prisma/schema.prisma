@@ -93,37 +93,53 @@ enum DisputeStatus {
 // SetNull already handles a buyer's own bids safely; this comment is the placeholder the audit
 // asked for until the rest of that route exists.
 model User {
-  id                 String                   @id @default(cuid())
-  name               String
-  email              String                   @unique
-  passwordHash       String
-  role               UserRole
+  id                    String                   @id @default(cuid())
+  name                  String
+  email                 String                   @unique
+  passwordHash          String
+  role                  UserRole
   // C2, Phase 7.
-  status             UserStatus               @default(ACTIVE)
-  isEmailVerified    Boolean                  @default(false)
-  notifyOutbid       Boolean                  @default(true)
-  notifyWins         Boolean                  @default(true)
-  notifyNews         Boolean                  @default(false)
+  status                UserStatus               @default(ACTIVE)
+  isEmailVerified       Boolean                  @default(false)
+  notifyOutbid          Boolean                  @default(true)
+  notifyWins            Boolean                  @default(true)
+  notifyNews            Boolean                  @default(false)
   // A seller's accumulated payout balance from the dummy gateway — no external account, no
   // onboarding step. Credited by fulfillment.service.ts's creditSeller() when a sale reaches
   // DELIVERED; each credit's own record lives in LedgerEntry below, this is the running total.
-  ledgerBalance      Int                      @default(0)
-  createdAt          DateTime                 @default(now())
-  updatedAt          DateTime                 @updatedAt
-  listings           Listing[]                @relation("SellerListings")
-  bids               Bid[]                    @relation("BuyerBids")
-  watchlistEntries   Watchlist[]
-  auctionsAsSeller   Auction[]                @relation("SellerAuctions")
-  emailTokens        EmailVerificationToken[]
-  passwordResetCodes PasswordResetToken[]
-  refreshTokens      RefreshToken[]
-  notifications      Notification[]
-  winningTxns        AuctionTransaction[]     @relation("WinnerTransactions")
-  sellingTxns        AuctionTransaction[]     @relation("SellerTransactions")
-  auditLogs          AuditLog[]               @relation("ActorAuditLogs")
-  reviewsGiven       SellerReview[]           @relation("BuyerReviews")
-  reviewsReceived    SellerReview[]           @relation("SellerReviews")
-  ledgerEntries      LedgerEntry[]
+  ledgerBalance         Int                      @default(0)
+  // B5: one account buys and sells. `role` is now only the legacy spelling (BUYER, SELLER, ADMIN);
+  // whether an account may list is isSeller, read from here on every request and never from the
+  // access token, so a grant or a revoke takes effect on the next request. The seller* columns are
+  // what the person gave when they became a seller; all are cleared on anonymisation (BV-018).
+  isSeller              Boolean                  @default(false)
+  sellerSince           DateTime?
+  sellerTermsAcceptedAt DateTime?
+  sellerTermsVersion    String?
+  ageConfirmedAt        DateTime?
+  // City and province are public on the auction page. Phone is private: the winning buyer sees it
+  // only once the sale is paid. Bio is shown on the seller's profile. None of it is a CNIC or a
+  // bank detail (those are deliberately not collected).
+  sellerCity            String?
+  sellerProvince        String?
+  sellerPhone           String?
+  sellerBio             String?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+  listings              Listing[]                @relation("SellerListings")
+  bids                  Bid[]                    @relation("BuyerBids")
+  watchlistEntries      Watchlist[]
+  auctionsAsSeller      Auction[]                @relation("SellerAuctions")
+  emailTokens           EmailVerificationToken[]
+  passwordResetCodes    PasswordResetToken[]
+  refreshTokens         RefreshToken[]
+  notifications         Notification[]
+  winningTxns           AuctionTransaction[]     @relation("WinnerTransactions")
+  sellingTxns           AuctionTransaction[]     @relation("SellerTransactions")
+  auditLogs             AuditLog[]               @relation("ActorAuditLogs")
+  reviewsGiven          SellerReview[]           @relation("BuyerReviews")
+  reviewsReceived       SellerReview[]           @relation("SellerReviews")
+  ledgerEntries         LedgerEntry[]
 }
 
 model Listing {

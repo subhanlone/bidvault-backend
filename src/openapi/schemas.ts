@@ -116,6 +116,10 @@ export const UserDto = z
     email: z.email(),
     role: UserRole,
     isEmailVerified: z.boolean(),
+    /** Whether this account may list items. Read from the database, not from the token. */
+    isSeller: z.boolean(),
+    /** When the account became a seller, or null if it is not one. */
+    sellerSince: isoDateTime.nullable(),
     createdAt: isoDateTime,
   })
   .meta({ id: 'User' });
@@ -136,6 +140,9 @@ export const AuctionDto = z
     sellerSales: z.number().int().nullable(),
     /** When the seller's account was created ("Member since"), an ISO date-time. */
     sellerMemberSince: isoDateTime,
+    /** Where the seller is, from their seller details. Null for an account that has not given them. */
+    sellerCity: z.string().nullable(),
+    sellerProvince: z.string().nullable(),
     startPrice: z.number().int(),
     currentBid: z.number().int(),
     minIncrement: z.number().int(),
@@ -235,6 +242,8 @@ export const PublicSettingsDto = z
   .object({
     maintenanceMode: z.boolean(),
     supportEmail: z.email(),
+    /** The seller terms version the "Become a seller" form must send back. */
+    sellerTermsVersion: z.string(),
   })
   .meta({ id: 'PublicSettings' });
 
@@ -342,6 +351,8 @@ export const WonTransactionDto = z
     auctionEmoji: z.string(),
     auctionImageUrl: z.string(),
     sellerName: z.string(),
+    /** The seller's phone, only once the sale is paid and only if they gave one. */
+    sellerPhone: z.string().optional(),
     finalAmount: z.number().int(),
     status: TransactionStatus,
     /**
@@ -424,6 +435,8 @@ export const InvoiceDto = z
     buyerEmail: z.string(),
     sellerName: z.string(),
     sellerEmail: z.string(),
+    /** Only once the sale is paid and only if the seller gave one. */
+    sellerPhone: z.string().optional(),
     amount: z.number().int(),
     status: TransactionStatus,
     paymentReference: z.string().optional(),

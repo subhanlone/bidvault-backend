@@ -44,7 +44,9 @@ io.use((socket, next) => {
 
 io.on('connection', (socket) => {
   registerAuctionSubscriptions(socket);
-  registerSellerRoom(socket);
+  void registerSellerRoom(socket).catch((err: unknown) => {
+    console.error('Could not place socket in seller room:', err);
+  });
 });
 
 httpServer.listen(env.PORT, () => {
