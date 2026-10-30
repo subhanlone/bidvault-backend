@@ -304,6 +304,11 @@ const documentInput = {
     // seller can now also bid, pay and review, so routes that used to refuse a SELLER token for
     // being "not a buyer" now accept it, and the seller capability is read from the database on
     // every request, not from the token. The `role` enum is unchanged and is removed in 12.0.0.
+    // Also in this release: dependencies were upgraded for security advisories (zod 4.6.7, among
+    // others), and zod now writes slightly different `pattern` strings for `format: date-time`
+    // (seconds are required, as every value the server sends already has them) and `format: email`.
+    // Only the published regex text changed; no field was added, removed or retyped by it, and
+    // oasdiff reports no breaking change.
     version: '11.5.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
