@@ -5,6 +5,7 @@ import { ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { updateSettingsSchema } from '../../openapi/requests.js';
+import { SELLER_TERMS_VERSION } from '../../config/seller.js';
 import { getPlatformSettings, updatePlatformSettings } from '../../services/settings.service.js';
 
 const router = Router();
@@ -24,6 +25,7 @@ router.get(
     ok(res, {
       maintenanceMode: s.maintenanceMode,
       supportEmail: s.supportEmail,
+      sellerTermsVersion: SELLER_TERMS_VERSION,
     });
   }),
 );

@@ -5,6 +5,7 @@ import { isAcceptablePassword } from '../security/password-policy.js';
 import { CATEGORIES } from '../modules/listings/category-attributes.js';
 // Side-effect-free too (type-only imports from Prisma).
 import { SELLER_ITEM_TABS } from '../modules/seller-items/seller-item-stage.js';
+import { SELLER_BIO_MAX, SELLER_PROVINCES } from '../config/seller.js';
 
 /**
  * Every request body the API accepts.
@@ -66,7 +67,12 @@ export const registerSchema = z
       .regex(NAME_REGEX, 'Name can only contain letters, spaces, hyphens, and apostrophes'),
     email: strictEmail,
     password: strongPassword,
-    role: z.enum(['BUYER', 'SELLER']),
+    /**
+     * Deprecated, optional. Every account can buy, and becomes a seller with POST /seller/enroll.
+     * Still accepted so an older client keeps working: SELLER makes the account a seller straight
+     * away (without the details enrolment collects), BUYER and an omitted value make a plain one.
+     */
+    role: z.enum(['BUYER', 'SELLER']).optional(),
   })
   .meta({ id: 'RegisterRequest' });
 
@@ -304,3 +310,30 @@ export const sellerItemsQuerySchema = paginationQuerySchema.extend({
 export const mineAuctionsQuerySchema = paginationQuerySchema.extend({
   status: z.enum(['ACTIVE', 'CLOSED', 'CANCELLED']).optional(),
 });
+
+// A bio is shown on the seller's public profile, so it must not carry a way to be contacted
+// around the platform: no link, no e-mail address, no phone number.
+const BIO_CONTACT_PATTERN = /https?:\/\/|www\.|@|\d[\d\s().-]{6,}\d/i;
+
+export const enrollSellerSchema = z
+  .object({
+    acceptTerms: z.literal(true, { error: 'You must accept the seller terms' }),
+    /** The version of the terms the form displayed (GET /settings/public → sellerTermsVersion). */
+    termsVersion: z.string().trim().min(1).max(40),
+    confirmAdult: z.literal(true, { error: 'You must confirm you are 18 or older' }),
+    city: z.string().trim().min(2).max(60),
+    province: z.enum(SELLER_PROVINCES),
+    /** Private. Shown only to the buyer who has paid for one of this seller's items. */
+    phone: z
+      .string()
+      .trim()
+      .regex(/^\+?[0-9][0-9\s-]{6,18}[0-9]$/, 'Enter a valid phone number')
+      .optional(),
+    bio: z
+      .string()
+      .trim()
+      .max(SELLER_BIO_MAX)
+      .refine((v) => !BIO_CONTACT_PATTERN.test(v), 'Do not put links, e-mail addresses or phone numbers in your bio')
+      .optional(),
+  })
+  .meta({ id: 'EnrollSellerRequest' });

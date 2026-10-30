@@ -85,7 +85,7 @@ router.get(
 // Registered before /:auctionId, which would otherwise take "mine" for an auction id.
 router.get(
   '/mine',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
     const sellerId = req.auth!.userId;
     const limit = parseLimit(req.query.limit);
@@ -463,7 +463,7 @@ router.post(
 // cancel regardless of bid count via POST /admin/auctions/{id}/cancel instead.
 router.post(
   '/:auctionId/cancel',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   validateBody(cancelAuctionSchema),
   asyncHandler<z.infer<typeof cancelAuctionSchema>>(async (req, res) => {
     const io = req.app.get('io') as Server | undefined;

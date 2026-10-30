@@ -403,7 +403,7 @@ router.patch(
 // what A2's resubmit or simply leaving it already covers.
 router.delete(
   '/:listingId',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
     const existing = await prisma.listing.findUnique({ where: { id: req.params.listingId } });
     if (!existing) {
@@ -438,7 +438,7 @@ router.get(
 
 router.get(
   '/mine',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
     const sellerId = req.auth!.userId;
     const limit = parseLimit(req.query.limit);

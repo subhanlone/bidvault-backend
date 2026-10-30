@@ -43,7 +43,7 @@ router.get(
       where: { winnerId },
       include: {
         auction: true,
-        seller: { select: { name: true, email: true } },
+        seller: { select: { name: true, email: true, sellerPhone: true } },
         review: { select: { id: true, stars: true, comment: true } },
         dispute: { select: { reason: true } },
       },
@@ -59,6 +59,8 @@ router.get(
       auctionEmoji: tx.auction.emoji ?? '📦',
       auctionImageUrl: tx.auction.imageUrl ?? '',
       sellerName: tx.seller.name,
+      // The phone the seller gave is private until the buyer has paid for this item.
+      sellerPhone: REVENUE_STATUSES.includes(tx.status) ? (tx.seller.sellerPhone ?? undefined) : undefined,
       finalAmount: tx.finalAmount,
       status: tx.status,
       // Why the last attempt failed, if one did. Published rather than left in the database:
@@ -86,7 +88,7 @@ router.get(
 
 router.get(
   '/seller-stats',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
     // BV-029's evidence table listed this alongside the six list endpoints, but it doesn't
     // return a list -- {totalRevenue, itemsSold} is an aggregate, so cursor pagination
@@ -108,7 +110,7 @@ router.get(
 // my money go" answer: the running balance plus the individual sale that built each entry.
 router.get(
   '/earnings',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
     const sellerId = req.auth!.userId;
 
@@ -140,7 +142,7 @@ router.get(
 // prolific seller's history is unbounded.
 router.get(
   '/my-sales',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
     const sellerId = req.auth!.userId;
     const limit = parseLimit(req.query.limit);
@@ -313,7 +315,7 @@ const FULFILLMENT_ERROR_STATUS: Record<string, [string, number]> = {
 
 router.patch(
   '/:transactionId/ship',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
     const result = await markShipped(req.params.transactionId, req.auth!.userId);
     if (result.kind !== 'ok') {
@@ -363,7 +365,7 @@ const DISPUTE_RESPONSE_ERROR_STATUS: Record<Exclude<RespondToDisputeResult['kind
 
 router.post(
   '/:transactionId/dispute/response',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   validateBody(respondToDisputeSchema),
   asyncHandler<z.infer<typeof respondToDisputeSchema>>(async (req, res) => {
     const result = await respondToDispute(req.params.transactionId, req.auth!.userId, req.body.response);
@@ -388,7 +390,7 @@ const AUCTION_CONTROL_ERROR_STATUS: Record<string, [string, number]> = {
 
 router.post(
   '/:transactionId/offer-next-bidder',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
     const result = await offerToNextBidder(req.params.transactionId, req.auth!.userId);
     if (result.kind !== 'ok') {
@@ -402,7 +404,7 @@ router.post(
 
 router.post(
   '/:transactionId/relist',
-  requireAuth(['SELLER']),
+  requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
     const result = await relistFromVoidedTransaction(req.params.transactionId, req.auth!.userId);
     if (result.kind !== 'ok') {
@@ -428,7 +430,7 @@ router.get(
       include: {
         auction: { select: { title: true, category: true } },
         winner: { select: { name: true, email: true } },
-        seller: { select: { name: true, email: true } },
+        seller: { select: { name: true, email: true, sellerPhone: true } },
         dispute: { select: { status: true, reason: true, resolutionNote: true } },
       },
     });
@@ -450,6 +452,7 @@ router.get(
       buyerEmail: tx.winner.email,
       sellerName: tx.seller.name,
       sellerEmail: tx.seller.email,
+      sellerPhone: REVENUE_STATUSES.includes(tx.status) ? (tx.seller.sellerPhone ?? undefined) : undefined,
       amount: tx.finalAmount,
       status: tx.status,
       paymentReference: tx.paymentReference ?? undefined,

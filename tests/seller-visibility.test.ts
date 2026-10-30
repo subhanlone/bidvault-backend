@@ -106,10 +106,14 @@ describe('B1: the seller sees auction numbers through the auction, not through t
 });
 
 describe('B2: GET /auctions/mine', () => {
-  it('answers only for sellers', async () => {
+  it('answers for any signed-in account, scoped to their own auctions, and not for an admin', async () => {
     expect((await request(app).get(api('/auctions/mine'))).status).toBe(401);
-    expect((await request(app).get(api('/auctions/mine')).set(auth(w.buyer.token))).status).toBe(403);
     expect((await request(app).get(api('/auctions/mine')).set(auth(w.admin.token))).status).toBe(403);
+
+    // B5: a buyer who never sold has no auctions, which is an empty list rather than a refusal.
+    const buyer = await request(app).get(api('/auctions/mine')).set(auth(w.buyer.token));
+    expect(buyer.status).toBe(200);
+    expect(resData<{ items: unknown[] }>(buyer).items).toEqual([]);
   });
 
   it('defaults to the seller\'s live auctions and never shows another seller\'s', async () => {

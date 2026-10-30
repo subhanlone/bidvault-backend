@@ -78,15 +78,15 @@ const OPERATIONS: Op[] = [
     allow: ['BUYER', 'SELLER', 'ADMIN'], body: () => ({ password: 'test-password-123' }) },
 
   // ---- auctions -------------------------------------------------------------------------
-  { method: 'get', contractPath: '/auctions/mine', url: () => '/auctions/mine', allow: ['SELLER'] },
-  { method: 'get', contractPath: '/auctions/mine/bids', url: () => '/auctions/mine/bids', allow: ['BUYER'] },
+  { method: 'get', contractPath: '/auctions/mine', url: () => '/auctions/mine', allow: ['BUYER', 'SELLER'] },
+  { method: 'get', contractPath: '/auctions/mine/bids', url: () => '/auctions/mine/bids', allow: ['BUYER', 'SELLER'] },
   { method: 'post', contractPath: '/auctions/{auctionId}/bids',
-    url: (w) => `/auctions/${w.liveAuctionId}/bids`, allow: ['BUYER'], body: () => ({ amount: 30_000 }) },
+    url: (w) => `/auctions/${w.liveAuctionId}/bids`, allow: ['BUYER', 'SELLER'], body: () => ({ amount: 30_000 }) },
   // Phase 6 (B4): w.liveAuctionId already has a bid, so the 403/401 checks below (which never
   // reach the has-bids business rule) are what this table needs — the bid-free happy path and
   // the ownership check both live in tests/auction-cancellation.test.ts instead.
   { method: 'post', contractPath: '/auctions/{auctionId}/cancel',
-    url: (w) => `/auctions/${w.liveAuctionId}/cancel`, allow: ['SELLER'],
+    url: (w) => `/auctions/${w.liveAuctionId}/cancel`, allow: ['BUYER', 'SELLER'],
     body: () => ({ reason: 'Authz probe' }) },
 
   // ---- listings -------------------------------------------------------------------------
@@ -99,7 +99,7 @@ const OPERATIONS: Op[] = [
       attributes: { brand: 'Probe', model: 'X1' },
     }) },
   { method: 'get', contractPath: '/listings/limits', url: () => '/listings/limits', allow: ['SELLER'] },
-  { method: 'get', contractPath: '/listings/mine', url: () => '/listings/mine', allow: ['SELLER'] },
+  { method: 'get', contractPath: '/listings/mine', url: () => '/listings/mine', allow: ['BUYER', 'SELLER'] },
   { method: 'get', contractPath: '/listings/pending', url: () => '/listings/pending', allow: ['ADMIN'] },
   { method: 'post', contractPath: '/listings/{listingId}/approve',
     url: (w) => `/listings/${w.pendingListingId}/approve`, allow: ['ADMIN'] },
@@ -118,43 +118,43 @@ const OPERATIONS: Op[] = [
       attributes: { brand: 'Probe', model: 'X1' },
     }) },
   { method: 'delete', contractPath: '/listings/{listingId}',
-    url: (w) => `/listings/${w.pendingListingId}`, allow: ['SELLER'] },
+    url: (w) => `/listings/${w.pendingListingId}`, allow: ['BUYER', 'SELLER'] },
 
   // ---- watchlist ------------------------------------------------------------------------
-  { method: 'get', contractPath: '/watchlist', url: () => '/watchlist', allow: ['BUYER', 'ADMIN'] },
+  { method: 'get', contractPath: '/watchlist', url: () => '/watchlist', allow: ['BUYER', 'SELLER', 'ADMIN'] },
   { method: 'post', contractPath: '/watchlist/{auctionId}',
-    url: (w) => `/watchlist/${w.closedAuctionId}`, allow: ['BUYER', 'ADMIN'] },
+    url: (w) => `/watchlist/${w.closedAuctionId}`, allow: ['BUYER', 'SELLER', 'ADMIN'] },
   { method: 'delete', contractPath: '/watchlist/{auctionId}',
-    url: (w) => `/watchlist/${w.liveAuctionId}`, allow: ['BUYER', 'ADMIN'] },
+    url: (w) => `/watchlist/${w.liveAuctionId}`, allow: ['BUYER', 'SELLER', 'ADMIN'] },
 
   // ---- payments -------------------------------------------------------------------------
-  { method: 'get', contractPath: '/payments/my-wins', url: () => '/payments/my-wins', allow: ['BUYER'] },
-  { method: 'get', contractPath: '/payments/seller-stats', url: () => '/payments/seller-stats', allow: ['SELLER'] },
-  { method: 'get', contractPath: '/payments/my-sales', url: () => '/payments/my-sales', allow: ['SELLER'] },
-  { method: 'get', contractPath: '/payments/earnings', url: () => '/payments/earnings', allow: ['SELLER'] },
+  { method: 'get', contractPath: '/payments/my-wins', url: () => '/payments/my-wins', allow: ['BUYER', 'SELLER'] },
+  { method: 'get', contractPath: '/payments/seller-stats', url: () => '/payments/seller-stats', allow: ['BUYER', 'SELLER'] },
+  { method: 'get', contractPath: '/payments/my-sales', url: () => '/payments/my-sales', allow: ['BUYER', 'SELLER'] },
+  { method: 'get', contractPath: '/payments/earnings', url: () => '/payments/earnings', allow: ['BUYER', 'SELLER'] },
   { method: 'get', contractPath: '/payments/{transactionId}/invoice',
     url: (w) => `/payments/${w.transactionId}/invoice`, allow: ['BUYER', 'SELLER', 'ADMIN'] },
   { method: 'post', contractPath: '/payments/{transactionId}/pay',
-    url: (w) => `/payments/${w.transactionId}/pay`, allow: ['BUYER'],
+    url: (w) => `/payments/${w.transactionId}/pay`, allow: ['BUYER', 'SELLER'],
     body: () => ({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }) },
   { method: 'patch', contractPath: '/payments/{transactionId}/ship',
-    url: (w) => `/payments/${w.transactionId}/ship`, allow: ['SELLER'] },
+    url: (w) => `/payments/${w.transactionId}/ship`, allow: ['BUYER', 'SELLER'] },
   { method: 'post', contractPath: '/payments/{transactionId}/confirm-receipt',
-    url: (w) => `/payments/${w.transactionId}/confirm-receipt`, allow: ['BUYER'] },
+    url: (w) => `/payments/${w.transactionId}/confirm-receipt`, allow: ['BUYER', 'SELLER'] },
   { method: 'post', contractPath: '/payments/{transactionId}/dispute',
-    url: (w) => `/payments/${w.transactionId}/dispute`, allow: ['BUYER'],
+    url: (w) => `/payments/${w.transactionId}/dispute`, allow: ['BUYER', 'SELLER'],
     body: () => ({ reason: 'Authz probe dispute reason.' }) },
   // w.transactionId has no dispute, so the seller's own call ends at 409 here; the success path,
   // the ownership check and the one-response rule are in tests/dispute-response.test.ts.
   { method: 'post', contractPath: '/payments/{transactionId}/dispute/response',
-    url: (w) => `/payments/${w.transactionId}/dispute/response`, allow: ['SELLER'],
+    url: (w) => `/payments/${w.transactionId}/dispute/response`, allow: ['BUYER', 'SELLER'],
     body: () => ({ response: 'Authz probe dispute response.' }) },
   // Phase 6 (A5): w.transactionId is PENDING, not VOIDED, so neither route's happy path fires
   // here — see tests/payment-deadline-recovery.test.ts for that and the ownership check.
   { method: 'post', contractPath: '/payments/{transactionId}/offer-next-bidder',
-    url: (w) => `/payments/${w.transactionId}/offer-next-bidder`, allow: ['SELLER'] },
+    url: (w) => `/payments/${w.transactionId}/offer-next-bidder`, allow: ['BUYER', 'SELLER'] },
   { method: 'post', contractPath: '/payments/{transactionId}/relist',
-    url: (w) => `/payments/${w.transactionId}/relist`, allow: ['SELLER'] },
+    url: (w) => `/payments/${w.transactionId}/relist`, allow: ['BUYER', 'SELLER'] },
 
   // ---- admin ----------------------------------------------------------------------------
   { method: 'get', contractPath: '/admin/analytics', url: () => '/admin/analytics', allow: ['ADMIN'] },
@@ -198,21 +198,29 @@ const OPERATIONS: Op[] = [
     allow: ['BUYER', 'SELLER', 'ADMIN'] },
 
   // ---- reviews ---------------------------------------------------------------------------
-  { method: 'post', contractPath: '/reviews', url: () => '/reviews', allow: ['BUYER'],
+  { method: 'post', contractPath: '/reviews', url: () => '/reviews', allow: ['BUYER', 'SELLER'],
     body: (w) => ({ transactionId: w.transactionId, stars: 5 }) },
   // Phase 7 (C6): no seeded review exists, so a nonexistent id is used -- same pattern as the
   // disputes placeholder above. Never reached past the role gate in this table; the real
   // ownership/window/one-reply checks live in tests/review-lifecycle.test.ts.
   { method: 'patch', contractPath: '/reviews/{reviewId}', url: () => '/reviews/placeholder-review-id',
-    allow: ['BUYER'], body: () => ({ stars: 4 }) },
+    allow: ['BUYER', 'SELLER'], body: () => ({ stars: 4 }) },
   { method: 'delete', contractPath: '/reviews/{reviewId}', url: () => '/reviews/placeholder-review-id',
-    allow: ['BUYER'] },
+    allow: ['BUYER', 'SELLER'] },
   { method: 'post', contractPath: '/reviews/{reviewId}/reply', url: () => '/reviews/placeholder-review-id/reply',
-    allow: ['SELLER'], body: () => ({ reply: 'Authz probe' }) },
+    allow: ['BUYER', 'SELLER'], body: () => ({ reply: 'Authz probe' }) },
 
   // ---- seller items (read model; ownership scoping and ordering are in tests/seller-items.test.ts) --
-  { method: 'get', contractPath: '/seller/items', url: () => '/seller/items?tab=live', allow: ['SELLER'] },
-  { method: 'get', contractPath: '/seller/items/summary', url: () => '/seller/items/summary', allow: ['SELLER'] },
+  { method: 'get', contractPath: '/seller/items', url: () => '/seller/items?tab=live', allow: ['BUYER', 'SELLER'] },
+  { method: 'get', contractPath: '/seller/items/summary', url: () => '/seller/items/summary', allow: ['BUYER', 'SELLER'] },
+
+  // ---- becoming a seller (B5; behaviour is in tests/account-model.test.ts) ------------------------
+  // Open to any non-admin: an account that is already a seller just gets its own record back.
+  { method: 'post', contractPath: '/seller/enroll', url: () => '/seller/enroll',
+    allow: ['BUYER', 'SELLER'],
+    body: () => ({
+      acceptTerms: true, termsVersion: '2026-10', confirmAdult: true, city: 'Lahore', province: 'Punjab',
+    }) },
 
   // ---- settings --------------------------------------------------------------------------
   { method: 'get', contractPath: '/settings', url: () => '/settings', allow: ['ADMIN'] },
@@ -415,13 +423,12 @@ describe('one user cannot reach another user\'s data', () => {
   });
 
   it('a seller cannot bid on their own auction', async () => {
-    // The seller has no BUYER token by design, so this is checked as the rule the bid path
-    // enforces inside its transaction rather than as a role denial.
+    // Sellers can buy now, so this is the rule the bid path enforces, not a role denial.
     const res = await request(app)
       .post(api(`/auctions/${w.liveAuctionId}/bids`))
-      .set(bearer(w.buyer.token))
+      .set(bearer(w.seller.token))
       .send({ amount: 30_000 });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(403);
 
     const selfBid = await prisma.bid.findFirst({ where: { auctionId: w.liveAuctionId, buyerId: w.seller.id } });
     expect(selfBid).toBeNull();

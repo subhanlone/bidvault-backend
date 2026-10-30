@@ -290,7 +290,26 @@ const documentInput = {
     // answered 409 for a sale that was already paid; it now answers the same 409 (a different
     // message) for a sale that was voided, which it used to charge. The response shape is the
     // same, and the 409 was already documented, so only its description changes.
-    version: '11.4.1',
+    //
+    // 11.5.0, 2026-10-30, minor: one account buys and sells (Phase 8, B5, step 1). Additive only.
+    // New: POST /seller/enroll (any signed-in non-admin becomes a seller at once, after accepting
+    // the terms, confirming they are 18 or older and giving a city and province; idempotent). User
+    // gains isSeller and sellerSince, which the client now shows seller screens from instead of
+    // `role`. POST /auth/register: `role` is now optional and deprecated (omitted means a plain
+    // account; the legacy SELLER value still makes a seller). Auction gains sellerCity and
+    // sellerProvince (null for a seller who gave none). PublicSettings gains sellerTermsVersion, the
+    // version the enrolment form must send back. WonTransaction and Invoice gain an optional
+    // sellerPhone, present only once the sale is paid. The new response fields are required,
+    // which oasdiff reports as a warning, not a break. Behaviour change, not a shape change: a
+    // seller can now also bid, pay and review, so routes that used to refuse a SELLER token for
+    // being "not a buyer" now accept it, and the seller capability is read from the database on
+    // every request, not from the token. The `role` enum is unchanged and is removed in 12.0.0.
+    // Also in this release: dependencies were upgraded for security advisories (zod 4.6.7, among
+    // others), and zod now writes slightly different `pattern` strings for `format: date-time`
+    // (seconds are required, as every value the server sends already has them) and `format: email`.
+    // Only the published regex text changed; no field was added, removed or retyped by it, and
+    // oasdiff reports no breaking change.
+    version: '11.5.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -547,6 +566,24 @@ const documentInput = {
           200: okBody(S.SellerItemsSummaryDto, 'Item counts per tab'),
           401: unauthorized,
           403: forbidden,
+        },
+      },
+    },
+    '/seller/enroll': {
+      post: {
+        tags: ['Seller'],
+        security: [{ bearerAuth: [] }],
+        summary:
+          'Become a seller. Instant, no approval step. Needs the terms accepted (at the version in ' +
+          'GET /settings/public), a confirmation of being 18 or older, and a city and province; phone ' +
+          'and bio are optional. Idempotent: an account that is already a seller gets its record back unchanged',
+        requestBody: jsonRequest(R.enrollSellerSchema),
+        responses: {
+          200: okBody(z.object({ user: S.UserDto }), 'The account, now a seller'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          409: errBody('The seller terms changed since the form was shown'),
         },
       },
     },

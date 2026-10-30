@@ -11,20 +11,43 @@ import { dispatchEmail, sendAccountSuspendedEmail, sendAccountReinstatedEmail } 
  * millions, so eviction was not worth the complexity it would add.
  */
 const TTL_MS = 10_000;
-const cache = new Map<string, { suspended: boolean; at: number }>();
 
-export async function isSuspended(userId: string): Promise<boolean> {
-  const cached = cache.get(userId);
-  if (cached && Date.now() - cached.at < TTL_MS) return cached.suspended;
-
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { status: true } });
-  const suspended = user?.status === 'SUSPENDED';
-  cache.set(userId, { suspended, at: Date.now() });
-  return suspended;
+/**
+ * B5: the same row also says whether the account may list (isSeller), and requireAuth needs both
+ * on every request -- so one cached read answers both questions rather than two. isSeller is read
+ * here, never from the access token: a token lives for 15 minutes, and a seller who is revoked (or
+ * a buyer who has just become one) must see it on their next request.
+ */
+export interface AccountAccess {
+  suspended: boolean;
+  isSeller: boolean;
 }
 
-/** Called by suspend/reinstate so the acting admin's own next request (and everyone else's,
- * within the TTL) doesn't read a stale value for the rest of the window. */
+const cache = new Map<string, AccountAccess & { at: number }>();
+
+export async function getAccountAccess(userId: string): Promise<AccountAccess> {
+  const cached = cache.get(userId);
+  if (cached && Date.now() - cached.at < TTL_MS) return cached;
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { status: true, isSeller: true },
+  });
+  const flags = { suspended: user?.status === 'SUSPENDED', isSeller: user?.isSeller ?? false };
+  cache.set(userId, { ...flags, at: Date.now() });
+  return flags;
+}
+
+export async function isSuspended(userId: string): Promise<boolean> {
+  return (await getAccountAccess(userId)).suspended;
+}
+
+export async function hasSellerCapability(userId: string): Promise<boolean> {
+  return (await getAccountAccess(userId)).isSeller;
+}
+
+/** Called by suspend/reinstate and by becoming (or ceasing to be) a seller, so the next request
+ * -- and everyone else's, within the TTL -- doesn't read a stale value for the rest of the window. */
 export function invalidateUserStatusCache(userId: string): void {
   cache.delete(userId);
 }

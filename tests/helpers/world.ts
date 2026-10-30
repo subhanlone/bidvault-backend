@@ -61,6 +61,9 @@ async function makeUser(name: string, email: string, role: 'BUYER' | 'SELLER' | 
       // verifies both without changing application behaviour.
       passwordHash: await hash(PASSWORD, 4),
       role,
+      // Mirrors what the account-model migration does to a pre-existing SELLER row: the
+      // capability is the isSeller column, the role value is only its legacy spelling.
+      isSeller: role === 'SELLER',
       isEmailVerified: true,
     },
   });
