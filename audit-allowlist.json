@@ -9,6 +9,15 @@
       "reason": "Not reachable here. The only path is prisma -> @prisma/config -> deepmerge-ts, and @prisma/config calls deepmerge in exactly one place: loadConfigTsOrJs(), which merges prisma.config.ts layers through c12. This repo has no prisma.config.* file, and that input is a developer's own config rather than anything a request can influence. CVE-2026-40345 is a stack-exhaustion DoS whose CVSS 8.2 assumes an application feeding attacker-controlled JSON to deepmerge's public API; an attacker able to edit the Prisma config already has code execution.",
       "whyNotFixed": "There is no Prisma release to upgrade to. Every stable version from 6.19.3 through 7.9.1, and the 7.10.0 dev prereleases, pin \"deepmerge-ts\": \"7.1.5\" exactly — no range. deepmerge-ts 8.0.0 only shipped 2026-08-16. `npm audit fix --force` proposes prisma 6.12.0, a major downgrade. An npm override would force past an exact pin across a major boundary, which this project does not do.",
       "tracking": "https://github.com/prisma/prisma/pull/30054 (open, mergeable) — issue https://github.com/prisma/prisma/issues/30052. When that ships, upgrade prisma and delete this entry; the gate will fail until you do."
+    },
+    {
+      "id": "GHSA-g3hv-75wg-m249",
+      "package": "minimatch",
+      "severity": "moderate",
+      "acceptedOn": "2026-10-31",
+      "reason": "Not reachable here. minimatch is not in the production dependency tree (`npm ls minimatch --omit=dev` is empty) and no file in src, scripts or tests imports it. It is present only through the lint and type-checking toolchain: eslint, @eslint/config-array and typescript-eslint's typescript-estree. The flaw (CVE-2026-118764, CVSS 6.9, availability only) needs an attacker to supply the glob pattern, and with optimizationLevel 2 or higher it makes minimatch generate many pattern entries that a second phase compares pairwise. In this repo the only patterns minimatch ever sees are the ones in eslint.config.js and the typescript-eslint options inside it, written by a developer, and it runs on a developer machine or in CI, never on a request. An attacker able to edit those already has code execution.",
+      "whyNotFixed": "The fix is minimatch 11.0.1, but no released version of the toolchain accepts it. On 2026-10-31 the latest eslint (10.14.0) depends on minimatch ^10.2.6, the latest @eslint/config-array (0.23.5) on ^10.2.4 and the latest @typescript-eslint/typescript-estree (8.72.1) on ^10.2.2, so upgrading them does not help and `npm audit fix` changes nothing. `npm audit fix --force` proposes eslint@4.0.0, a breaking downgrade of six major versions (10 to 4). An npm override would force a major version of minimatch under packages that pin ^10, which this project does not do.",
+      "tracking": "https://github.com/advisories/GHSA-g3hv-75wg-m249 . Remove this entry when eslint, @eslint/config-array and typescript-estree all depend on minimatch 11.0.1 or later (their dependency ranges are in https://github.com/eslint/eslint/blob/main/package.json); the gate fails when the advisory stops appearing, which is the reminder."
     }
   ]
 }
