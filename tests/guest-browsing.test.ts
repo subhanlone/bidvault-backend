@@ -66,6 +66,40 @@ function captureSocketEmits(): Emitted[] {
   return emitted;
 }
 
+describe('the list of bids needs an account (D10)', () => {
+  const bids = () => request(app).get(api(`/auctions/${w.liveAuctionId}/bids`));
+
+  it('answers 401 to a caller with no token', async () => {
+    const res = await bids();
+    expect(res.status).toBe(401);
+    expect(JSON.stringify(res.body)).not.toContain('Bidder');
+  });
+
+  it('answers 401 to a token that is not valid', async () => {
+    expect((await bids().set(auth('not-a-real-token'))).status).toBe(401);
+  });
+
+  it('still answers a signed-in buyer, masked as before and with their own bid marked', async () => {
+    const res = await bids().set(auth(w.buyer.token));
+    expect(res.status).toBe(200);
+    const items = (res.body as { data: { items: { isMine: boolean; buyerName: string }[] } }).data.items;
+    expect(items).toHaveLength(1);
+    expect(items[0].isMine).toBe(true);
+    expect(items[0].buyerName).toBe('Bidder 1');
+    expect(items[0]).not.toHaveProperty('buyerId');
+  });
+
+  it('still answers the admin, whose monitor reads it', async () => {
+    expect((await bids().set(auth(w.admin.token))).status).toBe(200);
+  });
+
+  it('keeps the auction itself public and carrying the bid count', async () => {
+    const res = await request(app).get(api(`/auctions/${w.liveAuctionId}`));
+    expect(res.status).toBe(200);
+    expect((res.body as { data: { bidCount: number } }).data.bidCount).toBe(1);
+  });
+});
+
 describe('live feed per audience', () => {
   // world.ts: the live auction has one bid (buyer, 21,000), increment 1,000.
   const placeBid = (amount: number) =>

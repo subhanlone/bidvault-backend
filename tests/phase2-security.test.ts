@@ -580,11 +580,16 @@ describe('socket and Cloudinary abuse controls', () => {
     const fake = {
       connected: true,
       rooms,
+      data: {},
       on: vi.fn((event: string, handler: SocketHandler) => {
         handlers.set(event, handler);
         return fake;
       }),
-      join: vi.fn((room: string) => { rooms.add(room); return Promise.resolve(); }),
+      // Socket.IO's join() takes one room or an array of them.
+      join: vi.fn((room: string | string[]) => {
+        for (const name of [room].flat()) rooms.add(name);
+        return Promise.resolve();
+      }),
       leave: vi.fn((room: string) => { rooms.delete(room); return Promise.resolve(); }),
       disconnect: vi.fn(),
     };
@@ -598,7 +603,11 @@ describe('socket and Cloudinary abuse controls', () => {
     for (let i = 0; i < 30; i++) subscribe(`auction-${i}`);
 
     await vi.waitFor(() => expect(fake.join).toHaveBeenCalledTimes(25));
-    expect([...rooms].filter((room) => room.startsWith('auction:'))).toHaveLength(25);
+    // 25 auctions, each as its base room plus the guests room this anonymous socket joins: the
+    // cap counts auctions, not rooms.
+    const auctionRooms = [...rooms].filter((room) => room.startsWith('auction:'));
+    expect(auctionRooms.filter((room) => !room.endsWith(':guests'))).toHaveLength(25);
+    expect(auctionRooms).toHaveLength(50);
     expect(findUnique).toHaveBeenCalledTimes(25);
   });
 

@@ -1,12 +1,13 @@
 /**
  * Bidder and reviewer identity masking on the two unauthenticated feeds (BV-039).
  *
- * GET /:auctionId/bids and GET /reviews/seller/:sellerId are both public -- no requireAuth --
+ * GET /:auctionId/bids and GET /reviews/seller/:sellerId were both public -- no requireAuth --
  * so an anonymous visitor could previously enumerate exactly who bid, how much, when, and
  * correlate one person's bidding across the whole platform via buyerId. Both now mask the
  * bidder/reviewer to a stable pseudonym; the bids feed additionally exposes `isMine`, computed
- * server-side from the caller's own token when one is present, so the caller's own bids are
- * still distinguishable without revealing anyone's real identity.
+ * server-side from the caller's own token, so the caller's own bids are still distinguishable
+ * without revealing anyone's real identity. The bids feed has since become members-only (D10,
+ * tests/guest-browsing.test.ts); the reviews stay public.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
@@ -109,23 +110,25 @@ describe('public bid feed', () => {
     await request(app).post(api(`/auctions/${auctionId}/bids`)).set(auth(w.buyer.token)).send({ amount: 1_000 });
     await request(app).post(api(`/auctions/${auctionId}/bids`)).set(auth(w.otherBuyer.token)).send({ amount: 1_100 });
 
-    const anon = await request(app).get(api(`/auctions/${auctionId}/bids`));
-    expect(anon.status).toBe(200);
-    const anonItems = resData<Paginated<PublicBidItem>>(anon).items;
-    for (const item of anonItems) {
+    // D10: the list is for signed-in members. The seller never bid here, so they see the masked
+    // view with nothing marked as theirs.
+    const asSeller = await request(app).get(api(`/auctions/${auctionId}/bids`)).set(auth(w.seller.token));
+    expect(asSeller.status).toBe(200);
+    const sellerItems = resData<Paginated<PublicBidItem>>(asSeller).items;
+    for (const item of sellerItems) {
       expect(item).not.toHaveProperty('buyerId');
       expect(item.isMine).toBe(false);
     }
     // Newest first: otherBuyer's 1,100 bid, then buyer's 1,000 bid.
-    expect(anonItems[0].buyerName).toBe('Bidder 2');
-    expect(anonItems[1].buyerName).toBe('Bidder 1');
+    expect(sellerItems[0].buyerName).toBe('Bidder 2');
+    expect(sellerItems[1].buyerName).toBe('Bidder 1');
 
     const asBuyer = await request(app).get(api(`/auctions/${auctionId}/bids`)).set(auth(w.buyer.token));
     const mine = resData<Paginated<PublicBidItem>>(asBuyer).items.filter((i) => i.isMine);
     expect(mine).toHaveLength(1);
     expect(mine[0].buyerName).toBe('Bidder 1');
 
-    // An authenticated caller who never bid on this auction sees the same masked view as anon.
+    // The admin monitor reads the same feed, with the same masking.
     const asAdmin = await request(app).get(api(`/auctions/${auctionId}/bids`)).set(auth(w.admin.token));
     expect(
       resData<Paginated<PublicBidItem>>(asAdmin).items.every((i) => i.isMine === false),

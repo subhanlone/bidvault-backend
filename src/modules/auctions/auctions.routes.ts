@@ -5,7 +5,7 @@ import type { Server } from 'socket.io';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
-import { optionalAuth, requireAuth } from '../../middleware/auth.js';
+import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 import { placeBidSchema, cancelAuctionSchema } from '../../openapi/requests.js';
@@ -197,21 +197,23 @@ router.get(
 
 router.get(
   '/:auctionId/bids',
-  // BV-039: this route is public by design (anyone can watch an auction's bid history) but was
-  // publishing full bidder identity to anonymous visitors, who could enumerate exactly who bid,
-  // how much and when, and correlate one person's bidding across the whole platform via
-  // buyerId. optionalAuth reads the caller's own identity when a token is present, purely to
-  // compute `isMine` -- it never gates access to the route. Masking is uniform for every caller,
-  // AdminAuctionMonitor.tsx included: it reuses this same public endpoint for its live view, and
-  // a passively-watched in-progress auction gets the same privacy treatment as any other
-  // viewer. Real identity for actual investigation (a dispute, a stuck payout) is what
-  // GET /admin/disputes and GET /admin/transactions are for, not this feed.
-  optionalAuth(),
+  // D10: the list of bids is for signed-in members. A guest sees the auction, its price and its
+  // bid count (on GET /:auctionId), not who bid or when. Admin is allowed because
+  // AdminAuctionMonitor.tsx reads this feed for its live view.
+  //
+  // BV-039: before D10 this route was public and published full bidder identity to anonymous
+  // visitors, who could enumerate exactly who bid, how much and when, and correlate one person's
+  // bidding across the whole platform via buyerId. The masking stays for every caller: the
+  // caller's identity is read here only to compute `isMine`. Masking is uniform, the admin
+  // monitor included, so a passively-watched in-progress auction gets the same privacy treatment
+  // as any other viewer. Real identity for actual investigation (a dispute, a stuck payout) is
+  // what GET /admin/disputes and GET /admin/transactions are for, not this feed.
+  requireAuth(['BUYER', 'SELLER', 'ADMIN']),
   asyncHandler(async (req, res) => {
     const auctionId = req.params.auctionId;
     const limit = parseLimit(req.query.limit);
     const cursor = decodeCursor(req.query.cursor);
-    const requesterId = req.auth?.userId;
+    const requesterId = req.auth!.userId;
 
     const where: Prisma.BidWhereInput = cursor
       ? {
@@ -249,7 +251,7 @@ router.get(
         auctionId: bid.auctionId,
         // BV-018: buyerId can be null (an anonymised, deleted account) -- still genuinely
         // reachable, not hypothetical, so it gets its own label rather than a numbered one.
-        isMine: requesterId != null && bid.buyerId === requesterId,
+        isMine: bid.buyerId === requesterId,
         buyerName: bid.buyerId === null ? 'Deleted user' : `Bidder ${rank.get(bid.buyerId)}`,
         amount: bid.amount,
         timestamp: bid.createdAt.toISOString(),

@@ -154,7 +154,6 @@ const auctions = (await check('/auctions', { note: 'every auction in the list' }
 const sample = auctions?.[0];
 if (sample) {
   await check('/auctions/{auctionId}', { params: { auctionId: sample.auctionId as string } });
-  await check('/auctions/{auctionId}/bids', { params: { auctionId: sample.auctionId as string } });
   await check('/reviews/seller/{sellerId}', { params: { sellerId: sample.sellerId as string } });
 } else {
   skipped.push('per-auction routes (no auctions returned)');
@@ -170,6 +169,13 @@ if (buyer) {
   await check('/notifications', { token: buyer.access });
   await check('/payments/my-wins', { token: buyer.access });
   await check('/auctions/mine/bids', { token: buyer.access });
+  // D10: the list of bids is for signed-in members, so it is checked here, not with the public routes.
+  if (sample) {
+    await check('/auctions/{auctionId}/bids', {
+      params: { auctionId: sample.auctionId as string },
+      token: buyer.access,
+    });
+  }
   await signOut(buyer.refresh);
 }
 
