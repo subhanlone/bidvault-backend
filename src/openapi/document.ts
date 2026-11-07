@@ -335,7 +335,18 @@ const documentInput = {
     // required, which oasdiff reports as informational, not a break: no existing client can fail to
     // parse a response for gaining a field. reviewTimeoutHours used to be admin-only; it is public
     // now because it is quoted to bidders, and nothing else of the settings row is.
-    version: '12.1.0',
+    //
+    // 12.2.0,2026-11-07, minor: guest browsing, step 3 (the browse query). Additive only.
+    // GET /auctions gains `sort` (ending-soonest, the default and today's order, plus
+    // ending-soonest-with-bids, newly-listed, price-asc, price-desc, bids-desc, bids-asc),
+    // `minPrice`, `maxPrice`, `condition` (repeatable) and `withBids`; `search` given an exact
+    // item number finds that one auction and only it. A call that sends none of them behaves as before, cursor
+    // included. New: GET /auctions/facets, the counts beside each filter choice. The one behaviour
+    // that can differ is a 400 where a call used to be answered 200: a bad `sort`, price,
+    // condition or withBids value, a minimum above the maximum, or a cursor replayed under a
+    // different sort. No deployed caller sends any of these, since none of the parameters existed.
+    // A cursor made before this version is read as made under the default sort.
+    version: '12.2.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -539,15 +550,39 @@ const documentInput = {
     '/auctions': {
       get: {
         tags: ['Auctions'],
-        summary: 'Public, cursor-paginated. Defaults to status=ACTIVE. Reserve amounts are never included — only reserveMet.',
+        summary:
+          'Public, cursor-paginated. Defaults to status=ACTIVE, soonest-ending first. Reserve amounts are never included — ' +
+          'only reserveMet. `sort` picks the order (ties always break on the auction id, so a page never repeats or skips a row); ' +
+          '`minPrice` and `maxPrice` are whole rupees, inclusive, read against the current bid; `condition` is sent once per value; ' +
+          '`withBids=true` leaves out auctions with no bid. `search` matches words in the title or description, except that a ' +
+          'term that is exactly an item number (BV-year-ten hex digits, any case) matches that one item and nothing else. ' +
+          'A cursor belongs to the sort it ' +
+          'was made under and is refused under another.',
         requestParams: {
           query: z.object({
             status: S.AuctionStatus.optional(),
             category: z.string().optional(),
             search: z.string().optional(),
-          }).extend(R.paginationQuerySchema.shape),
+          }).extend(R.browseQuerySchema.shape).extend(R.paginationQuerySchema.shape),
         },
-        responses: { 200: okBody(S.PaginatedAuctionsDto, 'A page of matching auctions') },
+        responses: { 200: okBody(S.PaginatedAuctionsDto, 'A page of matching auctions'), 400: badRequest },
+      },
+    },
+    '/auctions/facets': {
+      get: {
+        tags: ['Auctions'],
+        summary:
+          "Public. How many auctions each browse filter choice would give. Takes the list's filters (not `sort`, `limit` or " +
+          '`cursor`); a group of choices counts with every other filter applied but not its own. Price bands are ' +
+          'under-5000 (below 5,000), 5000-25000 (5,000 to 25,000) and over-25000 (above 25,000), whole rupees',
+        requestParams: {
+          query: z.object({
+            status: S.AuctionStatus.optional(),
+            category: z.string().optional(),
+            search: z.string().optional(),
+          }).extend(R.browseQuerySchema.omit({ sort: true }).shape),
+        },
+        responses: { 200: okBody(S.AuctionFacetsDto, 'Counts per filter choice'), 400: badRequest },
       },
     },
     '/auctions/mine': {

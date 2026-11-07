@@ -211,6 +211,11 @@ model Auction {
   reviews      SellerReview[]
 
   @@index([status, endTime])
+  // The browse sorts (price, bid count, newest) each page by keyset on one of these plus id, so
+  // each sort reads an index in order instead of sorting every live auction.
+  @@index([status, currentBid, id])
+  @@index([status, bidCount, id])
+  @@index([status, createdAt, id])
   @@index([sellerId])
   // BV-017: the search box's `contains ... mode: 'insensitive'` on title/description
   // (auctions.routes.ts) is an unanchored ILIKE '%…%', which no B-tree index can serve --
