@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "12.2.0",
+    "version": "12.3.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -1094,6 +1094,15 @@
           },
           {
             "in": "query",
+            "name": "sellerId",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "schema": {
               "type": "integer",
@@ -1229,6 +1238,15 @@
                 "true",
                 "false"
               ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "sellerId",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
             }
           }
         ],
@@ -4376,6 +4394,60 @@
           },
           "422": {
             "description": "Payment has not completed yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sellers/{sellerId}": {
+      "get": {
+        "tags": [
+          "Sellers"
+        ],
+        "summary": "Public. What anyone may read about a seller: name, member since, city and province, bio, sales and rating. Never a phone number or an e-mail address. 404 for anyone who is not a visible seller (never enrolled, an admin, suspended, or deleted). The seller's auctions are GET /auctions?sellerId= and their reviews GET /reviews/seller/{sellerId}.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sellerId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The seller profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/SellerProfile"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -8603,6 +8675,68 @@
         ],
         "additionalProperties": false
       },
+      "SellerProfile": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "memberSince": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "province": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bio": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "itemsSold": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "rating": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "ratingCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "displayName",
+          "memberSince",
+          "city",
+          "province",
+          "bio",
+          "itemsSold",
+          "rating",
+          "ratingCount"
+        ],
+        "additionalProperties": false
+      },
       "SellerReviews": {
         "type": "object",
         "properties": {
@@ -8659,6 +8793,12 @@
                 },
                 "buyerName": {
                   "type": "string"
+                },
+                "itemTitle": {
+                  "type": "string"
+                },
+                "verifiedPurchase": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -8666,7 +8806,9 @@
                 "stars",
                 "comment",
                 "createdAt",
-                "buyerName"
+                "buyerName",
+                "itemTitle",
+                "verifiedPurchase"
               ],
               "additionalProperties": false
             }

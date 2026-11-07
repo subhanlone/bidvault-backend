@@ -277,6 +277,18 @@ describe('auctions', () => {
     expect((res.body as { details: Record<string, string[]> }).details).toHaveProperty('minPrice');
   });
 
+  it('GET /sellers/{sellerId}', async () => {
+    hit('get', '/sellers/{sellerId}');
+    const res = await request(app).get(api(`/sellers/${w.seller.id}`));
+    expect(res.status).toBe(200);
+    expect(resData<{ id: string }>(res).id).toBe(w.seller.id);
+  });
+
+  it('GET /sellers/{sellerId} — someone who is not a seller answers the 404 shape', async () => {
+    const res = await request(app).get(api(`/sellers/${w.buyer.id}`));
+    expect(res.status).toBe(404);
+  });
+
   it('GET /auctions/facets', async () => {
     hit('get', '/auctions/facets');
     const res = await request(app).get(api('/auctions/facets'));

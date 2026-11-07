@@ -346,7 +346,15 @@ const documentInput = {
     // condition or withBids value, a minimum above the maximum, or a cursor replayed under a
     // different sort. No deployed caller sends any of these, since none of the parameters existed.
     // A cursor made before this version is read as made under the default sort.
-    version: '12.2.0',
+    //
+    // 12.3.0, 2026-11-07, minor: guest browsing, step 4 (the public seller profile). Additive only.
+    // New GET /sellers/{sellerId}: name, member since, city and province, bio, items sold, rating and
+    // rating count, public, never a phone number or an e-mail address; 404 for anyone who is not a
+    // visible seller. GET /auctions and GET /auctions/facets gain `sellerId`, one seller's auctions
+    // (live, or ended with status=CLOSED) in the same sorts. Each item of GET /reviews/seller/{id}
+    // gains itemTitle and verifiedPurchase (the writer is the buyer of the sale the review is tied
+    // to); both are required response fields, which oasdiff reports as informational.
+    version: '12.3.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -1092,6 +1100,17 @@ const documentInput = {
           409: errBody('This transaction has already been reviewed'),
           422: unprocessable('Payment has not completed yet'),
         },
+      },
+    },
+    '/sellers/{sellerId}': {
+      get: {
+        tags: ['Sellers'],
+        summary:
+          'Public. What anyone may read about a seller: name, member since, city and province, bio, sales and rating. ' +
+          'Never a phone number or an e-mail address. 404 for anyone who is not a visible seller (never enrolled, an admin, ' +
+          "suspended, or deleted). The seller's auctions are GET /auctions?sellerId= and their reviews GET /reviews/seller/{sellerId}.",
+        requestParams: { path: z.object({ sellerId: z.string() }) },
+        responses: { 200: okBody(S.SellerProfileDto, 'The seller profile'), 404: notFound },
       },
     },
     '/reviews/seller/{sellerId}': {

@@ -331,7 +331,7 @@ const browseCondition = z.enum(ItemCondition.options);
 
 /**
  * What GET /auctions and GET /auctions/facets add to the three filters they always had (status,
- * category, search): a sort and three more filters. Unlike those, a bad value here is a 400 and
+ * category, search): a sort and four more filters. Unlike those, a bad value here is a 400 and
  * not a quiet default: these are new, so no stale link depends on being forgiven.
  * `condition` is sent once per value (`?condition=NEW&condition=USED`).
  */
@@ -341,6 +341,8 @@ export const browseQuerySchema = z.object({
   maxPrice: browsePrice.optional(),
   condition: z.union([browseCondition, z.array(browseCondition)]).optional(),
   withBids: z.enum(['true', 'false']).optional(),
+  /** One seller's auctions, for their public profile. An id nobody has gives an empty page. */
+  sellerId: z.string().min(1).max(64).optional(),
 });
 
 // A bio is shown on the seller's public profile, so it must not carry a way to be contacted
