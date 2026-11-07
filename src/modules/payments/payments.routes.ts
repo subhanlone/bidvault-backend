@@ -238,6 +238,19 @@ router.post(
         return { kind: 'not-payable' as const };
       }
 
+      // An item an admin removed (counterfeit, stolen, prohibited) is not sold, whatever state its
+      // sale is in. Read under a share lock, taken after the sale's row lock as every other path
+      // does (takedown, offer, relist: sale first, then listing): a takedown committing while this
+      // waits is seen here, and the charge is refused.
+      const [listing] = await dbTx.$queryRaw<Array<{ status: string }>>`
+        SELECT l.status FROM "Listing" l JOIN "Auction" a ON a."listingId" = l.id
+        WHERE a.id = ${row.auctionId}
+        FOR SHARE OF l
+      `;
+      if (listing?.status === 'REMOVED') {
+        return { kind: 'removed' as const };
+      }
+
       const charge = chargeCard(cardNumber);
 
       if (!charge.ok) {
@@ -276,6 +289,10 @@ router.post(
     if (outcome.kind === 'forbidden') { fail(res, 'Forbidden.', 403); return; }
     if (outcome.kind === 'already-paid') { fail(res, 'This purchase has already been paid for.', 409); return; }
     if (outcome.kind === 'not-payable') { fail(res, 'This purchase can no longer be paid.', 409); return; }
+    if (outcome.kind === 'removed') {
+      fail(res, 'BidVault removed this item, so it can no longer be paid for. Nothing has been charged.', 409);
+      return;
+    }
 
     if (outcome.kind === 'declined') {
       // A decline is an ordinary business outcome, not a request error — same reasoning as

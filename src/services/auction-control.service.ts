@@ -547,9 +547,44 @@ export async function takedownListing(
   if (listing.status !== 'APPROVED') return { kind: 'wrong-state' };
 
   await prisma.$transaction(async (tx) => {
+    // A sale on this item that is still waiting for payment is cancelled with it: a removed item is
+    // not sold, and leaving the sale open left the buyer a payment button for it until the payment
+    // sweep ran out its clock. A sale already paid is left as it is (unwinding a charge is a refund,
+    // which is not this function's to decide). The sale's row is locked before the listing's, the
+    // order pay, offer and relist use too, so none of them can deadlock against a takedown.
+    const [openSale] = listing.auction
+      ? await tx.$queryRaw<Array<{ id: string; status: string; winnerId: string }>>`
+          SELECT id, status, "winnerId" FROM "AuctionTransaction" WHERE "auctionId" = ${listing.auction.id} FOR UPDATE
+        `
+      : [];
+
     // The reason goes on the listing as well as into the audit log: the seller can read the
     // listing, never the audit log, and a removal with no explanation is what they saw before.
     await tx.listing.update({ where: { id: listing.id }, data: { status: 'REMOVED', rejectionReason: reason } });
+
+    if (openSale && (openSale.status === 'PENDING' || openSale.status === 'FAILED')) {
+      await tx.auctionTransaction.update({
+        where: { id: openSale.id },
+        data: { status: 'VOIDED', lastPaymentError: null },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorUserId: adminUserId,
+          action: 'TRANSACTION_VOIDED',
+          entityType: 'AuctionTransaction',
+          entityId: openSale.id,
+          metadata: { reason: `Listing removed: ${reason}` },
+        },
+      });
+      await tx.notification.create({
+        data: {
+          userId: openSale.winnerId,
+          type: 'AUCTION_CANCELLED',
+          title: 'Sale cancelled',
+          message: `BidVault removed "${listing.title}", so this sale is cancelled. Nothing is owed and nothing was charged.`,
+        },
+      });
+    }
     await tx.auditLog.create({
       data: {
         actorUserId: adminUserId,

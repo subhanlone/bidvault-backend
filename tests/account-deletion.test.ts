@@ -58,6 +58,10 @@ afterAll(async () => {
   redisConnection.disconnect();
 });
 
+/** The seeded sale between otherBuyer and otherSeller is COMPLETED (paid, not shipped): finishes it. */
+const finishOtherSale = () =>
+  prisma.auctionTransaction.update({ where: { id: w.otherBuyerTransactionId }, data: { status: 'DELIVERED' } });
+
 describe('checkAccountDeletable', () => {
   it('refuses a seller with an active auction', async () => {
     const result = await checkAccountDeletable(w.seller.id);
@@ -74,6 +78,9 @@ describe('checkAccountDeletable', () => {
   });
 
   it('refuses a buyer with a pending transaction', async () => {
+    // The seeded buyer also holds a bid on the live auction, itself a reason to refuse; it is
+    // cleared so this asserts the payment reason on its own.
+    await prisma.bid.deleteMany({ where: { buyerId: w.buyer.id, auction: { status: 'ACTIVE' } } });
     const result = await checkAccountDeletable(w.buyer.id);
     const expected: { allowed: boolean; reason: string } = {
       allowed: false,
@@ -82,8 +89,10 @@ describe('checkAccountDeletable', () => {
     expect(result).toEqual(expected);
   });
 
-  it('allows a user with no active auction and no pending transaction', async () => {
-    // otherBuyer's only transaction (otherTransaction) is COMPLETED, not PENDING.
+  it('allows a user whose purchases and sales are all finished', async () => {
+    // otherBuyer's only purchase is seeded COMPLETED (paid, not shipped), which is unfinished and
+    // refuses deletion; delivered, nothing is owed any more.
+    await finishOtherSale();
     const result = await checkAccountDeletable(w.otherBuyer.id);
     expect(result).toEqual({ allowed: true });
   });
@@ -116,6 +125,7 @@ describe('POST /auth/delete-account', () => {
   });
 
   it('anonymises the account, revokes every session, and emails the original address', async () => {
+    await finishOtherSale();
     const res = await request(app)
       .post(api('/auth/delete-account'))
       .set(auth(w.otherBuyer.token))
@@ -139,6 +149,7 @@ describe('POST /auth/delete-account', () => {
   });
 
   it('the account can no longer log in afterward', async () => {
+    await finishOtherSale();
     await request(app)
       .post(api('/auth/delete-account'))
       .set(auth(w.otherBuyer.token))
@@ -170,6 +181,10 @@ describe('POST /admin/users/:userId/anonymize', () => {
   });
 
   it('anonymises the target and records the reason in the audit log', async () => {
+    // otherSeller's sale is seeded paid-not-shipped and they have a listing in review: both must be
+    // finished before an account can go.
+    await finishOtherSale();
+    await prisma.listing.delete({ where: { id: w.otherSellerListingId } });
     const res = await request(app)
       .post(api(`/admin/users/${w.otherSeller.id}/anonymize`))
       .set(auth(w.admin.token))

@@ -250,7 +250,9 @@ describe('auth', () => {
 
   it('POST /auth/delete-account', async () => {
     hit('post', '/auth/delete-account');
-    // otherBuyer, not buyer: buyer has a PENDING transaction in this world and would 409.
+    // otherBuyer, not buyer: buyer has a PENDING transaction in this world and would 409. otherBuyer's
+    // own purchase is seeded paid-not-shipped, which also refuses deletion, so it is finished first.
+    await prisma.auctionTransaction.update({ where: { id: w.otherBuyerTransactionId }, data: { status: 'DELIVERED' } });
     const res = await request(app)
       .post(api('/auth/delete-account'))
       .set(auth(w.otherBuyer.token))
@@ -984,6 +986,10 @@ describe('admin', () => {
 
   it('POST /admin/users/{userId}/anonymize', async () => {
     hit('post', '/admin/users/{userId}/anonymize');
+    // otherSeller's sale is seeded paid-not-shipped and they have a listing in review; deletion is
+    // refused until both are finished.
+    await prisma.auctionTransaction.update({ where: { id: w.otherBuyerTransactionId }, data: { status: 'DELIVERED' } });
+    await prisma.listing.delete({ where: { id: w.otherSellerListingId } });
     const res = await request(app)
       .post(api(`/admin/users/${w.otherSeller.id}/anonymize`))
       .set(auth(w.admin.token))

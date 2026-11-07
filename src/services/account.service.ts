@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { TransactionStatus } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
 import { hashPassword } from '../utils/password.js';
 
@@ -26,26 +27,46 @@ export interface DeleteGuardResult {
   reason?: string;
 }
 
+/** A sale still waiting for the buyer to pay. */
+const AWAITING_PAYMENT: TransactionStatus[] = ['PENDING', 'FAILED'];
+/** A sale paid for but not finished: not yet shipped, not yet received, or disputed. */
+const IN_FULFILMENT: TransactionStatus[] = ['COMPLETED', 'SHIPPED', 'DISPUTED'];
+
 /**
  * Mirrors eBay's own precondition for closing an account: no active listings, no
- * bids/purchases/sales still in progress, nothing unpaid. In this schema that is exactly
- * "no ACTIVE auction as seller" and "no PENDING transaction on either side" -- a completed
- * sale or a past bid on a since-closed auction does not block anything, only unresolved
- * obligations do.
+ * bids/purchases/sales still in progress, nothing unpaid. In this schema that means, on either
+ * side of a sale:
+ *   - no ACTIVE auction, and no listing still waiting for review (it could otherwise be approved
+ *     and sold with nobody behind it);
+ *   - no bid on an auction that is still running (the bidder could win it);
+ *   - no sale that is not finished: waiting for payment, paid but not shipped, shipped but not
+ *     received, or disputed. The other party is still owed something on every one of these.
+ * Finished history (DELIVERED, REFUNDED, VOIDED, a closed auction, a past bid) blocks nothing.
  */
 export async function checkAccountDeletable(userId: string): Promise<DeleteGuardResult> {
-  const [activeAuctions, pendingTransactions] = await Promise.all([
+  const eitherSide = { OR: [{ winnerId: userId }, { sellerId: userId }] };
+  const [activeAuctions, listingsInReview, liveBids, awaitingPayment, inFulfilment] = await Promise.all([
     prisma.auction.count({ where: { sellerId: userId, status: 'ACTIVE' } }),
-    prisma.auctionTransaction.count({
-      where: { status: 'PENDING', OR: [{ winnerId: userId }, { sellerId: userId }] },
-    }),
+    prisma.listing.count({ where: { sellerId: userId, status: 'PENDING' } }),
+    prisma.bid.count({ where: { buyerId: userId, auction: { status: 'ACTIVE' } } }),
+    prisma.auctionTransaction.count({ where: { status: { in: AWAITING_PAYMENT }, ...eitherSide } }),
+    prisma.auctionTransaction.count({ where: { status: { in: IN_FULFILMENT }, ...eitherSide } }),
   ]);
 
   if (activeAuctions > 0) {
     return { allowed: false, reason: 'You have an active auction. It must end before your account can be deleted.' };
   }
-  if (pendingTransactions > 0) {
+  if (listingsInReview > 0) {
+    return { allowed: false, reason: 'You have a listing waiting for review. Withdraw it before your account can be deleted.' };
+  }
+  if (liveBids > 0) {
+    return { allowed: false, reason: 'You have a bid on an auction that is still running. It must end before your account can be deleted.' };
+  }
+  if (awaitingPayment > 0) {
     return { allowed: false, reason: 'You have a purchase or sale awaiting payment. It must be completed or voided by an admin before your account can be deleted.' };
+  }
+  if (inFulfilment > 0) {
+    return { allowed: false, reason: 'You have a purchase or sale that is paid but not finished (not yet shipped, not yet received, or disputed). It must be finished before your account can be deleted.' };
   }
   return { allowed: true };
 }

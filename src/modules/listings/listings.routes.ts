@@ -113,6 +113,12 @@ async function approveOneListing(
     if (!locked) throw new ListingGoneError('This listing no longer exists.');
     if (locked.status !== 'PENDING') throw new ListingStateError('Only pending listings can be approved.');
     const listing = await tx.listing.findUniqueOrThrow({ where: { id: listingId }, include: { seller: true } });
+    // Nobody may be put on sale by someone who can no longer sell: a suspended account, one whose
+    // seller capability was withdrawn, or one that was deleted (anonymising clears isSeller). The
+    // listing stays in review for the admin to reject; it does not go live with nobody to ship it.
+    if (listing.seller.status !== 'ACTIVE' || !listing.seller.isSeller) {
+      throw new ListingStateError('This seller can no longer sell on BidVault, so the listing cannot go live.');
+    }
 
     const startTime = new Date();
     const endTime = new Date(startTime.getTime() + listing.durationDays * 24 * 60 * 60 * 1000);
