@@ -211,7 +211,7 @@ describe('the seller room', () => {
     expect(toSeller).toHaveLength(1);
     expect(toSeller[0].event).toBe('bid:received');
     expect(toSeller[0].payload).toEqual({ auctionId: w.liveAuctionId, bidCount: 2, currentBid: 22_000 });
-    // the live-bidding room still gets its own event, unchanged
-    expect(emitted.some((e) => e.room === `auction:${w.liveAuctionId}` && e.event === 'bid:placed')).toBe(true);
+    // the live-bidding room for signed-in members still gets its own event, unchanged
+    expect(emitted.some((e) => e.room === `auction:${w.liveAuctionId}:members` && e.event === 'bid:placed')).toBe(true);
   });
 });

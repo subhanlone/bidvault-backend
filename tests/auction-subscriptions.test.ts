@@ -28,24 +28,36 @@ interface Gate {
   reject: (err: Error) => void;
 }
 
-function makeSocket() {
+/** A guest has no `userId`; a member's is set once at the handshake (server.ts). */
+function makeSocket(data: { userId?: string } = {}) {
   const handlers = new Map<string, Handler>();
   const rooms = new Set<string>(['socket-id']);
   const fake = {
     connected: true,
     rooms,
+    data,
     on: vi.fn((event: string, handler: Handler) => {
       handlers.set(event, handler);
       return fake;
     }),
-    join: vi.fn((room: string) => { rooms.add(room); return Promise.resolve(); }),
+    // Socket.IO's join() takes one room or an array of them.
+    join: vi.fn((room: string | string[]) => {
+      for (const name of [room].flat()) rooms.add(name);
+      return Promise.resolve();
+    }),
     leave: vi.fn((room: string) => { rooms.delete(room); return Promise.resolve(); }),
     disconnect: vi.fn(() => { fake.connected = false; }),
   };
   registerAuctionSubscriptions(fake as unknown as AuctionSocket);
   return {
     fake,
-    joinedRooms: () => [...rooms].filter((room) => room.startsWith('auction:')),
+    // One entry per auction: the base room. The audience room (`:members` or `:guests`) a socket
+    // also joins is checked through allAuctionRooms().
+    joinedRooms: () =>
+      [...rooms].filter(
+        (room) => room.startsWith('auction:') && !room.endsWith(':members') && !room.endsWith(':guests'),
+      ),
+    allAuctionRooms: () => [...rooms].filter((room) => room.startsWith('auction:')).sort(),
     subscribe: (id: string) => handlers.get('auction:subscribe')!(id),
     unsubscribe: (id: string) => handlers.get('auction:unsubscribe')!(id),
   };
@@ -255,6 +267,64 @@ describe('lookups that do not end in a join', () => {
 
     expect(oldSocket.joinedRooms()).toEqual([]);
     expect(reconnected.joinedRooms()).toEqual([`auction:${id}`]);
+  });
+});
+
+describe('audience rooms (D10): members get the bid entries, guests only the numbers', () => {
+  it('puts a signed-in socket in the base room and the members room, not the guests room', async () => {
+    const s = makeSocket({ userId: 'user-1' });
+    const id = freshId();
+    s.subscribe(id);
+    await settle(true);
+
+    expect(s.allAuctionRooms()).toEqual([`auction:${id}`, `auction:${id}:members`]);
+  });
+
+  it('puts an anonymous socket in the base room and the guests room, not the members room', async () => {
+    const s = makeSocket();
+    const id = freshId();
+    s.subscribe(id);
+    await settle(true);
+
+    expect(s.allAuctionRooms()).toEqual([`auction:${id}`, `auction:${id}:guests`]);
+  });
+
+  it('leaves every audience room on unsubscribe', async () => {
+    const member = makeSocket({ userId: 'user-1' });
+    const guest = makeSocket();
+    const id = freshId();
+    member.subscribe(id);
+    guest.subscribe(id);
+    await settle(true);
+    await settle(true);
+
+    member.unsubscribe(id);
+    guest.unsubscribe(id);
+    expect(member.allAuctionRooms()).toEqual([]);
+    expect(guest.allAuctionRooms()).toEqual([]);
+  });
+
+  it('does not join an audience room when unsubscribe arrives together with subscribe', async () => {
+    const s = makeSocket({ userId: 'user-1' });
+    const id = freshId();
+    s.subscribe(id);
+    s.unsubscribe(id);
+    await settle(true);
+
+    expect(s.allAuctionRooms()).toEqual([]);
+  });
+
+  it('counts auctions, not rooms, against the cap: 25 auctions fit and the 26th is refused', async () => {
+    const s = makeSocket({ userId: 'user-1' });
+    const ids = Array.from({ length: 25 }, freshId);
+    ids.forEach((id) => s.subscribe(id));
+    for (let i = 0; i < 25; i++) await settle(true);
+    expect(s.joinedRooms()).toHaveLength(25);
+    expect(s.allAuctionRooms()).toHaveLength(50);
+
+    s.subscribe(freshId());
+    expect(lookups).toHaveBeenCalledTimes(25);
+    expect(s.joinedRooms()).toHaveLength(25);
   });
 });
 

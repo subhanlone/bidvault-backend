@@ -14,6 +14,7 @@ import { buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from './aucti
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import { escapeLike } from '../../utils/escape-like.js';
 import { sellerRoom } from '../../socket/seller-room.js';
+import { auctionGuestsRoom, auctionMembersRoom } from '../../socket/auction-subscriptions.js';
 import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
 
 const CANCEL_ERROR_STATUS: Record<Exclude<CancelAuctionResult['kind'], 'ok'>, [string, number]> = {
@@ -404,11 +405,11 @@ router.post(
     // Redis overlay that used to shadow it here) -- live viewers get the update below via the
     // socket broadcast, not by re-reading the row.
     //
-    // BV-039: this broadcast reaches every socket in the room, authenticated or not, so it gets
-    // the same masking as GET /:auctionId/bids -- no buyerId, name replaced by the same stable
-    // per-auction pseudonym that route computes. The bidder's own client already has their real
-    // identity from this handler's own response below; it does not need the broadcast to tell
-    // it "that was you".
+    // BV-039: the bid broadcast gets the same masking as GET /:auctionId/bids -- no buyerId, name
+    // replaced by the same stable per-auction pseudonym that route computes. The bidder's own
+    // client already has their real identity from this handler's own response below; it does not
+    // need the broadcast to tell it "that was you". D10: it only goes to signed-in sockets; a
+    // guest's socket is told the price and the count instead (see the emits below).
     const io = req.app.get('io') as Server | undefined;
     if (io) {
       // To the seller's own room, so their Live Auctions screen and notification bell update at once.
@@ -425,7 +426,9 @@ router.post(
         distinct: ['buyerId'],
       });
       const rank = firstAppearances.findIndex((b) => b.buyerId === bid.buyerId) + 1;
-      io.to(`auction:${auctionId}`).emit('bid:placed', {
+      // D10: the masked entry goes to signed-in sockets only. A guest's socket is in the guests
+      // room and is told the numbers, which is all a price display needs.
+      io.to(auctionMembersRoom(auctionId)).emit('bid:placed', {
         auctionId,
         bid: {
           bidId: bid.id,
@@ -433,6 +436,11 @@ router.post(
           buyerName: `Bidder ${rank}`,
           timestamp: bid.createdAt.toISOString(),
         },
+      });
+      io.to(auctionGuestsRoom(auctionId)).emit('auction:price', {
+        auctionId,
+        currentBid: bid.amount,
+        bidCount: result.bidCount,
       });
     }
 
