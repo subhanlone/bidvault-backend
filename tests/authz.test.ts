@@ -80,6 +80,9 @@ const OPERATIONS: Op[] = [
   // ---- auctions -------------------------------------------------------------------------
   { method: 'get', contractPath: '/auctions/mine', url: () => '/auctions/mine', allow: ['BUYER', 'SELLER'] },
   { method: 'get', contractPath: '/auctions/mine/bids', url: () => '/auctions/mine/bids', allow: ['BUYER', 'SELLER'] },
+  // D10: the list of bids is for signed-in members; the admin auction monitor reads it too.
+  { method: 'get', contractPath: '/auctions/{auctionId}/bids',
+    url: (w) => `/auctions/${w.liveAuctionId}/bids`, allow: ['BUYER', 'SELLER', 'ADMIN'] },
   { method: 'post', contractPath: '/auctions/{auctionId}/bids',
     url: (w) => `/auctions/${w.liveAuctionId}/bids`, allow: ['BUYER', 'SELLER'], body: () => ({ amount: 30_000 }) },
   // Phase 6 (B4): w.liveAuctionId already has a bid, so the 403/401 checks below (which never

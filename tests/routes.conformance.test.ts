@@ -280,7 +280,7 @@ describe('auctions', () => {
 
   it('GET /auctions/{auctionId}/bids', async () => {
     hit('get', '/auctions/{auctionId}/bids');
-    const res = await request(app).get(api(`/auctions/${w.liveAuctionId}/bids`));
+    const res = await request(app).get(api(`/auctions/${w.liveAuctionId}/bids`)).set(auth(w.buyer.token));
     expect(res.status).toBe(200);
     const page = resData<Paginated<unknown>>(res);
     expect(Array.isArray(page.items)).toBe(true);

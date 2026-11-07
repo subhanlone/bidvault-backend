@@ -303,13 +303,29 @@ const documentInput = {
     // which oasdiff reports as a warning, not a break. Behaviour change, not a shape change: a
     // seller can now also bid, pay and review, so routes that used to refuse a SELLER token for
     // being "not a buyer" now accept it, and the seller capability is read from the database on
-    // every request, not from the token. The `role` enum is unchanged and is removed in 12.0.0.
+    // every request, not from the token. The `role` enum is unchanged; its removal is planned for a
+    // later major (it was first planned for 12.0.0, which went to the bid-list change below).
     // Also in this release: dependencies were upgraded for security advisories (zod 4.6.7, among
     // others), and zod now writes slightly different `pattern` strings for `format: date-time`
     // (seconds are required, as every value the server sends already has them) and `format: email`.
     // Only the published regex text changed; no field was added, removed or retyped by it, and
     // oasdiff reports no breaking change.
-    version: '11.5.0',
+    //
+    // 12.0.0, 2026-11-07, major: guest browsing, step 1 (decision D10). GET
+    // /auctions/{auctionId}/bids now needs a signed-in caller and answers 401 to everyone else; it
+    // used to be public (with masked bidders). oasdiff reports this only as two `info` changes
+    // (security added, a 401 added), so no gate forces the bump: major is our own judgement under
+    // COMPATIBILITY.md ("the server's behaviour changed in a way that can break a caller"): an
+    // anonymous caller that got 200 now gets 401. It is intentional: a guest may see an auction,
+    // its price and its bid COUNT, but not who bid or when. Why it is still safe to deploy
+    // backend-first: every deployed caller of this route is signed in (the buyer's auction
+    // screen) or an admin (the auction monitor), and both always send a token, so no existing
+    // caller starts to fail. The generated frontend client is updated in the frontend pull
+    // request that follows. The real-time half is outside this document: a signed-in socket
+    // still receives `bid:placed` (the masked entry), while an anonymous socket now receives
+    // `auction:price` with `{ auctionId, currentBid, bidCount }` only and never a bid entry.
+    // The `role` enum removal that the 11.5.0 note planned for "12.0.0" is a later major.
+    version: '12.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -607,12 +623,13 @@ const documentInput = {
     '/auctions/{auctionId}/bids': {
       get: {
         tags: ['Auctions'],
-        summary: 'Cursor-paginated, newest first',
+        summary: 'Cursor-paginated, newest first. For signed-in members; a guest sees only the bid count on the auction',
+        security: [{ bearerAuth: [] }],
         requestParams: {
           path: z.object({ auctionId: z.string() }),
           query: R.paginationQuerySchema,
         },
-        responses: { 200: okBody(S.PaginatedBidsDto, 'A page of bid history') },
+        responses: { 200: okBody(S.PaginatedBidsDto, 'A page of bid history'), 401: unauthorized },
       },
       post: {
         tags: ['Auctions'],

@@ -1,12 +1,28 @@
 import type { DefaultEventsMap, Socket } from 'socket.io';
 import { prisma } from '../db/prisma.js';
 
-/** Set once at handshake (see server.ts's `io.use`); not read anywhere yet, but typed rather
- * than left as Socket.IO's default `any` `socket.data` so a future reader doesn't get it back. */
+/** Set once at handshake (see server.ts's `io.use`). `userId` decides which audience room a
+ * socket joins; it is typed rather than left as Socket.IO's default `any` `socket.data`. */
 export interface AuctionSocketData {
   userId?: string;
   role?: string;
 }
+
+/**
+ * Every socket watching an auction is in `auctionRoom`; only events meant for everyone go there
+ * (`auction:cancelled`). What a bid reveals depends on who is looking (D10):
+ *   - `auctionMembersRoom`: sockets whose handshake token verified. They get `bid:placed`, the
+ *     masked bid entry.
+ *   - `auctionGuestsRoom`: anonymous sockets. They get `auction:price`, the numbers only.
+ * A socket is in exactly one of the two, decided once at the handshake like `seller-room.ts`.
+ */
+export const auctionRoom = (auctionId: string): string => `auction:${auctionId}`;
+export const auctionMembersRoom = (auctionId: string): string => `auction:${auctionId}:members`;
+export const auctionGuestsRoom = (auctionId: string): string => `auction:${auctionId}:guests`;
+
+/** True for the per-auction base room, false for its audience rooms: the cap counts auctions. */
+const isBaseAuctionRoom = (name: string): boolean =>
+  name.startsWith('auction:') && !name.endsWith(':members') && !name.endsWith(':guests');
 
 const BUCKET_CAPACITY = 50;
 const REFILL_WINDOW_MS = 60_000;
@@ -84,7 +100,7 @@ export function registerAuctionSubscriptions(socket: AuctionSocket): void {
       return;
     }
 
-    const room = `auction:${auctionId}`;
+    const room = auctionRoom(auctionId);
     if (pending.has(room)) {
       // A lookup is already running for this room: only the wish changes (this also reinstates a
       // subscribe that an unsubscribe had cancelled), no second lookup is started.
@@ -92,14 +108,19 @@ export function registerAuctionSubscriptions(socket: AuctionSocket): void {
       return;
     }
     if (socket.rooms.has(room)) return;
-    const joinedAuctionRooms = [...socket.rooms].filter((name) => name.startsWith('auction:')).length;
+    const joinedAuctionRooms = [...socket.rooms].filter(isBaseAuctionRoom).length;
     if (joinedAuctionRooms + pending.size >= MAX_AUCTION_ROOMS) return;
 
     pending.set(room, 'join');
     void auctionCache
       .has(auctionId)
       .then((exists) => {
-        if (exists && socket.connected && pending.get(room) === 'join') void socket.join(room);
+        if (exists && socket.connected && pending.get(room) === 'join') {
+          void socket.join([
+            room,
+            socket.data.userId ? auctionMembersRoom(auctionId) : auctionGuestsRoom(auctionId),
+          ]);
+        }
       })
       .catch((err: unknown) => {
         console.error('[socket] auction:subscribe lookup failed:', err instanceof Error ? err.message : err);
@@ -109,10 +130,14 @@ export function registerAuctionSubscriptions(socket: AuctionSocket): void {
 
   socket.on('auction:unsubscribe', (auctionId: unknown) => {
     if (typeof auctionId !== 'string' || auctionId.length > 128) return;
-    const room = `auction:${auctionId}`;
+    const room = auctionRoom(auctionId);
     // Only a room with a lookup in flight is recorded, so unsubscribing arbitrary names cannot grow
     // the map. A cancelled lookup keeps counting towards the room cap until it answers.
     if (pending.has(room)) pending.set(room, 'leave');
+    // All three: the socket is in the base room plus one audience room, and leaving a room it is
+    // not in is a no-op.
     void socket.leave(room);
+    void socket.leave(auctionMembersRoom(auctionId));
+    void socket.leave(auctionGuestsRoom(auctionId));
   });
 }

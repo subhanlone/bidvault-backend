@@ -5,7 +5,7 @@ import type { Server } from 'socket.io';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
-import { optionalAuth, requireAuth } from '../../middleware/auth.js';
+import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 import { placeBidSchema, cancelAuctionSchema } from '../../openapi/requests.js';
@@ -14,6 +14,7 @@ import { buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from './aucti
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import { escapeLike } from '../../utils/escape-like.js';
 import { sellerRoom } from '../../socket/seller-room.js';
+import { auctionGuestsRoom, auctionMembersRoom } from '../../socket/auction-subscriptions.js';
 import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
 
 const CANCEL_ERROR_STATUS: Record<Exclude<CancelAuctionResult['kind'], 'ok'>, [string, number]> = {
@@ -196,21 +197,23 @@ router.get(
 
 router.get(
   '/:auctionId/bids',
-  // BV-039: this route is public by design (anyone can watch an auction's bid history) but was
-  // publishing full bidder identity to anonymous visitors, who could enumerate exactly who bid,
-  // how much and when, and correlate one person's bidding across the whole platform via
-  // buyerId. optionalAuth reads the caller's own identity when a token is present, purely to
-  // compute `isMine` -- it never gates access to the route. Masking is uniform for every caller,
-  // AdminAuctionMonitor.tsx included: it reuses this same public endpoint for its live view, and
-  // a passively-watched in-progress auction gets the same privacy treatment as any other
-  // viewer. Real identity for actual investigation (a dispute, a stuck payout) is what
-  // GET /admin/disputes and GET /admin/transactions are for, not this feed.
-  optionalAuth(),
+  // D10: the list of bids is for signed-in members. A guest sees the auction, its price and its
+  // bid count (on GET /:auctionId), not who bid or when. Admin is allowed because
+  // AdminAuctionMonitor.tsx reads this feed for its live view.
+  //
+  // BV-039: before D10 this route was public and published full bidder identity to anonymous
+  // visitors, who could enumerate exactly who bid, how much and when, and correlate one person's
+  // bidding across the whole platform via buyerId. The masking stays for every caller: the
+  // caller's identity is read here only to compute `isMine`. Masking is uniform, the admin
+  // monitor included, so a passively-watched in-progress auction gets the same privacy treatment
+  // as any other viewer. Real identity for actual investigation (a dispute, a stuck payout) is
+  // what GET /admin/disputes and GET /admin/transactions are for, not this feed.
+  requireAuth(['BUYER', 'SELLER', 'ADMIN']),
   asyncHandler(async (req, res) => {
     const auctionId = req.params.auctionId;
     const limit = parseLimit(req.query.limit);
     const cursor = decodeCursor(req.query.cursor);
-    const requesterId = req.auth?.userId;
+    const requesterId = req.auth!.userId;
 
     const where: Prisma.BidWhereInput = cursor
       ? {
@@ -248,7 +251,7 @@ router.get(
         auctionId: bid.auctionId,
         // BV-018: buyerId can be null (an anonymised, deleted account) -- still genuinely
         // reachable, not hypothetical, so it gets its own label rather than a numbered one.
-        isMine: requesterId != null && bid.buyerId === requesterId,
+        isMine: bid.buyerId === requesterId,
         buyerName: bid.buyerId === null ? 'Deleted user' : `Bidder ${rank.get(bid.buyerId)}`,
         amount: bid.amount,
         timestamp: bid.createdAt.toISOString(),
@@ -404,11 +407,11 @@ router.post(
     // Redis overlay that used to shadow it here) -- live viewers get the update below via the
     // socket broadcast, not by re-reading the row.
     //
-    // BV-039: this broadcast reaches every socket in the room, authenticated or not, so it gets
-    // the same masking as GET /:auctionId/bids -- no buyerId, name replaced by the same stable
-    // per-auction pseudonym that route computes. The bidder's own client already has their real
-    // identity from this handler's own response below; it does not need the broadcast to tell
-    // it "that was you".
+    // BV-039: the bid broadcast gets the same masking as GET /:auctionId/bids -- no buyerId, name
+    // replaced by the same stable per-auction pseudonym that route computes. The bidder's own
+    // client already has their real identity from this handler's own response below; it does not
+    // need the broadcast to tell it "that was you". D10: it only goes to signed-in sockets; a
+    // guest's socket is told the price and the count instead (see the emits below).
     const io = req.app.get('io') as Server | undefined;
     if (io) {
       // To the seller's own room, so their Live Auctions screen and notification bell update at once.
@@ -425,7 +428,9 @@ router.post(
         distinct: ['buyerId'],
       });
       const rank = firstAppearances.findIndex((b) => b.buyerId === bid.buyerId) + 1;
-      io.to(`auction:${auctionId}`).emit('bid:placed', {
+      // D10: the masked entry goes to signed-in sockets only. A guest's socket is in the guests
+      // room and is told the numbers, which is all a price display needs.
+      io.to(auctionMembersRoom(auctionId)).emit('bid:placed', {
         auctionId,
         bid: {
           bidId: bid.id,
@@ -433,6 +438,11 @@ router.post(
           buyerName: `Bidder ${rank}`,
           timestamp: bid.createdAt.toISOString(),
         },
+      });
+      io.to(auctionGuestsRoom(auctionId)).emit('auction:price', {
+        auctionId,
+        currentBid: bid.amount,
+        bidCount: result.bidCount,
       });
     }
 
