@@ -128,6 +128,8 @@ export const AuctionDto = z
   .object({
     auctionId: z.string(),
     listingId: z.string(),
+    /** The public item number, BV-year-hex. The same value the seller's listing carries. */
+    listingCode: z.string(),
     title: z.string(),
     category: z.string(),
     condition: ItemCondition,
@@ -245,6 +247,10 @@ export const PublicSettingsDto = z
     supportEmail: z.email(),
     /** The seller terms version the "Become a seller" form must send back. */
     sellerTermsVersion: z.string(),
+    /** Hours a winner has to pay: quoted on the auction page's buying rules. */
+    paymentDeadlineHours: z.number().int(),
+    /** Hours a buyer has to confirm receipt or dispute after shipping: quoted on the buying rules. */
+    reviewTimeoutHours: z.number().int(),
   })
   .meta({ id: 'PublicSettings' });
 

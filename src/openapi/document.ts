@@ -325,7 +325,17 @@ const documentInput = {
     // still receives `bid:placed` (the masked entry), while an anonymous socket now receives
     // `auction:price` with `{ auctionId, currentBid, bidCount }` only and never a bid entry.
     // The `role` enum removal that the 11.5.0 note planned for "12.0.0" is a later major.
-    version: '12.0.0',
+    //
+    // 12.1.0, 2026-11-07, minor: guest browsing, step 2 (the data the public auction page quotes).
+    // Additive only. AuctionDto gains listingCode, the public item number (BV-year-hex) that the
+    // seller's listing already carries; it is on every route that serves an auction (the public
+    // list and detail, the seller's own list, my bids, the watchlist). PublicSettings gains
+    // paymentDeadlineHours and reviewTimeoutHours (48 and 48 by default), so the buying-rules block
+    // quotes the live admin settings instead of hard-coding them. Both new response fields are
+    // required, which oasdiff reports as informational, not a break: no existing client can fail to
+    // parse a response for gaining a field. reviewTimeoutHours used to be admin-only; it is public
+    // now because it is quoted to bidders, and nothing else of the settings row is.
+    version: '12.1.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +

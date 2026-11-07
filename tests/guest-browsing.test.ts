@@ -19,6 +19,7 @@ const { prisma } = await import('../src/db/prisma.js');
 const { redisConnection } = await import('../src/infra/redis.js');
 const { takeViolations } = await import('../src/middleware/response-contract.js');
 const { seedWorld } = await import('./helpers/world.js');
+const { updatePlatformSettings, invalidateSettingsCache } = await import('../src/services/settings.service.js');
 
 type World = Awaited<ReturnType<typeof seedWorld>>;
 
@@ -65,6 +66,78 @@ function captureSocketEmits(): Emitted[] {
   });
   return emitted;
 }
+
+describe('listingCode on the auction', () => {
+  // The public item number: BV-year-hex, the same value the seller's listing carries.
+  const codeOf = async (auctionId: string) =>
+    (await prisma.auction.findUniqueOrThrow({ where: { id: auctionId }, select: { listing: { select: { listingCode: true } } } }))
+      .listing.listingCode;
+
+  type Body<T> = { data: T };
+
+  it('is on the auction itself, for a visitor with no token', async () => {
+    const res = await request(app).get(api(`/auctions/${w.liveAuctionId}`));
+    expect(res.status).toBe(200);
+    expect((res.body as Body<{ listingCode: string }>).data.listingCode).toBe(await codeOf(w.liveAuctionId));
+    expect(takeViolations()).toEqual([]);
+  });
+
+  it('is on every item of the public list', async () => {
+    const res = await request(app).get(api('/auctions'));
+    expect(res.status).toBe(200);
+    const items = (res.body as Body<{ items: { auctionId: string; listingCode: string }[] }>).data.items;
+    const live = items.find((a) => a.auctionId === w.liveAuctionId);
+    expect(live?.listingCode).toBe(await codeOf(w.liveAuctionId));
+    expect(items.every((a) => typeof a.listingCode === 'string' && a.listingCode.length > 0)).toBe(true);
+    expect(takeViolations()).toEqual([]);
+  });
+
+  it('is on the seller\'s own auctions', async () => {
+    const res = await request(app).get(api('/auctions/mine')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    const items = (res.body as Body<{ items: { auctionId: string; listingCode: string }[] }>).data.items;
+    expect(items.find((a) => a.auctionId === w.liveAuctionId)?.listingCode).toBe(await codeOf(w.liveAuctionId));
+    expect(takeViolations()).toEqual([]);
+  });
+
+  it('is on the auction inside each of the buyer\'s bids', async () => {
+    const res = await request(app).get(api('/auctions/mine/bids')).set(auth(w.buyer.token));
+    expect(res.status).toBe(200);
+    const items = (res.body as Body<{ items: { auction: { auctionId: string; listingCode: string } }[] }>).data.items;
+    const row = items.find((b) => b.auction.auctionId === w.liveAuctionId);
+    expect(row?.auction.listingCode).toBe(await codeOf(w.liveAuctionId));
+    expect(takeViolations()).toEqual([]);
+  });
+
+  it('is on the watchlist rows', async () => {
+    const res = await request(app).get(api('/watchlist')).set(auth(w.otherBuyer.token));
+    expect(res.status).toBe(200);
+    const items = (res.body as Body<{ items: { auctionId: string; listingCode: string }[] }>).data.items;
+    const row = items.find((a) => a.auctionId === w.otherBuyerWatchedAuctionId);
+    expect(row?.listingCode).toBe(await codeOf(w.otherBuyerWatchedAuctionId));
+    expect(takeViolations()).toEqual([]);
+  });
+});
+
+describe('the buying rules are public', () => {
+  type Rules = { data: { paymentDeadlineHours: number; reviewTimeoutHours: number } };
+
+  it('quotes the payment and confirmation windows to a visitor with no token', async () => {
+    const res = await request(app).get(api('/settings/public'));
+    expect(res.status).toBe(200);
+    const { paymentDeadlineHours, reviewTimeoutHours } = (res.body as Rules).data;
+    expect({ paymentDeadlineHours, reviewTimeoutHours }).toEqual({ paymentDeadlineHours: 48, reviewTimeoutHours: 48 });
+    expect(takeViolations()).toEqual([]);
+  });
+
+  it('follows what the admin sets', async () => {
+    await updatePlatformSettings({ paymentDeadlineHours: 72, reviewTimeoutHours: 24 });
+    invalidateSettingsCache();
+    const res = await request(app).get(api('/settings/public'));
+    const { paymentDeadlineHours, reviewTimeoutHours } = (res.body as Rules).data;
+    expect({ paymentDeadlineHours, reviewTimeoutHours }).toEqual({ paymentDeadlineHours: 72, reviewTimeoutHours: 24 });
+  });
+});
 
 describe('the list of bids needs an account (D10)', () => {
   const bids = () => request(app).get(api(`/auctions/${w.liveAuctionId}/bids`));

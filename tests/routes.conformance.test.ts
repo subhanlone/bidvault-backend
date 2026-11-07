@@ -805,8 +805,15 @@ describe('settings', () => {
     expect(res.status).toBe(200);
     // Exactly what an anonymous visitor needs. The listing limits are sellers' business and live
     // on GET /listings/limits; nothing else may be spread in from the settings row. The seller terms
-    // version is the one thing a signed-in non-seller needs before they can enrol.
-    expect(Object.keys(resData<Record<string, unknown>>(res)).sort()).toEqual(['maintenanceMode', 'sellerTermsVersion', 'supportEmail']);
+    // version is what a signed-in non-seller needs before they can enrol, and the two windows are
+    // what the auction page's buying rules quote to anyone considering a bid.
+    expect(Object.keys(resData<Record<string, unknown>>(res)).sort()).toEqual([
+      'maintenanceMode',
+      'paymentDeadlineHours',
+      'reviewTimeoutHours',
+      'sellerTermsVersion',
+      'supportEmail',
+    ]);
   });
 
   it('GET /settings', async () => {

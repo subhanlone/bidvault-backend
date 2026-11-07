@@ -10,7 +10,7 @@ import { validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 import { placeBidSchema, cancelAuctionSchema } from '../../openapi/requests.js';
 import type { BidDtoType, BidWithAuctionDtoType } from '../../openapi/schemas.js';
-import { buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from './auction-dto.js';
+import { auctionInclude, buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from './auction-dto.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import { escapeLike } from '../../utils/escape-like.js';
 import { sellerRoom } from '../../socket/seller-room.js';
@@ -70,7 +70,7 @@ router.get(
 
     const rows = await prisma.auction.findMany({
       where,
-      include: { seller: true },
+      include: auctionInclude,
       orderBy: [{ endTime: 'asc' }, { id: 'asc' }],
       take: limit + 1,
     });
@@ -115,7 +115,7 @@ router.get(
 
     const rows = await prisma.auction.findMany({
       where,
-      include: { seller: true },
+      include: auctionInclude,
       orderBy: [{ endTime: order }, { id: order }],
       take: limit + 1,
     });
@@ -147,7 +147,7 @@ router.get(
 
     const rows = await prisma.bid.findMany({
       where,
-      include: { buyer: true, auction: { include: { seller: true } } },
+      include: { buyer: true, auction: { include: auctionInclude } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -180,7 +180,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const auction = await prisma.auction.findUnique({
       where: { id: req.params.auctionId },
-      include: { seller: true },
+      include: auctionInclude,
     });
 
     if (!auction) {

@@ -60,11 +60,22 @@ export async function buildWatcherCountMap(auctionIds: string[]) {
   return map;
 }
 
+/**
+ * What every query that feeds toAuctionDto loads with the auction: its seller, and the listing's
+ * public item number. A route that passes some other shape does not compile.
+ */
+export const auctionInclude = {
+  seller: true,
+  listing: { select: { listingCode: true } },
+} as const satisfies Prisma.AuctionInclude;
+
+export type AuctionRow = Prisma.AuctionGetPayload<{ include: typeof auctionInclude }>;
+
 // Return type is the published contract, not inferred. If this mapper and
 // openapi/schemas.ts drift apart, the build breaks here rather than the frontend
 // silently receiving a shape its generated types say is impossible.
 export function toAuctionDto(
-  auction: Prisma.AuctionGetPayload<{ include: { seller: true } }>,
+  auction: AuctionRow,
   statsMap: Map<string, { rating: number | null; salesCount: number }> | undefined,
   // Required, so a route that serves an auction cannot forget the count: it would not compile.
   watcherCounts: Map<string, number>,
@@ -73,6 +84,7 @@ export function toAuctionDto(
   return {
     auctionId: auction.id,
     listingId: auction.listingId,
+    listingCode: auction.listing.listingCode,
     title: auction.title,
     category: auction.category,
     condition: auction.condition,
