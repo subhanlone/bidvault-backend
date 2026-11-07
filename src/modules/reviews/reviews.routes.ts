@@ -192,6 +192,10 @@ router.get(
         where: { sellerId },
         orderBy: { createdAt: 'desc' },
         take: 50,
+        include: {
+          auction: { select: { title: true } },
+          transaction: { select: { winnerId: true } },
+        },
       }),
     ]);
 
@@ -213,6 +217,11 @@ router.get(
         stars: r.stars,
         comment: r.comment,
         buyerName: `Reviewer ${rank.get(r.buyerId)}`,
+        itemTitle: r.auction.title,
+        // A review can only be written by the buyer of a delivered sale (POST /reviews), so this is
+        // true for every review written today. It is read from the data and not assumed: a sale
+        // that was later offered on to another bidder no longer belongs to this reviewer.
+        verifiedPurchase: r.transaction.winnerId === r.buyerId,
         createdAt: r.createdAt.toISOString(),
         // C6, Phase 7.
         updatedAt: r.updatedAt?.toISOString(),

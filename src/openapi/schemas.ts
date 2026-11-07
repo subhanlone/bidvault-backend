@@ -357,6 +357,28 @@ export const ReviewDto = z
   })
   .meta({ id: 'Review' });
 
+/**
+ * What anyone may read about a seller: the same facts the seller card on an auction carries, plus
+ * the bio. Never a phone number or an e-mail address (the seller's phone is shown to a buyer only
+ * once a sale is paid, on that sale). `memberSince` is when they became a seller, or when they
+ * joined for a seller from before that was recorded.
+ */
+export const SellerProfileDto = z
+  .object({
+    id: z.string(),
+    displayName: z.string(),
+    memberSince: isoDateTime,
+    city: z.string().nullable(),
+    province: z.string().nullable(),
+    bio: z.string().nullable(),
+    /** Sales that were paid for, whatever their stage since. */
+    itemsSold: z.number().int().min(0),
+    /** Mean stars to one decimal, or null when no one has reviewed them. */
+    rating: z.number().nullable(),
+    ratingCount: z.number().int().min(0),
+  })
+  .meta({ id: 'SellerProfile' });
+
 export const SellerReviewsDto = z
   .object({
     sellerId: z.string(),
@@ -365,7 +387,15 @@ export const SellerReviewsDto = z
     count: z.number().int(),
     // BV-039: this route is unauthenticated too — buyerName is a stable per-seller pseudonym
     // ("Reviewer N"), not the reviewer's real name.
-    reviews: z.array(ReviewDto.extend({ buyerName: z.string() })),
+    reviews: z.array(
+      ReviewDto.extend({
+        buyerName: z.string(),
+        /** What the review was about. */
+        itemTitle: z.string(),
+        /** The writer is the buyer of the sale the review is tied to. */
+        verifiedPurchase: z.boolean(),
+      }),
+    ),
   })
   .meta({ id: 'SellerReviews' });
 
@@ -787,6 +817,7 @@ export const SellerItemsSummaryDto = z
 export type UserDtoType = z.infer<typeof UserDto>;
 export type AuctionDtoType = z.infer<typeof AuctionDto>;
 export type AuctionFacetsDtoType = z.infer<typeof AuctionFacetsDto>;
+export type SellerProfileDtoType = z.infer<typeof SellerProfileDto>;
 export type ListingDtoType = z.infer<typeof ListingDto>;
 export type SellerItemDtoType = z.infer<typeof SellerItemDto>;
 export type SellerItemsSummaryDtoType = z.infer<typeof SellerItemsSummaryDto>;

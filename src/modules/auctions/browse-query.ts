@@ -10,7 +10,7 @@ import { BROWSE_SORTS, browseQuerySchema } from '../../openapi/requests.js';
  * The three filters the list always had (`status`, `category`, `search`) stay forgiving: an
  * unknown status means ACTIVE, and a damaged cursor means the first page, so a stale link lands
  * on a list. The parameters added with guest browsing (`sort`, `minPrice`, `maxPrice`,
- * `condition`, `withBids`) are strict, because nothing depends on their being forgiven.
+ * `condition`, `withBids`, `sellerId`) are strict, because nothing depends on their being forgiven.
  */
 
 export type BrowseSort = (typeof BROWSE_SORTS)[number];
@@ -26,6 +26,7 @@ export interface BrowseParams {
   maxPrice: number | undefined;
   conditions: ItemCondition[];
   withBids: boolean;
+  sellerId: string | undefined;
 }
 
 export type BrowseParse =
@@ -42,7 +43,7 @@ export function parseBrowseQuery(query: Record<string, unknown>): BrowseParse {
   if (!strict.success) {
     return { ok: false, details: flatten(strict.error) };
   }
-  const { sort, minPrice, maxPrice, condition, withBids } = strict.data;
+  const { sort, minPrice, maxPrice, condition, withBids, sellerId } = strict.data;
   if (minPrice !== undefined && maxPrice !== undefined && minPrice > maxPrice) {
     return { ok: false, details: { minPrice: ['The lowest price cannot be above the highest price.'] } };
   }
@@ -61,6 +62,7 @@ export function parseBrowseQuery(query: Record<string, unknown>): BrowseParse {
       maxPrice,
       conditions: condition === undefined ? [] : Array.isArray(condition) ? condition : [condition],
       withBids: withBids === 'true',
+      sellerId,
     },
   };
 }
@@ -86,6 +88,8 @@ export type FacetGroup = 'category' | 'condition' | 'price' | 'withBids';
  */
 export function buildFilters(params: BrowseParams, leaveOut?: FacetGroup): Prisma.AuctionWhereInput {
   const all: Prisma.AuctionWhereInput[] = [{ status: params.status }];
+
+  if (params.sellerId) all.push({ sellerId: params.sellerId });
 
   if (params.category && leaveOut !== 'category') {
     all.push({ category: { contains: escapeLike(params.category), mode: 'insensitive' } });
