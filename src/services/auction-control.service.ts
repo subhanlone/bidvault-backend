@@ -108,7 +108,14 @@ export async function cancelAuction(
 
   if (outcome.kind !== 'ok') return { kind: outcome.kind };
 
-  await cancelScheduledJob(auctionId);
+  // The cancel has committed, so a failure here must not undo the answer, the live notice or the
+  // e-mails below. A job that could not be removed (Redis down, or a worker already running it) is
+  // harmless: closeAuction refuses an auction that is no longer ACTIVE.
+  try {
+    await cancelScheduledJob(auctionId);
+  } catch (err) {
+    console.error(`[auction-control] Could not remove the close job for cancelled auction ${auctionId}:`, err);
+  }
   // LIFECYCLE-IMPLEMENTATION-PLAN.md's B4/C4 section calls for a live socket notification
   // ("bid:cancelled socket event") alongside the DB notification + email above -- named
   // `auction:cancelled` here instead, matching this codebase's own convention of naming
