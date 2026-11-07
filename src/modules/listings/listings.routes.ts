@@ -28,6 +28,21 @@ const router = Router();
 const ALLOWED_UPLOAD_FORMATS = 'jpg,png,webp';
 
 class ListingStateError extends Error {}
+/** The listing was deleted (withdrawn by its seller) before the decision reached it. */
+class ListingGoneError extends Error {}
+
+/**
+ * Locks a listing's row for the rest of the transaction and returns its status, or undefined when
+ * the row no longer exists. Every moderation decision (approve, reject, withdraw) takes this lock
+ * before deciding, so two decisions in flight together run one after the other and the second sees
+ * what the first did, instead of both acting on a status read a moment earlier.
+ */
+async function lockListing(tx: Prisma.TransactionClient, listingId: string) {
+  const [row] = await tx.$queryRaw<Array<{ status: string; sellerId: string }>>`
+    SELECT status, "sellerId" FROM "Listing" WHERE id = ${listingId} FOR UPDATE
+  `;
+  return row;
+}
 
 // See toAuctionDto — the return type is the published contract, so drift is a build error.
 function toListingDto(
@@ -86,19 +101,22 @@ function isOwnedCloudinaryImage(imageUrl: string, sellerId: string): boolean {
 }
 
 async function approveOneListing(
-  listing: Prisma.ListingGetPayload<{ include: { seller: true } }>,
+  listingId: string,
   adminUserId: string,
   io: Server | undefined,
 ): Promise<{ listingId: string; auctionId?: string; warning?: string }> {
-  if (listing.status !== 'PENDING') {
-    throw new ListingStateError('Only pending listings can be approved.');
-  }
-
-  const startTime = new Date();
-  const endTime = new Date(startTime.getTime() + listing.durationDays * 24 * 60 * 60 * 1000);
-  const auctionStatus = 'ACTIVE';
-
   const result = await prisma.$transaction(async (tx) => {
+    // Decided under the row lock, and the auction is built from the row read after it: a listing
+    // rejected (or withdrawn, or rejected and edited) since it was put in the review queue must be
+    // seen as it is now, not as it was when "Approve all" read its batch.
+    const locked = await lockListing(tx, listingId);
+    if (!locked) throw new ListingGoneError('This listing no longer exists.');
+    if (locked.status !== 'PENDING') throw new ListingStateError('Only pending listings can be approved.');
+    const listing = await tx.listing.findUniqueOrThrow({ where: { id: listingId }, include: { seller: true } });
+
+    const startTime = new Date();
+    const endTime = new Date(startTime.getTime() + listing.durationDays * 24 * 60 * 60 * 1000);
+
     const updatedListing = await tx.listing.update({
       where: { id: listing.id },
       data: { status: 'APPROVED', rejectionReason: null },
@@ -127,7 +145,7 @@ async function approveOneListing(
           attributes: listing.attributes ?? undefined,
           startTime,
           endTime,
-          status: auctionStatus,
+          status: 'ACTIVE',
         },
       });
     }
@@ -148,8 +166,9 @@ async function approveOneListing(
       },
     });
 
-    return { updatedListing, auction, isNewAuction: !existingAuction };
+    return { listing, updatedListing, auction, isNewAuction: !existingAuction };
   });
+  const { listing } = result;
 
   let schedulingFailed = false;
   if (result.auction && result.auction.status !== 'CLOSED' && result.isNewAuction) {
@@ -405,22 +424,22 @@ router.delete(
   '/:listingId',
   requireAuth(['BUYER', 'SELLER']),
   asyncHandler(async (req, res) => {
-    const existing = await prisma.listing.findUnique({ where: { id: req.params.listingId } });
-    if (!existing) {
-      fail(res, 'Listing not found.', 404);
-      return;
-    }
-    if (existing.sellerId !== req.auth!.userId) {
-      fail(res, 'You can only withdraw your own listings.', 403);
-      return;
-    }
-    if (existing.status !== 'PENDING') {
-      fail(res, 'Only a listing awaiting review can be withdrawn.', 409);
-      return;
-    }
+    const { listingId } = req.params;
+    // Under the row lock, like approve and reject: an approval that commits while this waits must
+    // be seen here, or the delete would hit the auction that approval just created.
+    const outcome = await prisma.$transaction(async (tx) => {
+      const locked = await lockListing(tx, listingId);
+      if (!locked) return 'not-found' as const;
+      if (locked.sellerId !== req.auth!.userId) return 'forbidden' as const;
+      if (locked.status !== 'PENDING') return 'not-pending' as const;
+      await tx.listing.delete({ where: { id: listingId } });
+      return 'ok' as const;
+    });
 
-    await prisma.listing.delete({ where: { id: existing.id } });
-    ok(res, { listingId: existing.id, status: 'WITHDRAWN' });
+    if (outcome === 'not-found') { fail(res, 'Listing not found.', 404); return; }
+    if (outcome === 'forbidden') { fail(res, 'You can only withdraw your own listings.', 403); return; }
+    if (outcome === 'not-pending') { fail(res, 'Only a listing awaiting review can be withdrawn.', 409); return; }
+    ok(res, { listingId, status: 'WITHDRAWN' });
   }),
 );
 
@@ -499,19 +518,9 @@ router.post(
   '/:listingId/approve',
   requireAuth(['ADMIN']),
   asyncHandler(async (req, res) => {
-    const listing = await prisma.listing.findUnique({
-      where: { id: req.params.listingId },
-      include: { seller: true },
-    });
-
-    if (!listing) {
-      fail(res, 'Listing not found.', 404);
-      return;
-    }
-
     const io = req.app.get('io') as Server | undefined;
     try {
-      const result = await approveOneListing(listing, req.auth!.userId, io);
+      const result = await approveOneListing(req.params.listingId, req.auth!.userId, io);
       ok(res, {
         listingId: result.listingId,
         status: 'APPROVED',
@@ -519,6 +528,10 @@ router.post(
         ...(result.warning && { warning: result.warning }),
       });
     } catch (err) {
+      if (err instanceof ListingGoneError) {
+        fail(res, 'Listing not found.', 404);
+        return;
+      }
       if (err instanceof ListingStateError) {
         fail(res, err.message, 400);
         return;
@@ -541,9 +554,11 @@ router.post(
   '/approve-all',
   requireAuth(['ADMIN']),
   asyncHandler(async (req, res) => {
+    // Only the ids: each listing is read again, under its row lock, when its turn comes (see
+    // approveOneListing). The batch is a list of candidates, not of decisions already made.
     const pending = await prisma.listing.findMany({
       where: { status: 'PENDING' },
-      include: { seller: true },
+      select: { id: true },
       orderBy: { submittedAt: 'asc' },
       take: APPROVE_ALL_BATCH_SIZE,
     });
@@ -552,22 +567,24 @@ router.post(
     const failures: { listingId: string; error: string }[] = [];
     let approved = 0;
 
-    for (const listing of pending) {
+    for (const { id } of pending) {
       try {
-        await approveOneListing(listing, req.auth!.userId, io);
+        await approveOneListing(id, req.auth!.userId, io);
         approved++;
       } catch (err) {
-        if (err instanceof ListingStateError) {
-          failures.push({ listingId: listing.id, error: err.message });
+        // Rejected, approved or withdrawn by someone else since the batch was read: reported for
+        // that listing, and the rest of the batch goes on.
+        if (err instanceof ListingStateError || err instanceof ListingGoneError) {
+          failures.push({ listingId: id, error: err.message });
           continue;
         }
         throw err;
       }
     }
 
-    // Queried fresh rather than derived from pending.length - approved - failures.length: a
-    // ListingStateError means the row's status changed under us (a concurrent single approve/
-    // reject), not that it is still sitting PENDING, so subtraction would double-count it.
+    // Queried fresh rather than derived from pending.length - approved - failures.length: a failure
+    // means the listing changed under the batch (it is no longer PENDING, or no longer exists), so
+    // subtracting it would count it as still waiting.
     const remaining = await prisma.listing.count({ where: { status: 'PENDING' } });
 
     ok(res, { approved, failed: failures.length, failures, remaining });
@@ -579,34 +596,35 @@ router.post(
   requireAuth(['ADMIN']),
   validateBody(rejectListingSchema),
   asyncHandler<z.infer<typeof rejectListingSchema>>(async (req, res) => {
-    const listing = await prisma.listing.findUnique({
-      where: { id: req.params.listingId },
-      include: { seller: true },
+    // Under the row lock, like approve: a reject that waited for an approval to commit must see it
+    // and refuse, instead of marking REJECTED a listing whose auction is already live.
+    const decided = await prisma.$transaction(async (tx) => {
+      const locked = await lockListing(tx, req.params.listingId);
+      if (!locked) return { kind: 'not-found' as const };
+      if (locked.status !== 'PENDING') return { kind: 'not-pending' as const };
+      const updated = await tx.listing.update({
+        where: { id: req.params.listingId },
+        data: { status: 'REJECTED', rejectionReason: req.body.reason },
+        include: { seller: true },
+      });
+      return { kind: 'ok' as const, updated };
     });
 
-    if (!listing) {
+    if (decided.kind === 'not-found') {
       fail(res, 'Listing not found.', 404);
       return;
     }
-
-    if (listing.status !== 'PENDING') {
+    if (decided.kind === 'not-pending') {
       fail(res, 'Only pending listings can be rejected.', 409);
       return;
     }
-
-    const updated = await prisma.listing.update({
-      where: { id: listing.id },
-      data: {
-        status: 'REJECTED',
-        rejectionReason: req.body.reason,
-      },
-    });
+    const listing = decided.updated;
 
     const io = req.app.get('io') as Server | undefined;
     io?.emit('listing:rejected', { listingId: listing.id });
     dispatchEmail(sendListingRejectedEmail(
       { email: listing.seller?.email ?? '', name: listing.seller?.name ?? '' },
-      { title: listing.title, reason: updated.rejectionReason ?? '' },
+      { title: listing.title, reason: listing.rejectionReason ?? '' },
     ), 'listing rejected');
 
     await prisma.auditLog.create({
@@ -629,9 +647,9 @@ router.post(
     }).catch((err: unknown) => console.error('[listings] rejection notification failed', { listingId: listing.id, err }));
 
     ok(res, {
-      listingId: updated.id,
-      status: updated.status,
-      rejectionReason: updated.rejectionReason,
+      listingId: listing.id,
+      status: listing.status,
+      rejectionReason: listing.rejectionReason,
     });
   }),
 );
