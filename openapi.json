@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "12.0.0",
+    "version": "12.1.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -6839,6 +6839,9 @@
           "listingId": {
             "type": "string"
           },
+          "listingCode": {
+            "type": "string"
+          },
           "title": {
             "type": "string"
           },
@@ -6955,6 +6958,7 @@
         "required": [
           "auctionId",
           "listingId",
+          "listingCode",
           "title",
           "category",
           "condition",
@@ -8399,12 +8403,24 @@
           },
           "sellerTermsVersion": {
             "type": "string"
+          },
+          "paymentDeadlineHours": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "reviewTimeoutHours": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
           }
         },
         "required": [
           "maintenanceMode",
           "supportEmail",
-          "sellerTermsVersion"
+          "sellerTermsVersion",
+          "paymentDeadlineHours",
+          "reviewTimeoutHours"
         ],
         "additionalProperties": false
       },

@@ -10,14 +10,12 @@ import { getPlatformSettings, updatePlatformSettings } from '../../services/sett
 
 const router = Router();
 
-// Public — only what a visitor who has not signed in needs: the maintenance gate and the footer's
-// support contact. Everything else is cherry-picked in on purpose, never spread from the settings
-// row (OWASP API3: keep returned data to the bare minimum the endpoint's requirement calls for).
-//
-// minListingPrice and maxBidIncrement used to ride along here so the create-listing form could
-// check against them. They are rules for sellers, so they moved to the seller-only
-// GET /listings/limits (contract 9.1.0) and were removed from here once the frontend had stopped
-// reading them (10.0.0). reviewTimeoutHours and emailNotifsEnabled stay admin-only.
+// Public: only what a visitor who has not signed in needs: the maintenance gate, the footer's
+// support contact, the seller terms version, and the two buying-rule windows the auction page quotes
+// to anyone considering a bid. Everything else is cherry-picked in on purpose, never spread from the
+// settings row (OWASP API3: keep returned data to the bare minimum the endpoint's requirement calls
+// for). minListingPrice and maxBidIncrement are rules for sellers and are served by the seller-only
+// GET /listings/limits; emailNotifsEnabled stays admin-only.
 router.get(
   '/public',
   asyncHandler(async (_req, res) => {
@@ -26,6 +24,8 @@ router.get(
       maintenanceMode: s.maintenanceMode,
       supportEmail: s.supportEmail,
       sellerTermsVersion: SELLER_TERMS_VERSION,
+      paymentDeadlineHours: s.paymentDeadlineHours,
+      reviewTimeoutHours: s.reviewTimeoutHours,
     });
   }),
 );

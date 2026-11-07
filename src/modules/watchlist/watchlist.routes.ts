@@ -4,7 +4,7 @@ import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from '../auctions/auction-dto.js';
+import { auctionInclude, buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from '../auctions/auction-dto.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 
 const router = Router();
@@ -37,7 +37,7 @@ router.get(
 
     const rows = await prisma.watchlist.findMany({
       where,
-      include: { auction: { include: { seller: true } } },
+      include: { auction: { include: auctionInclude } },
       orderBy: [{ createdAt: 'desc' }, { auctionId: 'desc' }],
       take: limit + 1,
     });
