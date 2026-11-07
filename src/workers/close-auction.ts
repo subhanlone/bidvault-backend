@@ -18,7 +18,10 @@ import { dispatchEmail, sendAuctionEndedEmail, sendReserveNotMetEmail } from '..
  */
 
 export interface CloseResult {
-  /** Another worker got there first; nothing was written. */
+  /**
+   * The auction was not ACTIVE once its row was locked, so nothing was written: another run closed
+   * it first, or it was cancelled.
+   */
   alreadyClosed: boolean;
   /** null when no reserve was set, otherwise whether the top bid cleared it. */
   reserveMet: boolean | null;
@@ -45,7 +48,11 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
     const [locked] = await tx.$queryRaw<Array<{ status: string; bidCount: number }>>`
       SELECT status, "bidCount" FROM "Auction" WHERE id = ${auction.id} FOR UPDATE
     `;
-    if (!locked || locked.status === 'CLOSED') {
+    // Only a live auction is closed. A CANCELLED one must stay cancelled: its close job can outlive
+    // the cancel (the job is removed only after the cancel commits, and that removal can fail), and
+    // a job already running when the cancel happens waits here on the row lock and then sees the
+    // cancel. Closing it anyway turned a cancelled auction into a sale with a winner who owed money.
+    if (!locked || locked.status !== 'ACTIVE') {
       return { alreadyClosed: true, winningBid: null, notifyWinner: false, reserveMet: null, bidCount: 0 };
     }
 
