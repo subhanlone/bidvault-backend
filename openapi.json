@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "12.1.0",
+    "version": "12.2.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -997,7 +997,7 @@
         "tags": [
           "Auctions"
         ],
-        "summary": "Public, cursor-paginated. Defaults to status=ACTIVE. Reserve amounts are never included — only reserveMet.",
+        "summary": "Public, cursor-paginated. Defaults to status=ACTIVE, soonest-ending first. Reserve amounts are never included — only reserveMet. `sort` picks the order (ties always break on the auction id, so a page never repeats or skips a row); `minPrice` and `maxPrice` are whole rupees, inclusive, read against the current bid; `condition` is sent once per value; `withBids=true` leaves out auctions with no bid. `search` matches words in the title or description, except that a term that is exactly an item number (BV-year-ten hex digits, any case) matches that one item and nothing else. A cursor belongs to the sort it was made under and is refused under another.",
         "parameters": [
           {
             "in": "query",
@@ -1018,6 +1018,78 @@
             "name": "search",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ending-soonest",
+                "ending-soonest-with-bids",
+                "newly-listed",
+                "price-asc",
+                "price-desc",
+                "bids-desc",
+                "bids-asc"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "minPrice",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000000000
+            }
+          },
+          {
+            "in": "query",
+            "name": "maxPrice",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000000000
+            }
+          },
+          {
+            "in": "query",
+            "name": "condition",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "NEW",
+                    "LIKE_NEW",
+                    "USED"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "NEW",
+                      "LIKE_NEW",
+                      "USED"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "withBids",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
             }
           },
           {
@@ -1058,6 +1130,139 @@
                     "data"
                   ],
                   "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auctions/facets": {
+      "get": {
+        "tags": [
+          "Auctions"
+        ],
+        "summary": "Public. How many auctions each browse filter choice would give. Takes the list's filters (not `sort`, `limit` or `cursor`); a group of choices counts with every other filter applied but not its own. Price bands are under-5000 (below 5,000), 5000-25000 (5,000 to 25,000) and over-25000 (above 25,000), whole rupees",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "$ref": "#/components/schemas/AuctionStatus"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "minPrice",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000000000
+            }
+          },
+          {
+            "in": "query",
+            "name": "maxPrice",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000000000
+            }
+          },
+          {
+            "in": "query",
+            "name": "condition",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "NEW",
+                    "LIKE_NEW",
+                    "USED"
+                  ]
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "NEW",
+                      "LIKE_NEW",
+                      "USED"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "withBids",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Counts per filter choice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/AuctionFacets"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
                 }
               }
             }
@@ -7005,6 +7210,91 @@
           ]
         },
         "description": "Category-specific fields; keys vary by category."
+      },
+      "AuctionFacets": {
+        "type": "object",
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "name",
+                "count"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "$ref": "#/components/schemas/ItemCondition"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "value",
+                "count"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "priceBands": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "enum": [
+                    "under-5000",
+                    "5000-25000",
+                    "over-25000"
+                  ]
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "id",
+                "count"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "withBids": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "categories",
+          "conditions",
+          "priceBands",
+          "withBids"
+        ],
+        "additionalProperties": false
       },
       "PaginatedSellerItems": {
         "type": "object",

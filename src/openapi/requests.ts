@@ -6,6 +6,7 @@ import { CATEGORIES } from '../modules/listings/category-attributes.js';
 // Side-effect-free too (type-only imports from Prisma).
 import { SELLER_ITEM_TABS } from '../modules/seller-items/seller-item-stage.js';
 import { SELLER_BIO_MAX, SELLER_PROVINCES } from '../config/seller.js';
+import { ItemCondition } from './schemas.js';
 
 /**
  * Every request body the API accepts.
@@ -309,6 +310,37 @@ export const sellerItemsQuerySchema = paginationQuerySchema.extend({
 /** GET /auctions/mine: the pagination pair plus which of the seller's auctions (default ACTIVE). */
 export const mineAuctionsQuerySchema = paginationQuerySchema.extend({
   status: z.enum(['ACTIVE', 'CLOSED', 'CANCELLED']).optional(),
+});
+
+/** The orders GET /auctions can return. The first is the default. */
+export const BROWSE_SORTS = [
+  'ending-soonest',
+  'ending-soonest-with-bids',
+  'newly-listed',
+  'price-asc',
+  'price-desc',
+  'bids-desc',
+  'bids-asc',
+] as const;
+
+/** The largest amount the database stores, so no price filter can ask for more than exists. */
+export const BROWSE_PRICE_MAX = 2_000_000_000;
+
+const browsePrice = z.coerce.number().int().min(0).max(BROWSE_PRICE_MAX);
+const browseCondition = z.enum(ItemCondition.options);
+
+/**
+ * What GET /auctions and GET /auctions/facets add to the three filters they always had (status,
+ * category, search): a sort and three more filters. Unlike those, a bad value here is a 400 and
+ * not a quiet default: these are new, so no stale link depends on being forgiven.
+ * `condition` is sent once per value (`?condition=NEW&condition=USED`).
+ */
+export const browseQuerySchema = z.object({
+  sort: z.enum(BROWSE_SORTS).optional(),
+  minPrice: browsePrice.optional(),
+  maxPrice: browsePrice.optional(),
+  condition: z.union([browseCondition, z.array(browseCondition)]).optional(),
+  withBids: z.enum(['true', 'false']).optional(),
 });
 
 // A bio is shown on the seller's public profile, so it must not carry a way to be contacted

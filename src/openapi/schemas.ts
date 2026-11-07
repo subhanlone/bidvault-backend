@@ -241,6 +241,25 @@ export const PlatformStatsDto = z
   })
   .meta({ id: 'PlatformStats' });
 
+/** The price ranges the browse filter offers, each a fixed whole-rupee range on the current bid. */
+export const PRICE_BAND_IDS = ['under-5000', '5000-25000', 'over-25000'] as const;
+
+/**
+ * How many auctions each choice of the browse filter would give, so the rail can show the count
+ * beside it. A group's counts honour every other active filter but not its own, which is what
+ * lets a person see what choosing another option would do. Every group lists all of its options,
+ * a zero included; `categories` lists only the categories that have a match.
+ */
+export const AuctionFacetsDto = z
+  .object({
+    categories: z.array(z.object({ name: z.string(), count: z.number().int().min(0) })),
+    conditions: z.array(z.object({ value: ItemCondition, count: z.number().int().min(0) })),
+    priceBands: z.array(z.object({ id: z.enum(PRICE_BAND_IDS), count: z.number().int().min(0) })),
+    /** Auctions that have at least one bid. */
+    withBids: z.number().int().min(0),
+  })
+  .meta({ id: 'AuctionFacets' });
+
 export const PublicSettingsDto = z
   .object({
     maintenanceMode: z.boolean(),
@@ -767,6 +786,7 @@ export const SellerItemsSummaryDto = z
 
 export type UserDtoType = z.infer<typeof UserDto>;
 export type AuctionDtoType = z.infer<typeof AuctionDto>;
+export type AuctionFacetsDtoType = z.infer<typeof AuctionFacetsDto>;
 export type ListingDtoType = z.infer<typeof ListingDto>;
 export type SellerItemDtoType = z.infer<typeof SellerItemDto>;
 export type SellerItemsSummaryDtoType = z.infer<typeof SellerItemsSummaryDto>;

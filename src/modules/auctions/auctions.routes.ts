@@ -6,13 +6,14 @@ import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { validateBody } from '../../middleware/validate.js';
+import { sendValidationError, validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 import { placeBidSchema, cancelAuctionSchema } from '../../openapi/requests.js';
 import type { BidDtoType, BidWithAuctionDtoType } from '../../openapi/schemas.js';
 import { auctionInclude, buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from './auction-dto.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
-import { escapeLike } from '../../utils/escape-like.js';
+import { buildBrowseQuery, parseBrowseQuery, readCursor } from './browse-query.js';
+import { loadFacets } from './browse-facets.js';
 import { sellerRoom } from '../../socket/seller-room.js';
 import { auctionGuestsRoom, auctionMembersRoom } from '../../socket/auction-subscriptions.js';
 import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
@@ -30,55 +31,47 @@ const MAX_STORED_MONEY = 2_000_000_000;
 router.get(
   '/',
   asyncHandler(async (req, res) => {
-    const status = req.query.status as AuctionStatus | undefined;
-    const category = (req.query.category as string | undefined)?.trim();
-    const search = (req.query.search as string | undefined)?.trim();
+    const parsed = parseBrowseQuery(req.query);
+    if (!parsed.ok) {
+      sendValidationError(res, parsed.details);
+      return;
+    }
+    const { params } = parsed;
     const limit = parseLimit(req.query.limit);
-    const cursor = decodeCursor(req.query.cursor);
-
-    const filters: Prisma.AuctionWhereInput = {};
-    // BV-029: defaults to ACTIVE now that the list is paginated -- an unfiltered call used to
-    // return every auction ever created, closed ones included, which is the exact unbounded
-    // read this finding is about. The one current caller already asks for ?status=ACTIVE
-    // explicitly (useActiveAuctions), so this default serves no one today and only narrows
-    // what a direct API call returns by default. Still overridable: ?status=CLOSED etc. works.
-    filters.status = status && ['ACTIVE', 'CLOSED', 'CANCELLED'].includes(status) ? status : 'ACTIVE';
-    if (category) {
-      filters.category = { contains: escapeLike(category), mode: 'insensitive' };
-    }
-    if (search) {
-      const term = escapeLike(search);
-      filters.OR = [
-        { title: { contains: term, mode: 'insensitive' } },
-        { description: { contains: term, mode: 'insensitive' } },
-      ];
+    const at = readCursor(req.query.cursor, params.sort);
+    if (at.kind === 'wrong-sort') {
+      sendValidationError(res, { cursor: ['This cursor was made for another sort. Start again from the first page.'] });
+      return;
     }
 
-    const where: Prisma.AuctionWhereInput = cursor
-      ? {
-          AND: [
-            filters,
-            {
-              OR: [
-                { endTime: { gt: new Date(cursor.sortValue) } },
-                { endTime: new Date(cursor.sortValue), id: { gt: cursor.id } },
-              ],
-            },
-          ],
-        }
-      : filters;
-
+    const query = buildBrowseQuery(params, at.kind === 'at' ? at.cursor : undefined);
     const rows = await prisma.auction.findMany({
-      where,
+      where: query.where,
       include: auctionInclude,
-      orderBy: [{ endTime: 'asc' }, { id: 'asc' }],
+      orderBy: query.orderBy,
       take: limit + 1,
     });
 
-    const { pageRows, nextCursor } = slicePage(rows, limit, (a) => a.endTime, (a) => a.id);
+    const pageRows = rows.slice(0, limit);
+    const last = pageRows[pageRows.length - 1];
+    const nextCursor = rows.length > limit && last ? query.cursorFor(last) : null;
     const statsMap = await buildSellerStatsMap(pageRows.map(a => a.sellerId));
     const watchers = await buildWatcherCountMap(pageRows.map(a => a.id));
     ok(res, { items: pageRows.map(a => toAuctionDto(a, statsMap, watchers)), nextCursor });
+  }),
+);
+
+// Counts for the browse filters. Registered before /:auctionId, which would otherwise take
+// "facets" for an auction id.
+router.get(
+  '/facets',
+  asyncHandler(async (req, res) => {
+    const parsed = parseBrowseQuery(req.query);
+    if (!parsed.ok) {
+      sendValidationError(res, parsed.details);
+      return;
+    }
+    ok(res, await loadFacets(parsed.params));
   }),
 );
 

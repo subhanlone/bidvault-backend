@@ -271,6 +271,19 @@ describe('auctions', () => {
     expect(page).toHaveProperty('nextCursor');
   });
 
+  it('GET /auctions — a bad browse parameter answers the 400 ValidationError shape', async () => {
+    const res = await request(app).get(api('/auctions')).query({ minPrice: 9_000, maxPrice: 1_000 });
+    expect(res.status).toBe(400);
+    expect((res.body as { details: Record<string, string[]> }).details).toHaveProperty('minPrice');
+  });
+
+  it('GET /auctions/facets', async () => {
+    hit('get', '/auctions/facets');
+    const res = await request(app).get(api('/auctions/facets'));
+    expect(res.status).toBe(200);
+    expect(resData<{ withBids: number }>(res).withBids).toBeGreaterThanOrEqual(1);
+  });
+
   it('GET /auctions/{auctionId}', async () => {
     hit('get', '/auctions/{auctionId}');
     const res = await request(app).get(api(`/auctions/${w.liveAuctionId}`));
