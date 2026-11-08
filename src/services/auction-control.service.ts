@@ -34,80 +34,75 @@ export type CancelAuctionResult =
   | { kind: 'wrong-state' }
   | { kind: 'has-bids' };
 
-export async function cancelAuction(
+type CancelActor = { userId: string; isAdmin: boolean; reason: string };
+type CancelledAuction = {
+  title: string;
+  seller: { id: string; email: string; name: string };
+  bidders: { id: string; email: string; name: string }[];
+};
+
+/**
+ * Cancels an auction whose row the caller has locked and found ACTIVE: the status, the admin's
+ * audit row and the in-app notices, in the caller's transaction. What happens after the commit
+ * (the job, the live notice, the e-mails) is announceCancel's. Split so a takedown can cancel the
+ * auction in the same transaction as the listing's removal.
+ */
+async function cancelLockedAuction(
+  tx: Prisma.TransactionClient,
   auctionId: string,
-  actor: { userId: string; isAdmin: boolean; reason: string },
-  io?: Server,
-): Promise<CancelAuctionResult> {
-  const outcome = await prisma.$transaction(async (tx) => {
-    const [row] = await tx.$queryRaw<Array<{ id: string; sellerId: string; status: string; bidCount: number; title: string }>>`
-      SELECT id, "sellerId", status, "bidCount", title FROM "Auction" WHERE id = ${auctionId} FOR UPDATE
-    `;
-    if (!row) return { kind: 'not-found' as const };
-    if (!actor.isAdmin && row.sellerId !== actor.userId) return { kind: 'forbidden' as const };
-    if (row.status !== 'ACTIVE') return { kind: 'wrong-state' as const };
-    // The seller's own withdrawal is scoped to a bid-free auction — cancelling out from under
-    // an active bidder is a buyer-protection problem the reference model doesn't solve cleanly
-    // (see LIFECYCLE-IMPLEMENTATION-PLAN.md's B4/C4 section). The admin path has no such limit:
-    // a pricing error or shill-bidding suspicion is exactly the case with bids already on it.
-    if (!actor.isAdmin && row.bidCount > 0) return { kind: 'has-bids' as const };
+  actor: CancelActor,
+): Promise<CancelledAuction> {
+  await tx.auction.update({ where: { id: auctionId }, data: { status: 'CANCELLED' } });
 
-    await tx.auction.update({ where: { id: row.id }, data: { status: 'CANCELLED' } });
-
-    if (actor.isAdmin) {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: actor.userId,
-          action: 'AUCTION_CANCELLED',
-          entityType: 'Auction',
-          entityId: row.id,
-          metadata: { reason: actor.reason },
-        },
-      });
-    }
-
-    const full = await tx.auction.findUniqueOrThrow({
-      where: { id: row.id },
-      include: {
-        seller: { select: { id: true, email: true, name: true } },
-        bids: {
-          where: { buyerId: { not: null } },
-          distinct: ['buyerId'],
-          include: { buyer: { select: { id: true, email: true, name: true } } },
-        },
+  if (actor.isAdmin) {
+    await tx.auditLog.create({
+      data: {
+        actorUserId: actor.userId,
+        action: 'AUCTION_CANCELLED',
+        entityType: 'Auction',
+        entityId: auctionId,
+        metadata: { reason: actor.reason },
       },
     });
-    const bidders = full.bids.map((b) => b.buyer!);
+  }
 
-    await tx.notification.createMany({
-      data: [
-        {
-          userId: full.sellerId,
-          type: 'AUCTION_CANCELLED',
-          title: 'Auction cancelled',
-          message: actor.isAdmin
-            ? `An admin cancelled your auction "${full.title}": ${actor.reason}`
-            : `You cancelled your auction "${full.title}".`,
-        },
-        ...bidders.map((b) => ({
-          userId: b.id,
-          type: 'AUCTION_CANCELLED',
-          title: 'Auction cancelled',
-          message: `The auction "${full.title}" you bid on was cancelled: ${actor.reason}`,
-        })),
-      ],
-    });
+  const full = await tx.auction.findUniqueOrThrow({
+    where: { id: auctionId },
+    include: {
+      seller: { select: { id: true, email: true, name: true } },
+      bids: {
+        where: { buyerId: { not: null } },
+        distinct: ['buyerId'],
+        include: { buyer: { select: { id: true, email: true, name: true } } },
+      },
+    },
+  });
+  const bidders = full.bids.map((b) => b.buyer!);
 
-    return {
-      kind: 'ok' as const,
-      title: full.title,
-      seller: full.seller,
-      bidders,
-    };
+  await tx.notification.createMany({
+    data: [
+      {
+        userId: full.sellerId,
+        type: 'AUCTION_CANCELLED',
+        title: 'Auction cancelled',
+        message: actor.isAdmin
+          ? `An admin cancelled your auction "${full.title}": ${actor.reason}`
+          : `You cancelled your auction "${full.title}".`,
+      },
+      ...bidders.map((b) => ({
+        userId: b.id,
+        type: 'AUCTION_CANCELLED',
+        title: 'Auction cancelled',
+        message: `The auction "${full.title}" you bid on was cancelled: ${actor.reason}`,
+      })),
+    ],
   });
 
-  if (outcome.kind !== 'ok') return { kind: outcome.kind };
+  return { title: full.title, seller: full.seller, bidders };
+}
 
+/** After a cancel has committed: the close job, the live notice and the e-mails. */
+async function announceCancel(auctionId: string, cancelled: CancelledAuction, actor: CancelActor, io?: Server) {
   // The cancel has committed, so a failure here must not undo the answer, the live notice or the
   // e-mails below. A job that could not be removed (Redis down, or a worker already running it) is
   // harmless: closeAuction refuses an auction that is no longer ACTIVE.
@@ -125,18 +120,42 @@ export async function cancelAuction(
   // it -- a bid-free auction can still have a viewer with the page open.
   io?.to(`auction:${auctionId}`).emit('auction:cancelled', {
     auctionId,
-    title: outcome.title,
+    title: cancelled.title,
     reason: actor.reason,
   });
   dispatchEmail(
     sendAuctionCancelledEmail(
-      outcome.seller,
-      { title: outcome.title },
-      { reason: actor.reason, cancelledByAdmin: actor.isAdmin, bidders: outcome.bidders },
+      cancelled.seller,
+      { title: cancelled.title },
+      { reason: actor.reason, cancelledByAdmin: actor.isAdmin, bidders: cancelled.bidders },
     ),
     `auction-cancelled (${auctionId})`,
   );
+}
 
+export async function cancelAuction(
+  auctionId: string,
+  actor: CancelActor,
+  io?: Server,
+): Promise<CancelAuctionResult> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    const [row] = await tx.$queryRaw<Array<{ id: string; sellerId: string; status: string; bidCount: number }>>`
+      SELECT id, "sellerId", status, "bidCount" FROM "Auction" WHERE id = ${auctionId} FOR UPDATE
+    `;
+    if (!row) return { kind: 'not-found' as const };
+    if (!actor.isAdmin && row.sellerId !== actor.userId) return { kind: 'forbidden' as const };
+    if (row.status !== 'ACTIVE') return { kind: 'wrong-state' as const };
+    // The seller's own withdrawal is scoped to a bid-free auction — cancelling out from under
+    // an active bidder is a buyer-protection problem the reference model doesn't solve cleanly
+    // (see LIFECYCLE-IMPLEMENTATION-PLAN.md's B4/C4 section). The admin path has no such limit:
+    // a pricing error or shill-bidding suspicion is exactly the case with bids already on it.
+    if (!actor.isAdmin && row.bidCount > 0) return { kind: 'has-bids' as const };
+
+    return { kind: 'ok' as const, cancelled: await cancelLockedAuction(tx, row.id, actor) };
+  });
+
+  if (outcome.kind !== 'ok') return { kind: outcome.kind };
+  await announceCancel(auctionId, outcome.cancelled, actor, io);
   return { kind: 'ok' };
 }
 
@@ -528,10 +547,17 @@ export type TakedownListingResult = { kind: 'ok' } | { kind: 'not-found' } | { k
 /**
  * Scoped to APPROVED listings only -- a PENDING one goes through the existing /reject route
  * instead, and there is nothing to take down from REJECTED/REMOVED/DRAFT. If the auction
- * underneath is still ACTIVE, cancels it via the same cancelAuction() the admin's own cancel
- * route uses (notifies every bidder) -- a CLOSED auction (already sold, or already cancelled)
- * is left as history; unwinding a completed sale is the existing dispute/void machinery's job,
- * not this one.
+ * underneath is still ACTIVE it is cancelled (every bidder told), a sale still waiting for payment
+ * is voided, and a sale already paid is left as it is (unwinding a charge is a refund, which is
+ * not this function's to decide).
+ *
+ * All of it is one transaction. It used to check the listing outside any lock, commit REMOVED,
+ * then cancel the auction separately: a close job running at that moment turned the auction into a
+ * sale after the takedown had looked for one (so the removed item's sale stayed open), and two
+ * takedowns of one listing both went through. The rows are locked in the order every other path
+ * takes them: the auction (closeAuction, bids, cancel lock only that), then its sale (pay, offer,
+ * relist take the sale before the listing), then the listing. A close in progress is therefore
+ * waited for and its sale seen; a takedown in progress is waited for and refused.
  */
 export async function takedownListing(
   listingId: string,
@@ -539,29 +565,51 @@ export async function takedownListing(
   reason: string,
   io?: Server,
 ): Promise<TakedownListingResult> {
-  const listing = await prisma.listing.findUnique({
-    where: { id: listingId },
-    include: { seller: { select: { email: true, name: true } }, auction: { select: { id: true, status: true } } },
-  });
-  if (!listing) return { kind: 'not-found' };
-  if (listing.status !== 'APPROVED') return { kind: 'wrong-state' };
+  const cancelActor: CancelActor = { userId: adminUserId, isAdmin: true, reason: `Listing removed: ${reason}` };
 
-  await prisma.$transaction(async (tx) => {
-    // A sale on this item that is still waiting for payment is cancelled with it: a removed item is
-    // not sold, and leaving the sale open left the buyer a payment button for it until the payment
-    // sweep ran out its clock. A sale already paid is left as it is (unwinding a charge is a refund,
-    // which is not this function's to decide). The sale's row is locked before the listing's, the
-    // order pay, offer and relist use too, so none of them can deadlock against a takedown.
-    const [openSale] = listing.auction
+  const outcome = await prisma.$transaction(async (tx) => {
+    // Which auction belongs to this listing never changes, so it is read before taking any lock.
+    const auction = await tx.auction.findUnique({ where: { listingId }, select: { id: true } });
+    const [auctionRow] = auction
+      ? await tx.$queryRaw<Array<{ status: string }>>`SELECT status FROM "Auction" WHERE id = ${auction.id} FOR UPDATE`
+      : [];
+    const [openSale] = auction
       ? await tx.$queryRaw<Array<{ id: string; status: string; winnerId: string }>>`
-          SELECT id, status, "winnerId" FROM "AuctionTransaction" WHERE "auctionId" = ${listing.auction.id} FOR UPDATE
+          SELECT id, status, "winnerId" FROM "AuctionTransaction" WHERE "auctionId" = ${auction.id} FOR UPDATE
         `
       : [];
+    const [locked] = await tx.$queryRaw<Array<{ status: string }>>`
+      SELECT status FROM "Listing" WHERE id = ${listingId} FOR UPDATE
+    `;
+    if (!locked) return { kind: 'not-found' as const };
+    if (locked.status !== 'APPROVED') return { kind: 'wrong-state' as const };
 
     // The reason goes on the listing as well as into the audit log: the seller can read the
     // listing, never the audit log, and a removal with no explanation is what they saw before.
-    await tx.listing.update({ where: { id: listing.id }, data: { status: 'REMOVED', rejectionReason: reason } });
+    const listing = await tx.listing.update({
+      where: { id: listingId },
+      data: { status: 'REMOVED', rejectionReason: reason },
+      include: { seller: { select: { email: true, name: true } } },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorUserId: adminUserId,
+        action: 'LISTING_REMOVED',
+        entityType: 'Listing',
+        entityId: listing.id,
+        metadata: { reason },
+      },
+    });
+    await tx.notification.create({
+      data: {
+        userId: listing.sellerId,
+        type: 'LISTING_REMOVED',
+        title: 'Listing removed',
+        message: `Your listing "${listing.title}" was removed by an admin: ${reason}`,
+      },
+    });
 
+    // A removed item is not sold: a sale on it still waiting for payment is cancelled with it.
     if (openSale && (openSale.status === 'PENDING' || openSale.status === 'FAILED')) {
       await tx.auctionTransaction.update({
         where: { id: openSale.id },
@@ -585,31 +633,20 @@ export async function takedownListing(
         },
       });
     }
-    await tx.auditLog.create({
-      data: {
-        actorUserId: adminUserId,
-        action: 'LISTING_REMOVED',
-        entityType: 'Listing',
-        entityId: listing.id,
-        metadata: { reason },
-      },
-    });
-    await tx.notification.create({
-      data: {
-        userId: listing.sellerId,
-        type: 'LISTING_REMOVED',
-        title: 'Listing removed',
-        message: `Your listing "${listing.title}" was removed by an admin: ${reason}`,
-      },
-    });
+
+    const cancelled =
+      auction && auctionRow?.status === 'ACTIVE' ? await cancelLockedAuction(tx, auction.id, cancelActor) : null;
+
+    return { kind: 'ok' as const, listing, auctionId: auction?.id, cancelled };
   });
 
-  if (listing.auction?.status === 'ACTIVE') {
-    await cancelAuction(listing.auction.id, { userId: adminUserId, isAdmin: true, reason: `Listing removed: ${reason}` }, io);
-  }
+  if (outcome.kind !== 'ok') return { kind: outcome.kind };
 
+  if (outcome.cancelled && outcome.auctionId) {
+    await announceCancel(outcome.auctionId, outcome.cancelled, cancelActor, io);
+  }
   dispatchEmail(
-    sendListingTakenDownEmail(listing.seller, { title: listing.title, reason }),
+    sendListingTakenDownEmail(outcome.listing.seller, { title: outcome.listing.title, reason }),
     `listing-taken-down (${listingId})`,
   );
 
