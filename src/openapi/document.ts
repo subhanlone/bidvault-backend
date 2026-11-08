@@ -354,7 +354,19 @@ const documentInput = {
     // (live, or ended with status=CLOSED) in the same sorts. Each item of GET /reviews/seller/{id}
     // gains itemTitle and verifiedPurchase (the writer is the buyer of the sale the review is tied
     // to); both are required response fields, which oasdiff reports as informational.
-    version: '12.3.0',
+    //
+    // 12.4.0, 2026-11-09, minor: FR-02, a way out of a paid sale the seller never ships. Additive
+    // only. A paid sale gets a ship-by time (new setting shipByHours, default 72, also on
+    // GET /settings/public). New: POST /payments/{transactionId}/report-not-shipped (the buyer, once
+    // the ship-by time has passed), POST /payments/{transactionId}/refund (the seller, before
+    // shipping), GET /admin/transactions/unshipped and POST /admin/transactions/{transactionId}/refund.
+    // Sale views (WonTransaction, SellerSale, SellerItem.sale) gain optional shipByAt,
+    // notShippedReportedAt and autoRefundAt; Invoice gains shipByAt; AdminTransaction gains optional
+    // paidAt, shipByAt and notShippedReportedAt. SellerItemAction gains REFUND_BUYER (offered on
+    // NEEDS_SHIPPING) and NotificationType gains NOT_SHIPPED_REPORTED and SALE_REFUNDED (an open set).
+    // Behaviour change: a takedown now refunds a paid, unshipped sale instead of leaving it to be
+    // shipped.
+    version: '12.4.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -1039,6 +1051,48 @@ const documentInput = {
         },
       },
     },
+    '/payments/{transactionId}/report-not-shipped': {
+      post: {
+        tags: ['Payments'],
+        security: [{ bearerAuth: [] }],
+        summary:
+          'FR-02: the buyer reports a paid sale not shipped, once its ship-by time has passed. The sale stays paid; the seller has 3 days to ship or refund, or the buyer is refunded automatically',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        requestBody: jsonRequest(R.reportNotShippedSchema),
+        responses: {
+          200: okBody(
+            z.object({
+              transactionId: z.string(),
+              notShippedReportedAt: z.iso.datetime(),
+              autoRefundAt: z.iso.datetime(),
+            }),
+            'Reported',
+          ),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Not paid-and-unshipped, the ship-by time has not passed, or already reported'),
+        },
+      },
+    },
+    '/payments/{transactionId}/refund': {
+      post: {
+        tags: ['Payments'],
+        security: [{ bearerAuth: [] }],
+        summary: 'FR-02: the seller refunds a paid sale they cannot send. Only before it has shipped',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        requestBody: jsonRequest(R.refundSaleSchema),
+        responses: {
+          200: okBody(z.object({ transactionId: z.string(), status: z.literal('REFUNDED') }), 'Refunded'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The sale is not paid-and-unshipped (COMPLETED)'),
+        },
+      },
+    },
     '/payments/{transactionId}/dispute/response': {
       post: {
         tags: ['Payments'],
@@ -1220,6 +1274,35 @@ const documentInput = {
           200: okBody(z.array(S.AdminTransactionDto), 'Pending transactions'),
           401: unauthorized,
           403: forbidden,
+        },
+      },
+    },
+    '/admin/transactions/unshipped': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'FR-02: every paid sale past its ship-by time and not yet shipped, oldest payment first',
+        responses: {
+          200: okBody(z.array(S.AdminTransactionDto), 'Paid sales not shipped in time'),
+          401: unauthorized,
+          403: forbidden,
+        },
+      },
+    },
+    '/admin/transactions/{transactionId}/refund': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'FR-02: refunds a paid sale that has not shipped (COMPLETED). A shipped sale goes through a dispute',
+        requestParams: { path: z.object({ transactionId: z.string() }) },
+        requestBody: jsonRequest(R.refundSaleSchema),
+        responses: {
+          200: okBody(z.object({ transactionId: z.string(), status: z.literal('REFUNDED') }), 'Refunded'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The sale is not paid-and-unshipped (COMPLETED)'),
         },
       },
     },

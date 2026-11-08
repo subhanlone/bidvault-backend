@@ -78,6 +78,9 @@ export const NotificationType = z
     'LISTING_REMOVED',
     // Phase 8, B3: the seller is told of a bid. One unread row per auction, kept up to date.
     'BID_RECEIVED',
+    // FR-02: the buyer reported a paid sale not shipped; a paid, unshipped sale was refunded.
+    'NOT_SHIPPED_REPORTED',
+    'SALE_REFUNDED',
   ])
   .meta({
     id: 'NotificationType',
@@ -270,6 +273,8 @@ export const PublicSettingsDto = z
     paymentDeadlineHours: z.number().int(),
     /** Hours a buyer has to confirm receipt or dispute after shipping: quoted on the buying rules. */
     reviewTimeoutHours: z.number().int(),
+    /** FR-02: hours a seller has, from payment, to mark the item shipped: quoted on the buying rules. */
+    shipByHours: z.number().int(),
   })
   .meta({ id: 'PublicSettings' });
 
@@ -425,6 +430,12 @@ export const WonTransactionDto = z
     // platform setting itself just to render a countdown.
     shippedAt: isoDateTime.optional(),
     reviewDeadlineAt: isoDateTime.optional(),
+    /** FR-02: when the seller must have marked the paid item shipped. Present once paid. */
+    shipByAt: isoDateTime.optional(),
+    /** FR-02: when the buyer reported it not shipped (only possible once shipByAt has passed). */
+    notShippedReportedAt: isoDateTime.optional(),
+    /** FR-02: when an unanswered not-shipped report is refunded automatically, while the sale is still unshipped. */
+    autoRefundAt: isoDateTime.optional(),
     disputeReason: z.string().optional(),
     createdAt: isoDateTime,
     reviewed: z.boolean(),
@@ -455,6 +466,12 @@ export const SellerSaleDto = z
     deliveryPhone: z.string().optional(),
     shippedAt: isoDateTime.optional(),
     reviewDeadlineAt: isoDateTime.optional(),
+    /** FR-02: when the seller must have marked the paid item shipped. Present once paid. */
+    shipByAt: isoDateTime.optional(),
+    /** FR-02: when the buyer reported it not shipped (only possible once shipByAt has passed). */
+    notShippedReportedAt: isoDateTime.optional(),
+    /** FR-02: when an unanswered not-shipped report is refunded automatically, while the sale is still unshipped. */
+    autoRefundAt: isoDateTime.optional(),
     disputeReason: z.string().optional(),
     createdAt: isoDateTime,
   })
@@ -499,6 +516,8 @@ export const InvoiceDto = z
     deliveryAddress: z.string().optional(),
     deliveryPhone: z.string().optional(),
     createdAt: isoDateTime,
+    /** FR-02: when the seller must have marked the paid item shipped. */
+    shipByAt: isoDateTime.optional(),
     shippedAt: isoDateTime.optional(),
     disputeStatus: z.enum(['OPEN', 'RESOLVED_REFUNDED', 'RESOLVED_RELEASED']).optional(),
     disputeReason: z.string().optional(),
@@ -528,7 +547,10 @@ export const AdminDisputeDto = z
   })
   .meta({ id: 'AdminDispute' });
 
-/** A PENDING transaction an admin can void — see POST /admin/transactions/{transactionId}/void. */
+/**
+ * A PENDING transaction an admin can void (GET /admin/transactions, POST .../void), or a paid one
+ * past its ship-by time an admin can refund (GET /admin/transactions/unshipped, POST .../refund).
+ */
 export const AdminTransactionDto = z
   .object({
     transactionId: z.string(),
@@ -542,6 +564,10 @@ export const AdminTransactionDto = z
     status: TransactionStatus,
     lastPaymentError: z.string().optional(),
     createdAt: isoDateTime,
+    // FR-02: present on the paid, unshipped sales of GET /admin/transactions/unshipped.
+    paidAt: isoDateTime.optional(),
+    shipByAt: isoDateTime.optional(),
+    notShippedReportedAt: isoDateTime.optional(),
   })
   .meta({ id: 'AdminTransaction' });
 
@@ -596,6 +622,8 @@ export const PlatformSettingsDto = z
     paymentDeadlineHours: z.number().int(),
     // C6, Phase 7.
     reviewEditWindowHours: z.number().int(),
+    // FR-02.
+    shipByHours: z.number().int(),
     supportEmail: z.string(),
   })
   .meta({ id: 'PlatformSettings' });
@@ -783,6 +811,12 @@ export const SellerItemDto = z
         paidAt: isoDateTime.optional(),
         shippedAt: isoDateTime.optional(),
         reviewDeadlineAt: isoDateTime.optional(),
+        /** FR-02: when the seller must have marked the paid item shipped. Present once paid. */
+        shipByAt: isoDateTime.optional(),
+        /** FR-02: when the buyer reported it not shipped (only possible once shipByAt has passed). */
+        notShippedReportedAt: isoDateTime.optional(),
+        /** FR-02: when an unanswered not-shipped report is refunded automatically, while the sale is still unshipped. */
+        autoRefundAt: isoDateTime.optional(),
         disputeReason: z.string().optional(),
         /** createdAt + the soft response window; advice, nothing waits for it. */
         disputeResponseDueAt: isoDateTime.optional(),

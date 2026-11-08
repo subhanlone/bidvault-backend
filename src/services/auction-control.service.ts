@@ -11,6 +11,7 @@ import {
   sendSecondChanceOfferEmail,
   sendListingTakenDownEmail,
 } from './email.service.js';
+import { announceRefund, refundLockedSale, type RefundActor, type RefundedSale } from './fulfillment.service.js';
 
 /**
  * Phase 6 (LIFECYCLE-IMPLEMENTATION-PLAN.md): auction cancellation (B4/C4), the payment-deadline
@@ -372,6 +373,9 @@ export async function offerToNextBidder(
         paymentDueAt: paymentDueAtFrom(new Date(), paymentDeadlineHours),
         paymentReference: null,
         paidAt: null,
+        shipByAt: null,
+        notShippedReportedAt: null,
+        notShippedNote: null,
         lastPaymentError: null,
         deliveryAddress: null,
         deliveryPhone: null,
@@ -548,8 +552,9 @@ export type TakedownListingResult = { kind: 'ok' } | { kind: 'not-found' } | { k
  * Scoped to APPROVED listings only -- a PENDING one goes through the existing /reject route
  * instead, and there is nothing to take down from REJECTED/REMOVED/DRAFT. If the auction
  * underneath is still ACTIVE it is cancelled (every bidder told), a sale still waiting for payment
- * is voided, and a sale already paid is left as it is (unwinding a charge is a refund, which is
- * not this function's to decide).
+ * is voided, and a sale paid for but not yet sent is refunded (FR-02: a removed item, stolen or
+ * counterfeit, must not be sent; eBay likewise refunds at once when it acts against a seller). A
+ * sale already shipped is left to the buyer's confirm-or-dispute window.
  *
  * All of it is one transaction. It used to check the listing outside any lock, commit REMOVED,
  * then cancel the auction separately: a close job running at that moment turned the auction into a
@@ -566,6 +571,7 @@ export async function takedownListing(
   io?: Server,
 ): Promise<TakedownListingResult> {
   const cancelActor: CancelActor = { userId: adminUserId, isAdmin: true, reason: `Listing removed: ${reason}` };
+  const refundActor: RefundActor = { by: 'admin', userId: adminUserId, reason: `Listing removed: ${reason}` };
 
   const outcome = await prisma.$transaction(async (tx) => {
     // Which auction belongs to this listing never changes, so it is read before taking any lock.
@@ -634,10 +640,15 @@ export async function takedownListing(
       });
     }
 
+    let refunded: RefundedSale | null = null;
+    if (openSale?.status === 'COMPLETED') {
+      refunded = await refundLockedSale(tx, openSale.id, refundActor);
+    }
+
     const cancelled =
       auction && auctionRow?.status === 'ACTIVE' ? await cancelLockedAuction(tx, auction.id, cancelActor) : null;
 
-    return { kind: 'ok' as const, listing, auctionId: auction?.id, cancelled };
+    return { kind: 'ok' as const, listing, auctionId: auction?.id, cancelled, refunded };
   });
 
   if (outcome.kind !== 'ok') return { kind: outcome.kind };
@@ -645,6 +656,7 @@ export async function takedownListing(
   if (outcome.cancelled && outcome.auctionId) {
     await announceCancel(outcome.auctionId, outcome.cancelled, cancelActor, io);
   }
+  if (outcome.refunded) announceRefund(outcome.refunded, refundActor);
   dispatchEmail(
     sendListingTakenDownEmail(outcome.listing.seller, { title: outcome.listing.title, reason }),
     `listing-taken-down (${listingId})`,

@@ -40,6 +40,8 @@ export const SELLER_ITEM_ACTIONS = [
   'EDIT_RESUBMIT',
   'CANCEL_AUCTION',
   'MARK_SHIPPED',
+  // FR-02: POST /payments/{id}/refund, a paid sale the seller cannot send.
+  'REFUND_BUYER',
   'RESPOND_TO_DISPUTE',
   'OFFER_NEXT_BIDDER',
   'RELIST',
@@ -84,8 +86,8 @@ export const STAGE_TAB: Record<SellerItemStage, SellerItemTab> = {
 };
 
 /**
- * First match wins. A sale, once there is one, decides everything: a listing an admin removed
- * while its sale was paid still has to be shipped, so it stays in "Needs action".
+ * First match wins. A sale, once there is one, decides everything. (A takedown refunds a paid,
+ * unshipped sale, FR-02, so a removed listing is never left waiting to be shipped.)
  */
 export function deriveStage(f: ItemFacts): SellerItemStage {
   switch (f.txnStatus) {
@@ -150,7 +152,7 @@ export function allowedActions(stage: SellerItemStage, f: ItemFacts): SellerItem
       // The seller's own cancel path refuses an auction that has a bid.
       return (f.bidCount ?? 0) === 0 ? ['CANCEL_AUCTION'] : [];
     case 'NEEDS_SHIPPING':
-      return ['MARK_SHIPPED', 'VIEW_INVOICE'];
+      return ['MARK_SHIPPED', 'REFUND_BUYER', 'VIEW_INVOICE'];
     case 'DISPUTE_AWAITING_RESPONSE':
       return ['RESPOND_TO_DISPUTE', 'VIEW_INVOICE'];
     case 'PAYMENT_DEFAULTED':

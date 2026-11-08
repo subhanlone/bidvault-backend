@@ -674,6 +674,47 @@ describe('payments', () => {
     expect(resData<{ status: string }>(res).status).toBe('DISPUTED');
   });
 
+  // FR-02: a paid sale past its ship-by time, the state both routes act on.
+  it('POST /payments/{transactionId}/report-not-shipped', async () => {
+    hit('post', '/payments/{transactionId}/report-not-shipped');
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: {
+        status: 'COMPLETED',
+        deliveryAddress: '123 Test Street, Karachi',
+        deliveryPhone: '03001234567',
+        paidAt: new Date(Date.now() - 80 * 60 * 60 * 1000),
+        shipByAt: new Date(Date.now() - 8 * 60 * 60 * 1000),
+      },
+    });
+    const res = await request(app)
+      .post(api(`/payments/${w.transactionId}/report-not-shipped`))
+      .set(auth(w.buyer.token))
+      .send({ note: 'Nothing has arrived and there has been no word.' });
+    expect(res.status).toBe(200);
+    expect(resData<{ transactionId: string }>(res).transactionId).toBe(w.transactionId);
+  });
+
+  it('POST /payments/{transactionId}/refund', async () => {
+    hit('post', '/payments/{transactionId}/refund');
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: {
+        status: 'COMPLETED',
+        deliveryAddress: '123 Test Street, Karachi',
+        deliveryPhone: '03001234567',
+        paidAt: new Date(Date.now() - 80 * 60 * 60 * 1000),
+        shipByAt: new Date(Date.now() - 8 * 60 * 60 * 1000),
+      },
+    });
+    const res = await request(app)
+      .post(api(`/payments/${w.transactionId}/refund`))
+      .set(auth(w.seller.token))
+      .send({ reason: 'Damaged while packing.' });
+    expect(res.status).toBe(200);
+    expect(resData<{ status: string }>(res).status).toBe('REFUNDED');
+  });
+
   it('POST /payments/{transactionId}/dispute/response', async () => {
     hit('post', '/payments/{transactionId}/dispute/response');
     await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'DISPUTED' } });
@@ -832,13 +873,15 @@ describe('settings', () => {
     expect(res.status).toBe(200);
     // Exactly what an anonymous visitor needs. The listing limits are sellers' business and live
     // on GET /listings/limits; nothing else may be spread in from the settings row. The seller terms
-    // version is what a signed-in non-seller needs before they can enrol, and the two windows are
-    // what the auction page's buying rules quote to anyone considering a bid.
+    // version is what a signed-in non-seller needs before they can enrol, and the three windows
+    // (pay, ship by, confirm or dispute) are what the auction page's buying rules quote to anyone
+    // considering a bid.
     expect(Object.keys(resData<Record<string, unknown>>(res)).sort()).toEqual([
       'maintenanceMode',
       'paymentDeadlineHours',
       'reviewTimeoutHours',
       'sellerTermsVersion',
+      'shipByHours',
       'supportEmail',
     ]);
   });
@@ -928,6 +971,45 @@ describe('admin', () => {
     expect(
       resData<Array<{ transactionId: string }>>(res).some((tx) => tx.transactionId === w.transactionId),
     ).toBe(true);
+  });
+
+  it('GET /admin/transactions/unshipped', async () => {
+    hit('get', '/admin/transactions/unshipped');
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: {
+        status: 'COMPLETED',
+        deliveryAddress: '123 Test Street, Karachi',
+        deliveryPhone: '03001234567',
+        paidAt: new Date(Date.now() - 80 * 60 * 60 * 1000),
+        shipByAt: new Date(Date.now() - 8 * 60 * 60 * 1000),
+      },
+    });
+    const res = await request(app).get(api('/admin/transactions/unshipped')).set(auth(w.admin.token));
+    expect(res.status).toBe(200);
+    expect(
+      resData<Array<{ transactionId: string }>>(res).some((tx) => tx.transactionId === w.transactionId),
+    ).toBe(true);
+  });
+
+  it('POST /admin/transactions/{transactionId}/refund', async () => {
+    hit('post', '/admin/transactions/{transactionId}/refund');
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: {
+        status: 'COMPLETED',
+        deliveryAddress: '123 Test Street, Karachi',
+        deliveryPhone: '03001234567',
+        paidAt: new Date(Date.now() - 80 * 60 * 60 * 1000),
+        shipByAt: new Date(Date.now() - 8 * 60 * 60 * 1000),
+      },
+    });
+    const res = await request(app)
+      .post(api(`/admin/transactions/${w.transactionId}/refund`))
+      .set(auth(w.admin.token))
+      .send({ reason: 'Seller unreachable for a week.' });
+    expect(res.status).toBe(200);
+    expect(resData<{ status: string }>(res).status).toBe('REFUNDED');
   });
 
   it('POST /admin/transactions/{transactionId}/void', async () => {

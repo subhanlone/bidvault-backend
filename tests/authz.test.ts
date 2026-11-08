@@ -147,6 +147,14 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/payments/{transactionId}/dispute',
     url: (w) => `/payments/${w.transactionId}/dispute`, allow: ['BUYER', 'SELLER'],
     body: () => ({ reason: 'Authz probe dispute reason.' }) },
+  // FR-02: w.transactionId is PENDING (unpaid), so both end at 409 here; the success paths, the
+  // ownership checks and the deadline are in tests/paid-sale-exit.test.ts.
+  { method: 'post', contractPath: '/payments/{transactionId}/report-not-shipped',
+    url: (w) => `/payments/${w.transactionId}/report-not-shipped`, allow: ['BUYER', 'SELLER'],
+    body: () => ({ note: 'Authz probe' }) },
+  { method: 'post', contractPath: '/payments/{transactionId}/refund',
+    url: (w) => `/payments/${w.transactionId}/refund`, allow: ['BUYER', 'SELLER'],
+    body: () => ({ reason: 'Authz probe' }) },
   // w.transactionId has no dispute, so the seller's own call ends at 409 here; the success path,
   // the ownership check and the one-response rule are in tests/dispute-response.test.ts.
   { method: 'post', contractPath: '/payments/{transactionId}/dispute/response',
@@ -165,6 +173,10 @@ const OPERATIONS: Op[] = [
     url: (w) => `/admin/auctions/${w.liveAuctionId}/cancel`, allow: ['ADMIN'],
     body: () => ({ reason: 'Authz probe' }) },
   { method: 'get', contractPath: '/admin/transactions', url: () => '/admin/transactions', allow: ['ADMIN'] },
+  { method: 'get', contractPath: '/admin/transactions/unshipped', url: () => '/admin/transactions/unshipped', allow: ['ADMIN'] },
+  { method: 'post', contractPath: '/admin/transactions/{transactionId}/refund',
+    url: (w) => `/admin/transactions/${w.transactionId}/refund`, allow: ['ADMIN'],
+    body: () => ({ reason: 'Authz probe' }) },
   { method: 'post', contractPath: '/admin/transactions/{transactionId}/void',
     url: (w) => `/admin/transactions/${w.transactionId}/void`, allow: ['ADMIN'],
     body: () => ({ reason: 'Buyer unreachable after repeated attempts.' }) },

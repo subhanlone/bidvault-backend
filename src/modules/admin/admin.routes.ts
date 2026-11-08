@@ -10,6 +10,7 @@ import { validateBody } from '../../middleware/validate.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import { escapeLike } from '../../utils/escape-like.js';
 import {
+  refundSaleSchema,
   voidTransactionSchema,
   anonymizeUserSchema,
   resolveDisputeSchema,
@@ -19,7 +20,14 @@ import {
 } from '../../openapi/requests.js';
 import { checkAccountDeletable, anonymizeUser } from '../../services/account.service.js';
 import { dispatchEmail, sendAccountDeletedEmail } from '../../services/email.service.js';
-import { disputeResponseDueAt, resolveDispute, REVENUE_STATUSES } from '../../services/fulfillment.service.js';
+import {
+  disputeResponseDueAt,
+  refundUnshippedSale,
+  resolveDispute,
+  shipByAtOf,
+  REVENUE_STATUSES,
+} from '../../services/fulfillment.service.js';
+import { getPlatformSettings } from '../../services/settings.service.js';
 import {
   cancelAuction,
   takedownListing,
@@ -280,6 +288,78 @@ router.post(
       return;
     }
     ok(res, { transactionId, status: 'VOIDED' });
+  }),
+);
+
+// FR-02: the other kind of stuck sale. Paid, and not marked shipped by its ship-by time, oldest
+// payment first: the ones an admin may need to refund because the seller has gone quiet. A sale paid
+// before shipByAt existed is measured from its payment time (shipByAtOf's fallback).
+router.get(
+  '/transactions/unshipped',
+  requireAuth(['ADMIN']),
+  asyncHandler(async (_req, res) => {
+    const { shipByHours } = await getPlatformSettings();
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - shipByHours * 60 * 60 * 1000);
+
+    const transactions = await prisma.auctionTransaction.findMany({
+      where: {
+        status: 'COMPLETED',
+        OR: [
+          { shipByAt: { lt: now } },
+          { shipByAt: null, paidAt: { lt: cutoff } },
+          { shipByAt: null, paidAt: null, createdAt: { lt: cutoff } },
+        ],
+      },
+      include: {
+        auction: { select: { title: true } },
+        winner: { select: { id: true, name: true } },
+        seller: { select: { id: true, name: true } },
+      },
+      orderBy: [{ paidAt: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    ok(res, transactions.map((tx) => ({
+      transactionId: tx.id,
+      auctionId: tx.auctionId,
+      auctionTitle: tx.auction.title,
+      buyerId: tx.winner.id,
+      buyerName: tx.winner.name,
+      sellerId: tx.seller.id,
+      sellerName: tx.seller.name,
+      finalAmount: tx.finalAmount,
+      status: tx.status,
+      createdAt: tx.createdAt.toISOString(),
+      paidAt: tx.paidAt?.toISOString(),
+      shipByAt: shipByAtOf(tx, shipByHours)?.toISOString(),
+      notShippedReportedAt: tx.notShippedReportedAt?.toISOString(),
+    })));
+  }),
+);
+
+// FR-02: refunds a paid sale that has not shipped, for any reason an admin has (the seller is
+// unreachable, suspended, or sold something they did not have). eBay decides such a case itself
+// and refunds at once. A shipped sale is not refunded here: that is the dispute's job.
+router.post(
+  '/transactions/:transactionId/refund',
+  requireAuth(['ADMIN']),
+  validateBody(refundSaleSchema),
+  asyncHandler<z.infer<typeof refundSaleSchema>>(async (req, res) => {
+    const { transactionId } = req.params;
+    const result = await refundUnshippedSale(transactionId, {
+      by: 'admin',
+      userId: req.auth!.userId,
+      reason: req.body.reason,
+    });
+    if (result.kind === 'not-found') {
+      fail(res, 'Transaction not found.', 404);
+      return;
+    }
+    if (result.kind !== 'ok') {
+      fail(res, 'Only a sale that is paid and not yet shipped can be refunded here. A shipped sale goes through a dispute.', 409);
+      return;
+    }
+    ok(res, { transactionId, status: 'REFUNDED' });
   }),
 );
 

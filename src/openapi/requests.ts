@@ -207,6 +207,18 @@ export const raiseDisputeSchema = z
   .object({ reason: z.string().trim().min(10).max(1000) })
   .meta({ id: 'RaiseDisputeRequest' });
 
+// FR-02: the buyer reports a paid sale not shipped once its ship-by time has passed. The note is
+// optional: the report itself says what is wrong.
+export const reportNotShippedSchema = z
+  .object({ note: z.string().trim().max(500).optional() })
+  .meta({ id: 'ReportNotShippedRequest' });
+
+// FR-02: a paid, unshipped sale refunded by its seller or by an admin. The reason is kept in the
+// audit log and quoted to the buyer.
+export const refundSaleSchema = z
+  .object({ reason: z.string().trim().min(3).max(500) })
+  .meta({ id: 'RefundSaleRequest' });
+
 // The seller's one response to that dispute: the same bounds as the buyer's reason, so neither
 // side can write more than the other.
 export const respondToDisputeSchema = z
@@ -249,6 +261,8 @@ export const updateSettingsSchema = z
     paymentDeadlineHours: z.coerce.number().int().positive().optional(),
     // C6, Phase 7.
     reviewEditWindowHours: z.coerce.number().int().positive().optional(),
+    // FR-02.
+    shipByHours: z.coerce.number().int().positive().optional(),
     // Stores an address, so it gets the strict rule — same one register uses.
     supportEmail: strictEmail.optional(),
   })

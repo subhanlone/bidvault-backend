@@ -6,16 +6,26 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
-import { payTransactionSchema, raiseDisputeSchema, respondToDisputeSchema } from '../../openapi/requests.js';
+import {
+  payTransactionSchema,
+  raiseDisputeSchema,
+  refundSaleSchema,
+  reportNotShippedSchema,
+  respondToDisputeSchema,
+} from '../../openapi/requests.js';
 import { dispatchEmail, sendPaymentCompletedEmail } from '../../services/email.service.js';
 import { chargeCard } from '../../services/payment-gateway.service.js';
-import { getPlatformSettings } from '../../services/settings.service.js';
+import { getPlatformSettings, shipByAtFrom } from '../../services/settings.service.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import {
   markShipped,
   confirmDelivery,
   raiseDispute,
   respondToDispute,
+  reportNotShipped,
+  refundUnshippedSale,
+  shipByAtOf,
+  shipByFields,
   REVENUE_STATUSES,
   type RespondToDisputeResult,
 } from '../../services/fulfillment.service.js';
@@ -50,7 +60,7 @@ router.get(
       orderBy: { createdAt: 'desc' },
     });
 
-    const { reviewTimeoutHours } = await getPlatformSettings();
+    const { reviewTimeoutHours, shipByHours } = await getPlatformSettings();
 
     ok(res, transactions.map((tx) => ({
       transactionId: tx.id,
@@ -74,6 +84,7 @@ router.get(
       reviewDeadlineAt: tx.shippedAt
         ? new Date(tx.shippedAt.getTime() + reviewTimeoutHours * 60 * 60 * 1000).toISOString()
         : undefined,
+      ...shipByFields(tx, shipByHours),
       disputeReason: tx.dispute?.reason,
       createdAt: tx.createdAt.toISOString(),
       reviewed: tx.review !== null,
@@ -169,7 +180,7 @@ router.get(
       take: limit + 1,
     });
 
-    const { reviewTimeoutHours } = await getPlatformSettings();
+    const { reviewTimeoutHours, shipByHours } = await getPlatformSettings();
     const { pageRows, nextCursor } = slicePage(rows, limit, (t) => t.createdAt, (t) => t.id);
 
     ok(res, {
@@ -188,6 +199,7 @@ router.get(
         reviewDeadlineAt: t.shippedAt
           ? new Date(t.shippedAt.getTime() + reviewTimeoutHours * 60 * 60 * 1000).toISOString()
           : undefined,
+        ...shipByFields(t, shipByHours),
         disputeReason: t.dispute?.reason,
         createdAt: t.createdAt.toISOString(),
       })),
@@ -207,6 +219,7 @@ router.post(
     const winnerId = req.auth!.userId;
     const { transactionId } = req.params;
     const { cardNumber, deliveryAddress, deliveryPhone } = req.body;
+    const { shipByHours } = await getPlatformSettings();
 
     // The whole read-decide-write runs under a row lock — a double-clicked Pay button is
     // otherwise two concurrent callers both seeing PENDING and both charging. Same FOR UPDATE
@@ -261,6 +274,8 @@ router.post(
         return { kind: 'declined' as const, reason: charge.reason };
       }
 
+      // FR-02: the seller's ship-by time runs from the payment, the way eBay's handling time does.
+      const paidAt = new Date();
       await dbTx.auctionTransaction.update({
         where: { id: row.id },
         data: {
@@ -268,7 +283,8 @@ router.post(
           deliveryPhone,
           paymentReference: charge.reference,
           status: 'COMPLETED',
-          paidAt: new Date(),
+          paidAt,
+          shipByAt: shipByAtFrom(paidAt, shipByHours),
           lastPaymentError: null,
         },
       });
@@ -373,6 +389,58 @@ router.post(
   }),
 );
 
+// FR-02: the buyer's report that a paid sale was not sent by its ship-by time. The sale stays paid
+// and the seller can still ship it; see fulfillment.service.ts for the refund that follows if not.
+router.post(
+  '/:transactionId/report-not-shipped',
+  requireAuth(['BUYER']),
+  validateBody(reportNotShippedSchema),
+  asyncHandler<z.infer<typeof reportNotShippedSchema>>(async (req, res) => {
+    const result = await reportNotShipped(req.params.transactionId, req.auth!.userId, req.body.note);
+    switch (result.kind) {
+      case 'ok':
+        ok(res, {
+          transactionId: req.params.transactionId,
+          notShippedReportedAt: result.reportedAt.toISOString(),
+          autoRefundAt: result.autoRefundAt.toISOString(),
+        });
+        return;
+      case 'too-early':
+        // The ship-by time itself is on every view of the sale (shipByAt); the message only says why.
+        fail(res, 'The seller still has time to ship this item. You can report it once its ship-by time has passed.', 409);
+        return;
+      case 'already-reported':
+        fail(res, 'You have already reported this item as not shipped.', 409);
+        return;
+      default: {
+        const [message, status] = FULFILLMENT_ERROR_STATUS[result.kind];
+        fail(res, message, status);
+      }
+    }
+  }),
+);
+
+// FR-02: the seller refunds a paid sale they cannot send. Only before it has shipped: after that,
+// a problem is the buyer's dispute to raise.
+router.post(
+  '/:transactionId/refund',
+  requireAuth(['BUYER', 'SELLER']),
+  validateBody(refundSaleSchema),
+  asyncHandler<z.infer<typeof refundSaleSchema>>(async (req, res) => {
+    const result = await refundUnshippedSale(req.params.transactionId, {
+      by: 'seller',
+      userId: req.auth!.userId,
+      reason: req.body.reason,
+    });
+    if (result.kind !== 'ok') {
+      const [message, status] = FULFILLMENT_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { transactionId: req.params.transactionId, status: 'REFUNDED' });
+  }),
+);
+
 const DISPUTE_RESPONSE_ERROR_STATUS: Record<Exclude<RespondToDisputeResult['kind'], 'ok'>, [string, number]> = {
   'not-found': ['Transaction not found.', 404],
   forbidden: ['Forbidden.', 403],
@@ -453,6 +521,7 @@ router.get(
     });
 
     if (!tx) { fail(res, 'Transaction not found.', 404); return; }
+    const { shipByHours } = await getPlatformSettings();
 
     const { userId, role } = req.auth!;
     if (role !== 'ADMIN' && tx.winnerId !== userId && tx.sellerId !== userId) {
@@ -476,6 +545,7 @@ router.get(
       deliveryAddress: tx.deliveryAddress ?? undefined,
       deliveryPhone: tx.deliveryPhone ?? undefined,
       createdAt: tx.createdAt.toISOString(),
+      shipByAt: shipByAtOf(tx, shipByHours)?.toISOString(),
       shippedAt: tx.shippedAt?.toISOString(),
       disputeStatus: tx.dispute?.status,
       disputeReason: tx.dispute?.reason,

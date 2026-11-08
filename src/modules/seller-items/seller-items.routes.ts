@@ -10,7 +10,7 @@ import { SELLER_ITEMS_SEARCH_MAX } from '../../openapi/requests.js';
 import type { SellerItemDtoType, SellerItemsSummaryDtoType } from '../../openapi/schemas.js';
 import { buildWatcherCountMap } from '../auctions/auction-dto.js';
 import { findNextBidAmounts } from '../../services/auction-control.service.js';
-import { disputeResponseDueAt } from '../../services/fulfillment.service.js';
+import { disputeResponseDueAt, shipByFields } from '../../services/fulfillment.service.js';
 import { getPlatformSettings } from '../../services/settings.service.js';
 import {
   SELLER_ITEM_TABS,
@@ -208,6 +208,7 @@ async function toDtos(rows: ItemRow[]): Promise<SellerItemDtoType[]> {
         reviewDeadlineAt: sale.shippedAt
           ? new Date(sale.shippedAt.getTime() + settings.reviewTimeoutHours * 60 * 60 * 1000).toISOString()
           : undefined,
+        ...shipByFields(sale, settings.shipByHours),
         disputeReason: sale.dispute?.reason,
         disputeResponseDueAt: sale.dispute ? disputeResponseDueAt(sale.dispute.createdAt).toISOString() : undefined,
         disputeSellerResponse: sale.dispute?.sellerResponse ?? undefined,

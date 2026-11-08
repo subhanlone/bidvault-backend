@@ -134,8 +134,13 @@ describe('paying for an item that was taken down', () => {
     ).toBe(1);
   });
 
-  it('a takedown leaves a sale that was already paid as it is', async () => {
-    await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'COMPLETED' } });
+  // A paid sale that has not been sent is refunded by the takedown (FR-02, tests/paid-sale-exit.test.ts).
+  // One already on its way is left to the buyer's confirm-or-dispute window.
+  it('a takedown leaves a sale that was already shipped as it is', async () => {
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: { status: 'SHIPPED', shippedAt: new Date() },
+    });
 
     const res = await request(app)
       .post(api(`/admin/listings/${await closedListingId()}/takedown`))
@@ -143,7 +148,7 @@ describe('paying for an item that was taken down', () => {
       .send({ reason: 'Counterfeit item.' });
 
     expect(res.status).toBe(200);
-    expect((await sale()).status).toBe('COMPLETED');
+    expect((await sale()).status).toBe('SHIPPED');
   });
 });
 
