@@ -709,6 +709,65 @@ export async function sendDisputeRaisedEmail(
   `));
 }
 
+// FR-02: the buyer of a paid sale reports it has not been sent, after its ship-by time.
+export async function sendNotShippedReportedEmail(
+  seller: { email: string; name: string },
+  details: { auctionTitle: string; note?: string; refundAt: Date; windowDays: number },
+): Promise<void> {
+  if (!(await alertsEnabled())) return;
+  const refundAt = details.refundAt.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'Asia/Karachi',
+  });
+  await send(seller.email, `The buyer has not received "${details.auctionTitle}"`, base('Not shipped', `
+    ${h1('The buyer reports this item was not sent')}
+    ${p(`Hi ${seller.name}, "${details.auctionTitle}" was paid for, but it was not marked shipped by its ship-by time and the buyer has reported it.`)}
+    ${details.note ? `${divider()}${p(`The buyer wrote: "${details.note}"`)}` : ''}
+    ${divider()}
+    ${p(`Within ${details.windowDays} days, by ${refundAt}, mark it shipped from My Items or refund the buyer. If neither happens, the buyer is refunded automatically and no payout is made for this sale.`)}
+  `));
+}
+
+// FR-02: a paid sale that was never shipped is refunded, by the seller, an admin (or a takedown),
+// or automatically after an unanswered not-shipped report. Nobody was paid out: the seller is paid
+// only once the buyer has the item.
+export async function sendSaleRefundedEmail(
+  buyer: { email: string; name: string },
+  seller: { email: string; name: string },
+  details: { auctionTitle: string; finalAmount: number; by: 'seller' | 'admin' | 'system'; reason: string },
+): Promise<void> {
+  if (!(await alertsEnabled())) return;
+  const pkr = `PKR ${details.finalAmount.toLocaleString()}`;
+  const who =
+    details.by === 'seller' ? 'The seller' : details.by === 'admin' ? 'BidVault' : 'BidVault, automatically,';
+
+  await send(buyer.email, `Refunded — "${details.auctionTitle}"`, base('Refunded', `
+    ${h1('Your purchase has been refunded')}
+    ${p(`Hi ${buyer.name}, ${who} refunded your purchase because the item was not sent.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Item', details.auctionTitle)}
+      ${infoRow('Refunded', pkr)}
+      ${infoRow('Reason', details.reason)}
+    </table>
+  `));
+
+  // A seller who refunded the sale themselves needs no e-mail telling them so.
+  if (details.by === 'seller') return;
+  await send(seller.email, `Sale refunded — "${details.auctionTitle}"`, base('Sale refunded', `
+    ${h1('This sale was refunded to the buyer')}
+    ${p(`Hi ${seller.name}, the buyer of "${details.auctionTitle}" has been refunded because the item was not sent. No payout will be made for this sale.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Item', details.auctionTitle)}
+      ${infoRow('Amount', pkr)}
+      ${infoRow('Reason', details.reason)}
+    </table>
+  `));
+}
+
 export async function sendDisputeResolvedEmail(
   buyer: { email: string; name: string },
   seller: { email: string; name: string },

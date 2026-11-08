@@ -10,7 +10,12 @@ import {
 import { closeAuction } from './close-auction.js';
 import { WORKER_HEARTBEAT_KEY, WORKER_HEARTBEAT_INTERVAL_MS } from '../infra/worker-heartbeat.js';
 import { subscribeToSettingsInvalidation } from '../services/settings.service.js';
-import { findTimedOutShipments, confirmDelivery } from '../services/fulfillment.service.js';
+import {
+  findTimedOutShipments,
+  confirmDelivery,
+  findUnansweredNotShippedReports,
+  refundUnansweredReport,
+} from '../services/fulfillment.service.js';
 import { findOverduePayments, voidOverduePayment } from '../services/auction-control.service.js';
 
 // BV-025: close-auction.ts sends email through email.service.ts, which reads
@@ -154,6 +159,40 @@ const fulfillmentSweepTimer = setInterval(() => void autoConfirmTimedOutShipment
 fulfillmentSweepTimer.unref();
 
 /**
+ * FR-02: a buyer's not-shipped report the seller neither shipped nor refunded within
+ * NOT_SHIPPED_RESPONSE_DAYS is refunded, as eBay refunds an "item not received" request with no
+ * tracking. Same shape as the two sweeps beside it: refundUnansweredReport() decides again under the
+ * row lock, so a sale shipped or refunded since the list was read is left alone.
+ */
+let notShippedSweepInFlight = false;
+
+async function autoRefundUnansweredReports(): Promise<void> {
+  if (notShippedSweepInFlight) return;
+  notShippedSweepInFlight = true;
+
+  try {
+    const overdue = await findUnansweredNotShippedReports();
+    if (overdue.length === 0) return;
+
+    let refunded = 0;
+    for (const transactionId of overdue) {
+      const result = await refundUnansweredReport(transactionId);
+      if (result.kind === 'ok') refunded += 1;
+      else console.error(`[not-shipped-sweep] auto-refund skipped for ${transactionId}: ${result.kind}`);
+    }
+
+    console.log(`[not-shipped-sweep] auto-refunded ${refunded} unshipped sale(s).`);
+  } catch (error) {
+    console.error('[not-shipped-sweep] Sweep failed:', error);
+  } finally {
+    notShippedSweepInFlight = false;
+  }
+}
+
+const notShippedSweepTimer = setInterval(() => void autoRefundUnansweredReports(), RECONCILE_INTERVAL_MS);
+notShippedSweepTimer.unref();
+
+/**
  * A3, Phase 6: a winner who never pays used to lock the item forever — a PENDING transaction
  * had no deadline, no expiry, no sweep. Same shape as the fulfilment sweep above:
  * paymentDeadlineHours-driven, voidOverduePayment() is the same function the row lock and
@@ -193,6 +232,7 @@ heartbeatTimer.unref();
 async function shutdown() {
   clearInterval(reconcileTimer);
   clearInterval(fulfillmentSweepTimer);
+  clearInterval(notShippedSweepTimer);
   clearInterval(paymentSweepTimer);
   clearInterval(heartbeatTimer);
   await worker.close();

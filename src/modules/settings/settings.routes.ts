@@ -11,7 +11,7 @@ import { getPlatformSettings, updatePlatformSettings } from '../../services/sett
 const router = Router();
 
 // Public: only what a visitor who has not signed in needs: the maintenance gate, the footer's
-// support contact, the seller terms version, and the two buying-rule windows the auction page quotes
+// support contact, the seller terms version, and the three buying-rule windows the auction page quotes
 // to anyone considering a bid. Everything else is cherry-picked in on purpose, never spread from the
 // settings row (OWASP API3: keep returned data to the bare minimum the endpoint's requirement calls
 // for). minListingPrice and maxBidIncrement are rules for sellers and are served by the seller-only
@@ -26,6 +26,7 @@ router.get(
       sellerTermsVersion: SELLER_TERMS_VERSION,
       paymentDeadlineHours: s.paymentDeadlineHours,
       reviewTimeoutHours: s.reviewTimeoutHours,
+      shipByHours: s.shipByHours,
     });
   }),
 );

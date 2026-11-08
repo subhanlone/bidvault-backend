@@ -18,6 +18,8 @@ export interface PlatformSettingsData {
   paymentDeadlineHours: number;
   // C6, Phase 7: how long a buyer may edit or delete their own review.
   reviewEditWindowHours: number;
+  // FR-02: how long a seller has, from payment, to mark the item shipped.
+  shipByHours: number;
   supportEmail: string;
 }
 
@@ -32,6 +34,7 @@ const DEFAULTS: PlatformSettingsData = {
   reviewTimeoutHours: 48,
   paymentDeadlineHours: 48,
   reviewEditWindowHours: 72,
+  shipByHours: 72,
   supportEmail: 'support@bidvault.tech',
 };
 
@@ -51,6 +54,7 @@ type SettingRow = {
   reviewTimeoutHours: number;
   paymentDeadlineHours: number;
   reviewEditWindowHours: number;
+  shipByHours: number;
   supportEmail: string;
 };
 
@@ -63,6 +67,7 @@ function toData(row: SettingRow): PlatformSettingsData {
     reviewTimeoutHours: row.reviewTimeoutHours,
     paymentDeadlineHours: row.paymentDeadlineHours,
     reviewEditWindowHours: row.reviewEditWindowHours,
+    shipByHours: row.shipByHours,
     supportEmail: row.supportEmail,
   };
 }
@@ -78,6 +83,11 @@ async function fetchSettings(): Promise<PlatformSettingsData> {
  */
 export function paymentDueAtFrom(from: Date, paymentDeadlineHours: number): Date {
   return new Date(from.getTime() + paymentDeadlineHours * 60 * 60 * 1000);
+}
+
+/** FR-02: the moment a sale paid at `paidAt` must have been marked shipped. */
+export function shipByAtFrom(paidAt: Date, shipByHours: number): Date {
+  return new Date(paidAt.getTime() + shipByHours * 60 * 60 * 1000);
 }
 
 /** Reads the singleton settings row, falling back to defaults if it doesn't exist yet. Cached for TTL_MS. */

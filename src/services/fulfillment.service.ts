@@ -7,6 +7,8 @@ import {
   sendDeliveryConfirmedEmail,
   sendDisputeRaisedEmail,
   sendDisputeResolvedEmail,
+  sendNotShippedReportedEmail,
+  sendSaleRefundedEmail,
 } from './email.service.js';
 
 /**
@@ -460,6 +462,276 @@ export async function resolveDispute(
     }),
     `dispute-resolved-released (${outcome.transactionId})`,
   );
+  return { kind: 'ok' };
+}
+
+// ---------------------------------------------------------------------------
+// FR-02: a paid sale the seller never ships
+//
+// eBay's handling time and "item not received" request (docs/EBAY-HELP-RESEARCH.md section 4),
+// mapped onto a platform with no carriers: the sale gets a ship-by time at payment; once it has
+// passed, the buyer can report the sale not shipped; the seller then has NOT_SHIPPED_RESPONSE_DAYS
+// to ship it or refund, after which the worker refunds the buyer. The seller may refund at any
+// time before shipping, an admin may refund any paid, unshipped sale, and a takedown does.
+//
+// A refund here is a status flip, the same as a dispute refund: the gateway never moved money,
+// and the seller is paid only at DELIVERED, so a COMPLETED sale has no payout to reverse.
+// ---------------------------------------------------------------------------
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+/** eBay gives a seller 3 business days to answer an "item not received" request; calendar days here. */
+export const NOT_SHIPPED_RESPONSE_DAYS = 3;
+
+/** Statuses in which the buyer has paid. Nothing before payment has a ship-by time. */
+const PAID_SALE_STATUSES: TransactionStatus[] = [...REVENUE_STATUSES, 'REFUNDED'];
+
+type ShipBySource = {
+  status: TransactionStatus;
+  shipByAt: Date | null;
+  paidAt: Date | null;
+  createdAt: Date;
+  notShippedReportedAt: Date | null;
+};
+
+/**
+ * When a paid sale must have shipped. `pay` stores it; a sale paid before the column existed has
+ * none and is measured from its payment time with today's shipByHours (from its creation, if it
+ * predates paidAt too: earlier than the real payment, so never later than the seller was owed).
+ */
+export function shipByAtOf(sale: ShipBySource, shipByHours: number): Date | undefined {
+  if (!PAID_SALE_STATUSES.includes(sale.status)) return undefined;
+  if (sale.shipByAt) return sale.shipByAt;
+  return new Date((sale.paidAt ?? sale.createdAt).getTime() + shipByHours * HOUR_MS);
+}
+
+/** When an unanswered not-shipped report is refunded, while the sale is still waiting to ship. */
+export function autoRefundAtOf(sale: Pick<ShipBySource, 'status' | 'notShippedReportedAt'>): Date | undefined {
+  if (sale.status !== 'COMPLETED' || !sale.notShippedReportedAt) return undefined;
+  return new Date(sale.notShippedReportedAt.getTime() + NOT_SHIPPED_RESPONSE_DAYS * DAY_MS);
+}
+
+/** The three FR-02 fields every sale view (buyer, seller, My Items) carries, as the wire wants them. */
+export function shipByFields(sale: ShipBySource, shipByHours: number) {
+  return {
+    shipByAt: shipByAtOf(sale, shipByHours)?.toISOString(),
+    notShippedReportedAt: sale.notShippedReportedAt?.toISOString(),
+    autoRefundAt: autoRefundAtOf(sale)?.toISOString(),
+  };
+}
+
+export type ReportNotShippedResult =
+  | { kind: 'ok'; reportedAt: Date; autoRefundAt: Date }
+  | { kind: 'not-found' }
+  | { kind: 'forbidden' }
+  | { kind: 'wrong-state' }
+  | { kind: 'too-early' }
+  | { kind: 'already-reported' };
+
+export async function reportNotShipped(
+  transactionId: string,
+  buyerId: string,
+  note: string | undefined,
+): Promise<ReportNotShippedResult> {
+  const { shipByHours } = await getPlatformSettings();
+  const outcome = await prisma.$transaction(async (tx) => {
+    const row = await lockTransaction(tx, transactionId);
+    if (!row) return { kind: 'not-found' as const };
+    if (row.winnerId !== buyerId) return { kind: 'forbidden' as const };
+    if (row.status !== 'COMPLETED') return { kind: 'wrong-state' as const };
+
+    const full = await tx.auctionTransaction.findUniqueOrThrow({
+      where: { id: row.id },
+      select: {
+        status: true,
+        shipByAt: true,
+        paidAt: true,
+        createdAt: true,
+        notShippedReportedAt: true,
+        auction: { select: { title: true } },
+        seller: { select: { email: true, name: true } },
+      },
+    });
+    if (full.notShippedReportedAt) return { kind: 'already-reported' as const };
+    const shipByAt = shipByAtOf(full, shipByHours)!;
+    const now = new Date();
+    if (shipByAt > now) return { kind: 'too-early' as const };
+
+    await tx.auctionTransaction.update({
+      where: { id: row.id },
+      data: { notShippedReportedAt: now, notShippedNote: note ?? null },
+    });
+    const autoRefundAt = autoRefundAtOf({ status: 'COMPLETED', notShippedReportedAt: now })!;
+
+    await tx.notification.create({
+      data: {
+        userId: row.sellerId,
+        type: 'NOT_SHIPPED_REPORTED',
+        title: 'The buyer has not received their item',
+        message: `"${full.auction.title}" was not marked shipped in time and the buyer has reported it. Mark it shipped or refund the buyer within ${NOT_SHIPPED_RESPONSE_DAYS} days, or they are refunded automatically.`,
+      },
+    });
+
+    return { kind: 'ok' as const, reportedAt: now, autoRefundAt, auctionTitle: full.auction.title, seller: full.seller };
+  });
+
+  if (outcome.kind !== 'ok') return outcome;
+
+  dispatchEmail(
+    sendNotShippedReportedEmail(outcome.seller, {
+      auctionTitle: outcome.auctionTitle,
+      note,
+      refundAt: outcome.autoRefundAt,
+      windowDays: NOT_SHIPPED_RESPONSE_DAYS,
+    }),
+    `not-shipped-reported (${transactionId})`,
+  );
+  return { kind: 'ok', reportedAt: outcome.reportedAt, autoRefundAt: outcome.autoRefundAt };
+}
+
+/** Who refunded a paid, unshipped sale. `system` is the worker refunding an unanswered report. */
+export type RefundActor =
+  | { by: 'seller'; userId: string; reason: string }
+  | { by: 'admin'; userId: string; reason: string }
+  | { by: 'system'; reason: string };
+
+export type RefundedSale = {
+  transactionId: string;
+  auctionTitle: string;
+  finalAmount: number;
+  buyer: { email: string; name: string };
+  seller: { email: string; name: string };
+};
+
+/**
+ * Refunds a sale whose row the caller has locked and found COMPLETED: the status, the audit row and
+ * the in-app notices, in the caller's transaction (a takedown refunds inside its own). The e-mails
+ * go after the commit, through announceRefund. A seller who refunds is not told they did.
+ */
+export async function refundLockedSale(
+  tx: Prisma.TransactionClient,
+  transactionId: string,
+  actor: RefundActor,
+): Promise<RefundedSale> {
+  const sale = await tx.auctionTransaction.update({
+    where: { id: transactionId },
+    data: { status: 'REFUNDED' },
+    select: {
+      winnerId: true,
+      sellerId: true,
+      finalAmount: true,
+      auction: { select: { title: true } },
+      winner: { select: { email: true, name: true } },
+      seller: { select: { email: true, name: true } },
+    },
+  });
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: actor.by === 'system' ? null : actor.userId,
+      action: 'TRANSACTION_REFUNDED',
+      entityType: 'AuctionTransaction',
+      entityId: transactionId,
+      metadata: { by: actor.by, reason: actor.reason },
+    },
+  });
+
+  const title = sale.auction.title;
+  const amount = `PKR ${sale.finalAmount.toLocaleString()}`;
+  const sellerNotice = {
+    userId: sale.sellerId,
+    type: 'SALE_REFUNDED',
+    title: 'Sale refunded',
+    message: `The buyer of "${title}" was refunded because it was not sent. No payout will be made. Reason: ${actor.reason}`,
+  };
+  await tx.notification.createMany({
+    data: [
+      {
+        userId: sale.winnerId,
+        type: 'SALE_REFUNDED',
+        title: 'Purchase refunded',
+        message: `Your purchase of "${title}" was refunded (${amount}) because it was not sent. Reason: ${actor.reason}`,
+      },
+      ...(actor.by === 'seller' ? [] : [sellerNotice]),
+    ],
+  });
+
+  return { transactionId, auctionTitle: title, finalAmount: sale.finalAmount, buyer: sale.winner, seller: sale.seller };
+}
+
+/** After a refund has committed: the e-mails. */
+export function announceRefund(refunded: RefundedSale, actor: RefundActor): void {
+  dispatchEmail(
+    sendSaleRefundedEmail(refunded.buyer, refunded.seller, {
+      auctionTitle: refunded.auctionTitle,
+      finalAmount: refunded.finalAmount,
+      by: actor.by,
+      reason: actor.reason,
+    }),
+    `sale-refunded (${refunded.transactionId})`,
+  );
+}
+
+export type RefundUnshippedResult =
+  | { kind: 'ok' }
+  | { kind: 'not-found' }
+  | { kind: 'forbidden' }
+  | { kind: 'wrong-state' };
+
+/** The seller's own refund, or an admin's, of a paid sale that has not shipped. */
+export async function refundUnshippedSale(
+  transactionId: string,
+  actor: Extract<RefundActor, { by: 'seller' | 'admin' }>,
+): Promise<RefundUnshippedResult> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    const row = await lockTransaction(tx, transactionId);
+    if (!row) return { kind: 'not-found' as const };
+    if (actor.by === 'seller' && row.sellerId !== actor.userId) return { kind: 'forbidden' as const };
+    // Only a sale paid and not yet sent. Once shipped, a problem goes through the buyer's dispute.
+    if (row.status !== 'COMPLETED') return { kind: 'wrong-state' as const };
+    return { kind: 'ok' as const, refunded: await refundLockedSale(tx, row.id, actor) };
+  });
+
+  if (outcome.kind !== 'ok') return outcome;
+  announceRefund(outcome.refunded, actor);
+  return { kind: 'ok' };
+}
+
+/** Paid sales still unshipped NOT_SHIPPED_RESPONSE_DAYS after the buyer reported them. */
+export async function findUnansweredNotShippedReports(): Promise<string[]> {
+  const cutoff = new Date(Date.now() - NOT_SHIPPED_RESPONSE_DAYS * DAY_MS);
+  const rows = await prisma.auctionTransaction.findMany({
+    where: { status: 'COMPLETED', notShippedReportedAt: { lt: cutoff } },
+    select: { id: true },
+  });
+  return rows.map((r) => r.id);
+}
+
+const AUTO_REFUND_REASON =
+  `The seller did not ship the item or answer the buyer's report within ${NOT_SHIPPED_RESPONSE_DAYS} days.`;
+
+/**
+ * The worker's refund of one unanswered report. Decided again under the row lock: since the sweep
+ * read its list the seller may have shipped or refunded, and either leaves the sale alone.
+ */
+export async function refundUnansweredReport(transactionId: string): Promise<RefundUnshippedResult> {
+  const actor: RefundActor = { by: 'system', reason: AUTO_REFUND_REASON };
+  const outcome = await prisma.$transaction(async (tx) => {
+    const row = await lockTransaction(tx, transactionId);
+    if (!row) return { kind: 'not-found' as const };
+    if (row.status !== 'COMPLETED') return { kind: 'wrong-state' as const };
+    const { notShippedReportedAt } = await tx.auctionTransaction.findUniqueOrThrow({
+      where: { id: row.id },
+      select: { notShippedReportedAt: true },
+    });
+    const due = autoRefundAtOf({ status: 'COMPLETED', notShippedReportedAt });
+    if (!due || due > new Date()) return { kind: 'wrong-state' as const };
+    return { kind: 'ok' as const, refunded: await refundLockedSale(tx, row.id, actor) };
+  });
+
+  if (outcome.kind !== 'ok') return outcome;
+  announceRefund(outcome.refunded, actor);
   return { kind: 'ok' };
 }
 

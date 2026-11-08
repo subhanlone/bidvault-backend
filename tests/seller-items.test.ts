@@ -629,7 +629,7 @@ describe('what a row carries', () => {
     expect(byStage.get('REJECTED')?.listing.rejectionReason).toBe('Seeded reason.');
     expect(byStage.get('REMOVED')?.listing.rejectionReason).toBe('Seeded reason.');
     expect(byStage.get('LIVE')?.actions).toEqual(['CANCEL_AUCTION']);
-    expect(byStage.get('NEEDS_SHIPPING')?.actions).toEqual(['MARK_SHIPPED', 'VIEW_INVOICE']);
+    expect(byStage.get('NEEDS_SHIPPING')?.actions).toEqual(['MARK_SHIPPED', 'REFUND_BUYER', 'VIEW_INVOICE']);
     expect(byStage.get('NEEDS_SHIPPING')?.sale?.paidAt).toBeDefined();
     expect(byStage.get('NEEDS_SHIPPING')?.sale?.buyerName).toBe('Test Buyer');
     expect(byStage.get('ENDED_NO_BIDS')?.actions).toEqual(['LIST_AGAIN']);

@@ -95,8 +95,8 @@ describe('allowedActions', () => {
     expect(allowedActions('LIVE', facts({ auctionStatus: 'ACTIVE', bidCount: 1 }))).toEqual([]);
   });
 
-  it('a paid sale can be shipped and its invoice viewed', () => {
-    expect(allowedActions('NEEDS_SHIPPING', facts({ txnStatus: 'COMPLETED' }))).toEqual(['MARK_SHIPPED', 'VIEW_INVOICE']);
+  it('a paid sale can be shipped, refunded (FR-02) and its invoice viewed', () => {
+    expect(allowedActions('NEEDS_SHIPPING', facts({ txnStatus: 'COMPLETED' }))).toEqual(['MARK_SHIPPED', 'REFUND_BUYER', 'VIEW_INVOICE']);
   });
 
   it('a dispute waiting for the seller offers the response and the invoice', () => {
