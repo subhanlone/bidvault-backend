@@ -131,16 +131,16 @@ describe('confirmDelivery', () => {
     expect(result.kind).toBe('wrong-state');
   });
 
-  it('releases a DISPUTED transaction only when fromDisputed is set', async () => {
+  it('never releases a DISPUTED transaction: only resolving the dispute does', async () => {
     await shipped();
     await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { status: 'DISPUTED' } });
 
-    const withoutFlag = await confirmDelivery(w.transactionId);
-    expect(withoutFlag.kind).toBe('wrong-state');
-
-    const withFlag = await confirmDelivery(w.transactionId, { fromDisputed: true });
-    expect(withFlag.kind).toBe('ok');
-    expect((await reload(w.transactionId)).status).toBe('DELIVERED');
+    // A disputed sale is delivered only by resolveDispute's RELEASE, which closes the dispute in the
+    // same transaction (see the resolveDispute tests below). Delivering it here would pay the seller
+    // and leave the dispute open.
+    const result = await confirmDelivery(w.transactionId);
+    expect(result.kind).toBe('wrong-state');
+    expect((await reload(w.transactionId)).status).toBe('DISPUTED');
   });
 });
 

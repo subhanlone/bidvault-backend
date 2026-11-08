@@ -124,53 +124,52 @@ export type ConfirmDeliveryResult =
   | { kind: 'forbidden' }
   | { kind: 'wrong-state' };
 
+/**
+ * Marks a locked sale DELIVERED and pays the seller: the ledger entry, the balance and the payout
+ * notice, all in the caller's transaction. The gateway is local, so there is no external latency or
+ * failure mode to keep off the row lock: either the delivery and the payout both happen or neither
+ * does. Shared by confirmDelivery and by resolveDispute's RELEASE, which must not commit the
+ * dispute's resolution without them.
+ */
+async function deliverAndPaySeller(tx: Prisma.TransactionClient, row: LockedTransactionRow) {
+  const full = await tx.auctionTransaction.findUniqueOrThrow({
+    where: { id: row.id },
+    select: { auction: { select: { title: true } }, seller: { select: { id: true, email: true, name: true } } },
+  });
+
+  await tx.auctionTransaction.update({ where: { id: row.id }, data: { status: 'DELIVERED' } });
+  await tx.ledgerEntry.create({
+    data: { sellerId: row.sellerId, transactionId: row.id, amount: row.finalAmount },
+  });
+  await tx.user.update({
+    where: { id: row.sellerId },
+    data: { ledgerBalance: { increment: row.finalAmount } },
+  });
+  await tx.notification.create({
+    data: {
+      userId: row.sellerId,
+      type: 'PAYOUT_RECEIVED',
+      title: "You've been paid",
+      message: `PKR ${row.finalAmount.toLocaleString()} for "${full.auction.title}" has been added to your earnings.`,
+    },
+  });
+
+  return { finalAmount: row.finalAmount, auctionTitle: full.auction.title, seller: full.seller };
+}
+
 export async function confirmDelivery(
   transactionId: string,
-  opts: { requireWinnerId?: string; auto?: boolean; fromDisputed?: boolean } = {},
+  opts: { requireWinnerId?: string; auto?: boolean } = {},
 ): Promise<ConfirmDeliveryResult> {
   const outcome = await prisma.$transaction(async (tx) => {
     const row = await lockTransaction(tx, transactionId);
     if (!row) return { kind: 'not-found' as const };
     if (opts.requireWinnerId && row.winnerId !== opts.requireWinnerId) return { kind: 'forbidden' as const };
-    // Every caller reaches this from SHIPPED except an admin releasing a dispute in the
-    // seller's favour, which reaches it from DISPUTED — resolveDispute() sets fromDisputed so
-    // the two paths cannot be confused with each other.
-    const expectedState = opts.fromDisputed ? 'DISPUTED' : 'SHIPPED';
-    if (row.status !== expectedState) return { kind: 'wrong-state' as const };
+    // The buyer's confirmation and the timeout sweep both start from SHIPPED. An admin releasing
+    // a DISPUTED sale goes through resolveDispute, which pays the seller in its own transaction.
+    if (row.status !== 'SHIPPED') return { kind: 'wrong-state' as const };
 
-    const full = await tx.auctionTransaction.findUniqueOrThrow({
-      where: { id: row.id },
-      select: { auction: { select: { title: true } }, seller: { select: { id: true, email: true, name: true } } },
-    });
-
-    await tx.auctionTransaction.update({ where: { id: row.id }, data: { status: 'DELIVERED' } });
-
-    // The payout, in the same transaction as the state change — the gateway is local, so
-    // there is no external latency or failure mode to keep off the row lock for any more.
-    // Either both happen or neither does.
-    await tx.ledgerEntry.create({
-      data: { sellerId: row.sellerId, transactionId: row.id, amount: row.finalAmount },
-    });
-    await tx.user.update({
-      where: { id: row.sellerId },
-      data: { ledgerBalance: { increment: row.finalAmount } },
-    });
-
-    await tx.notification.create({
-      data: {
-        userId: row.sellerId,
-        type: 'PAYOUT_RECEIVED',
-        title: "You've been paid",
-        message: `PKR ${row.finalAmount.toLocaleString()} for "${full.auction.title}" has been added to your earnings.`,
-      },
-    });
-
-    return {
-      kind: 'ok' as const,
-      finalAmount: row.finalAmount,
-      auctionTitle: full.auction.title,
-      seller: full.seller,
-    };
+    return { kind: 'ok' as const, ...(await deliverAndPaySeller(tx, row)) };
   });
 
   if (outcome.kind !== 'ok') return { kind: outcome.kind };
@@ -319,7 +318,19 @@ export async function resolveDispute(
   resolution: 'REFUND' | 'RELEASE',
   note: string,
 ): Promise<ResolveDisputeResult> {
+  // One transaction for the whole decision: the dispute's resolution, the sale's new status and, on
+  // RELEASE, the seller's payout. They used to be two, with the payout's result ignored, so a payout
+  // that failed left the dispute closed (gone from the admin's list), the sale DISPUTED and the
+  // seller unpaid, with nothing to retry it. Now a failure undoes all of it and the admin can retry.
   const outcome = await prisma.$transaction(async (tx) => {
+    // The sale's row first, then the dispute's: the order every path takes (the sale before
+    // anything that hangs off it). The dispute's sale never changes, so it can be read unlocked.
+    const [ref] = await tx.$queryRaw<Array<{ transactionId: string }>>`
+      SELECT "transactionId" FROM "Dispute" WHERE id = ${disputeId}
+    `;
+    if (!ref) return { kind: 'not-found' as const };
+    const sale = await lockTransaction(tx, ref.transactionId);
+
     // Locked the same way every other admin decision on a financial row is (void-transaction,
     // pay): two admins resolving the same dispute at once must not both pass the OPEN check
     // before either write commits.
@@ -328,6 +339,11 @@ export async function resolveDispute(
     `;
     if (!locked) return { kind: 'not-found' as const };
     if (locked.status !== 'OPEN') return { kind: 'not-open' as const };
+    // An open dispute always sits on a DISPUTED sale (raiseDispute writes both together, and only
+    // this function moves either on). Anything else is damaged data, said out loud, not resolved.
+    if (!sale || sale.status !== 'DISPUTED') {
+      throw new Error(`Dispute ${disputeId} is OPEN but its sale is ${sale?.status ?? 'missing'}; not resolving it.`);
+    }
 
     const dispute = await tx.dispute.findUniqueOrThrow({
       where: { id: disputeId },
@@ -395,9 +411,11 @@ export async function resolveDispute(
                 message: `Your dispute for "${title}" was resolved in the seller's favour.`,
               },
             ],
-      // RELEASE's seller-facing notification comes from confirmDelivery() below (the same
-      // payout notification any non-disputed delivery gets) rather than a second one here.
+      // RELEASE's seller-facing notification is the payout notice deliverAndPaySeller writes (the
+      // same one any delivery gets) rather than a second one here.
     });
+
+    const payout = resolution === 'RELEASE' ? await deliverAndPaySeller(tx, sale) : null;
 
     return {
       kind: 'ok' as const,
@@ -405,6 +423,7 @@ export async function resolveDispute(
       auctionTitle: dispute.transaction.auction.title,
       buyer: dispute.transaction.winner,
       seller: dispute.transaction.seller,
+      payout,
     };
   });
 
@@ -422,10 +441,17 @@ export async function resolveDispute(
     return { kind: 'ok' };
   }
 
-  // RELEASE: reuse confirmDelivery for the exact same SHIPPED-was-never-true-here transition
-  // it does for everyone else — the dispute row is already resolved above, so this only needs
-  // to move the transaction itself and credit the seller's ledger.
-  await confirmDelivery(outcome.transactionId, { fromDisputed: true });
+  // RELEASE: the sale was delivered and the seller paid inside the transaction above; these are the
+  // same two e-mails the two-step version sent.
+  if (outcome.payout) {
+    dispatchEmail(
+      sendDeliveryConfirmedEmail(
+        { email: outcome.payout.seller.email, name: outcome.payout.seller.name },
+        { auctionTitle: outcome.payout.auctionTitle, finalAmount: outcome.payout.finalAmount, auto: false },
+      ),
+      `delivery-confirmed (${outcome.transactionId})`,
+    );
+  }
   dispatchEmail(
     sendDisputeResolvedEmail(outcome.buyer, outcome.seller, {
       auctionTitle: outcome.auctionTitle,
