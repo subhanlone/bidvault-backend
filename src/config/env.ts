@@ -39,6 +39,12 @@ const schema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().min(1),
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
+  // Agentic AI valuation (docs/superpowers/plans/2026-09-28-agentic-ai-valuation.md). Optional on
+  // purpose (decided 2026-11-09): without all three the feature switches itself off and says so,
+  // instead of a missing key stopping the server from starting. See config/ai.ts.
+  GROQ_API_KEY: z.string().min(1).optional(),
+  EBAY_APP_ID: z.string().min(1).optional(),
+  EBAY_CERT_ID: z.string().min(1).optional(),
   JWT_ACCESS_SECRET: z.string().min(16),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_SECRET: z.string().min(16),
