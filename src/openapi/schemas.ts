@@ -747,7 +747,45 @@ export const PayResultDto = z
 // BV-029: cursor-paginated list responses. One per endpoint's item shape, not one shared
 // generic $ref -- zod-openapi needs a distinct schema id per named type, and each of these
 // really is a different item shape.
+// ---- listing reports (G5) -----------------------------------------------------------------
+
+export const ReportReason = z.enum(['PROHIBITED_ITEM', 'MISLEADING', 'COUNTERFEIT', 'OTHER']).meta({ id: 'ReportReason' });
+export const ReportStatus = z.enum(['OPEN', 'ACTIONED', 'DISMISSED']).meta({ id: 'ReportStatus' });
+
+/** What the reporter gets back. Never shown to the listed seller. */
+export const ListingReportDto = z
+  .object({
+    reportId: z.string(),
+    auctionId: z.string(),
+    reason: ReportReason,
+    note: z.string().optional(),
+    status: ReportStatus,
+    createdAt: isoDateTime,
+  })
+  .meta({ id: 'ListingReport' });
+
+/** A row of the admin Reports queue: the report, the auction it is about, and who made it. */
+export const AdminListingReportDto = z
+  .object({
+    reportId: z.string(),
+    auction: z.object({
+      auctionId: z.string(),
+      title: z.string(),
+      listingCode: z.string(),
+      status: AuctionStatus,
+      sellerName: z.string(),
+    }),
+    reason: ReportReason,
+    note: z.string().optional(),
+    reporterName: z.string(),
+    status: ReportStatus,
+    createdAt: isoDateTime,
+    resolvedAt: isoDateTime.optional(),
+  })
+  .meta({ id: 'AdminListingReport' });
+
 export const PaginatedAuctionsDto = paginated('PaginatedAuctions', AuctionDto);
+export const PaginatedAdminReportsDto = paginated('PaginatedAdminReports', AdminListingReportDto);
 export const PaginatedBidsWithAuctionDto = paginated('PaginatedBidsWithAuction', BidWithAuctionDto);
 export const PaginatedBidsDto = paginated('PaginatedBids', PublicBidDto);
 export const PaginatedListingsDto = paginated('PaginatedListings', ListingDto);

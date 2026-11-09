@@ -88,6 +88,10 @@ const OPERATIONS: Op[] = [
   // Phase 6 (B4): w.liveAuctionId already has a bid, so the 403/401 checks below (which never
   // reach the has-bids business rule) are what this table needs — the bid-free happy path and
   // the ownership check both live in tests/auction-cancellation.test.ts instead.
+  // G5: otherSeller's ended auction, so neither the buyer nor the seller probe is its own seller.
+  { method: 'post', contractPath: '/auctions/{auctionId}/report',
+    url: (w) => `/auctions/${w.otherBuyerWatchedAuctionId}/report`, allow: ['BUYER', 'SELLER'],
+    body: () => ({ reason: 'OTHER' }) },
   { method: 'post', contractPath: '/auctions/{auctionId}/cancel',
     url: (w) => `/auctions/${w.liveAuctionId}/cancel`, allow: ['BUYER', 'SELLER'],
     body: () => ({ reason: 'Authz probe' }) },
@@ -174,6 +178,9 @@ const OPERATIONS: Op[] = [
     body: () => ({ reason: 'Authz probe' }) },
   { method: 'get', contractPath: '/admin/transactions', url: () => '/admin/transactions', allow: ['ADMIN'] },
   { method: 'get', contractPath: '/admin/transactions/unshipped', url: () => '/admin/transactions/unshipped', allow: ['ADMIN'] },
+  { method: 'get', contractPath: '/admin/reports', url: () => '/admin/reports', allow: ['ADMIN'] },
+  { method: 'patch', contractPath: '/admin/reports/{reportId}', url: () => '/admin/reports/placeholder-report-id',
+    allow: ['ADMIN'], body: () => ({ status: 'DISMISSED' }) },
   { method: 'post', contractPath: '/admin/transactions/{transactionId}/refund',
     url: (w) => `/admin/transactions/${w.transactionId}/refund`, allow: ['ADMIN'],
     body: () => ({ reason: 'Authz probe' }) },

@@ -89,6 +89,22 @@ enum DisputeStatus {
   RESOLVED_RELEASED
 }
 
+// G5: why someone reported a listing (ListingReport).
+enum ReportReason {
+  PROHIBITED_ITEM
+  MISLEADING
+  COUNTERFEIT
+  OTHER
+}
+
+// G5: an admin's decision on a report. ACTIONED means the admin did something about the listing
+// (with the existing takedown or cancel control); resolving never changes the auction itself.
+enum ReportStatus {
+  OPEN
+  ACTIONED
+  DISMISSED
+}
+
 // BV-018: no route deletes a User today. When one is added it can only be anonymise-in-place
 // (clear name/email, revoke refresh tokens) rather than a real DELETE -- Listing/Auction already
 // RESTRICT a seller's removal, AuctionTransaction RESTRICTs winner/seller too. Bid.buyerId
@@ -141,6 +157,8 @@ model User {
   auditLogs             AuditLog[]               @relation("ActorAuditLogs")
   reviewsGiven          SellerReview[]           @relation("BuyerReviews")
   reviewsReceived       SellerReview[]           @relation("SellerReviews")
+  reportsFiled          ListingReport[]          @relation("ReportsFiled")
+  reportsResolved       ListingReport[]          @relation("ReportsResolved")
   ledgerEntries         LedgerEntry[]
 }
 
@@ -211,6 +229,7 @@ model Auction {
   watchlistBy  Watchlist[]
   transactions AuctionTransaction[]
   reviews      SellerReview[]
+  reports      ListingReport[]
 
   @@index([status, endTime])
   // The browse sorts (price, bid count, newest) each page by keyset on one of these plus id, so
@@ -428,6 +447,26 @@ model Dispute {
   resolvedAt        DateTime?
 
   @@index([status])
+}
+
+// G5: someone with an account says this listing breaks the rules. One per person per auction; a
+// repeat returns the first. The listed seller never sees reports or who made them.
+model ListingReport {
+  id           String       @id @default(cuid())
+  auctionId    String
+  auction      Auction      @relation(fields: [auctionId], references: [id])
+  reporterId   String
+  reporter     User         @relation("ReportsFiled", fields: [reporterId], references: [id])
+  reason       ReportReason
+  note         String?
+  status       ReportStatus @default(OPEN)
+  createdAt    DateTime     @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?
+  resolvedBy   User?        @relation("ReportsResolved", fields: [resolvedById], references: [id])
+
+  @@unique([auctionId, reporterId])
+  @@index([status, createdAt])
 }
 
 model SellerReview {
