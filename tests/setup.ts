@@ -25,6 +25,14 @@ if (existsSync(envFile)) {
   process.loadEnvFile(envFile);
 }
 
+// The suite never sees real AI keys. @prisma/client fills any unset variable from the developer's
+// .env when it is imported (see config/env.ts), which would put a real Groq or eBay key into this
+// process. Set here to blank (which config/ai.ts treats as "not configured", and which Prisma's
+// loader leaves alone), the AI is off unless a test sets its own fake keys.
+for (const key of ['GROQ_API_KEY', 'EBAY_APP_ID', 'EBAY_CERT_ID']) {
+  process.env[key] = '';
+}
+
 const problems: string[] = [];
 
 if (process.env.NODE_ENV !== 'test') {

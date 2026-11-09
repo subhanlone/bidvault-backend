@@ -19,6 +19,9 @@ if (process.env.NODE_ENV !== 'test') {
   }
 }
 
+/** A secret that may be absent; blank or whitespace-only is treated as absent. */
+const optionalSecret = z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.string().min(1).optional());
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
@@ -42,9 +45,11 @@ const schema = z.object({
   // Agentic AI valuation (docs/superpowers/plans/2026-09-28-agentic-ai-valuation.md). Optional on
   // purpose (decided 2026-11-09): without all three the feature switches itself off and says so,
   // instead of a missing key stopping the server from starting. See config/ai.ts.
-  GROQ_API_KEY: z.string().min(1).optional(),
-  EBAY_APP_ID: z.string().min(1).optional(),
-  EBAY_CERT_ID: z.string().min(1).optional(),
+  // An empty value counts as unset, so an empty variable (KEY= in .env, or a blank one on Railway)
+  // switches the feature off instead of stopping the server.
+  GROQ_API_KEY: optionalSecret,
+  EBAY_APP_ID: optionalSecret,
+  EBAY_CERT_ID: optionalSecret,
   JWT_ACCESS_SECRET: z.string().min(16),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_SECRET: z.string().min(16),

@@ -89,6 +89,18 @@ enum DisputeStatus {
   RESOLVED_RELEASED
 }
 
+// Agentic AI valuation (AiValuation.status). READY: a price comparison exists. INSUFFICIENT_DATA:
+// too few comparable eBay auctions with bids (a real answer, often for unique items). FAILED: the
+// sources or the model failed. PAUSED: the day's AI budget was spent before a first estimate ran.
+enum AiValuationStatus {
+  QUEUED
+  RUNNING
+  READY
+  INSUFFICIENT_DATA
+  FAILED
+  PAUSED
+}
+
 // G5: why someone reported a listing (ListingReport).
 enum ReportReason {
   PROHIBITED_ITEM
@@ -237,6 +249,7 @@ model Auction {
   transactions AuctionTransaction[]
   reviews      SellerReview[]
   reports      ListingReport[]
+  aiValuation  AiValuation?
 
   @@index([status, endTime])
   // The browse sorts (price, bid count, newest) each page by keyset on one of these plus id, so
@@ -456,6 +469,28 @@ model Dispute {
   @@index([status])
 }
 
+// Agentic AI valuation: one comparable-price estimate per auction, from eBay auctions with bids,
+// computed by a background job (services/ai/run-ai-valuation.ts). Only the derived figures are kept,
+// never eBay's listings themselves (eBay's licence: intermediate copies are deleted after use).
+model AiValuation {
+  id                 String            @id @default(cuid())
+  auctionId          String            @unique
+  auction            Auction           @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  status             AiValuationStatus @default(QUEUED)
+  averagePricePkr    Int?
+  // How many auctions the agent judged comparable, and how many it was shown.
+  listingsUsed       Int?
+  listingsConsidered Int?
+  // EBAY (the Browse API) or WEB (Groq browser_search, when eBay was unavailable).
+  source             String?
+  // For the logs and the admin only; never sent to the page.
+  errorMessage       String?
+  // When a run was last asked for, and when one last finished (whatever its outcome).
+  requestedAt        DateTime          @default(now())
+  computedAt         DateTime?
+  updatedAt          DateTime          @updatedAt
+}
+
 // G5: someone with an account says this listing breaks the rules. One per person per auction; a
 // repeat returns the first. The listed seller never sees reports or who made them.
 model ListingReport {
@@ -531,6 +566,9 @@ model PlatformSetting {
   newSellerMonthlyItems Int      @default(10)
   newSellerMonthlyValue Int      @default(150000)
   sellerGraduationSales Int      @default(3)
+  // Agentic AI: converts eBay's USD bids into PKR. Admin-set, not a live exchange-rate call: the
+  // estimate does not need minute-by-minute accuracy, and it adds no outside dependency.
+  usdToPkrRate          Float    @default(280)
   supportEmail          String   @default("support@bidvault.tech")
   updatedAt             DateTime @updatedAt
 }

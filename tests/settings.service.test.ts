@@ -52,6 +52,7 @@ describe('getPlatformSettings', () => {
       newSellerMonthlyItems: 10,
       newSellerMonthlyValue: 150_000,
       sellerGraduationSales: 3,
+      usdToPkrRate: 280,
       supportEmail: 'support@bidvault.tech',
     });
 

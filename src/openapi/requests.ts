@@ -267,6 +267,8 @@ export const updateSettingsSchema = z
     newSellerMonthlyItems: z.coerce.number().int().positive().max(1000).optional(),
     newSellerMonthlyValue: z.coerce.number().int().positive().max(MAX_MONEY).optional(),
     sellerGraduationSales: z.coerce.number().int().min(0).max(1000).optional(),
+    // Agentic AI. Never 0 or below: that would turn every estimate into 0 or nonsense.
+    usdToPkrRate: z.coerce.number().positive().max(100_000).optional(),
     // Stores an address, so it gets the strict rule — same one register uses.
     supportEmail: strictEmail.optional(),
   })
