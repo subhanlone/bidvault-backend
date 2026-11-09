@@ -2,6 +2,7 @@ import type { User } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
 import { SELLER_TERMS_VERSION } from '../config/seller.js';
 import { invalidateUserStatusCache } from './user-status.service.js';
+import { sellerWelcomeMessage } from './seller-limit.service.js';
 
 export { SELLER_TERMS_VERSION };
 
@@ -64,6 +65,10 @@ export async function enrollSeller(userId: string, input: EnrollSellerInput): Pr
         // says what was given.
         metadata: { termsVersion: input.termsVersion, province: input.province },
       },
+    });
+    // B5 PR 3a (section 3.6): the welcome states the monthly limit the new seller starts with.
+    await tx.notification.create({
+      data: { userId, type: 'SELLER_WELCOME', title: 'Welcome to selling on BidVault', message: await sellerWelcomeMessage() },
     });
     return { kind: 'ok' as const, user };
   });

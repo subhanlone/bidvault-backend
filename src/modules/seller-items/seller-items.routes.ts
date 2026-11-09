@@ -12,6 +12,7 @@ import { buildWatcherCountMap } from '../auctions/auction-dto.js';
 import { findNextBidAmounts } from '../../services/auction-control.service.js';
 import { disputeResponseDueAt, shipByFields } from '../../services/fulfillment.service.js';
 import { getPlatformSettings } from '../../services/settings.service.js';
+import { sellerLimits } from '../../services/seller-limit.service.js';
 import {
   SELLER_ITEM_TABS,
   STAGE_TAB,
@@ -267,7 +268,11 @@ router.get(
         async (tab) => [tab, await prisma.listing.count({ where: { AND: [{ sellerId }, tabWhere(tab)] } })] as const,
       ),
     );
-    const body: SellerItemsSummaryDtoType = { counts: Object.fromEntries(entries) as SellerItemsSummaryDtoType['counts'] };
+    const limits = await sellerLimits(prisma, sellerId);
+    const body: SellerItemsSummaryDtoType = {
+      counts: Object.fromEntries(entries) as SellerItemsSummaryDtoType['counts'],
+      limits: { ...limits, resetsAt: limits.resetsAt.toISOString() },
+    };
     ok(res, body);
   }),
 );

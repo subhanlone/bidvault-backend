@@ -20,6 +20,10 @@ export interface PlatformSettingsData {
   reviewEditWindowHours: number;
   // FR-02: how long a seller has, from payment, to mark the item shipped.
   shipByHours: number;
+  // B5 PR 3a: a new seller's monthly limit, and the completed sales that lift it.
+  newSellerMonthlyItems: number;
+  newSellerMonthlyValue: number;
+  sellerGraduationSales: number;
   supportEmail: string;
 }
 
@@ -35,6 +39,9 @@ const DEFAULTS: PlatformSettingsData = {
   paymentDeadlineHours: 48,
   reviewEditWindowHours: 72,
   shipByHours: 72,
+  newSellerMonthlyItems: 10,
+  newSellerMonthlyValue: 150_000,
+  sellerGraduationSales: 3,
   supportEmail: 'support@bidvault.tech',
 };
 
@@ -55,6 +62,9 @@ type SettingRow = {
   paymentDeadlineHours: number;
   reviewEditWindowHours: number;
   shipByHours: number;
+  newSellerMonthlyItems: number;
+  newSellerMonthlyValue: number;
+  sellerGraduationSales: number;
   supportEmail: string;
 };
 
@@ -68,6 +78,9 @@ function toData(row: SettingRow): PlatformSettingsData {
     paymentDeadlineHours: row.paymentDeadlineHours,
     reviewEditWindowHours: row.reviewEditWindowHours,
     shipByHours: row.shipByHours,
+    newSellerMonthlyItems: row.newSellerMonthlyItems,
+    newSellerMonthlyValue: row.newSellerMonthlyValue,
+    sellerGraduationSales: row.sellerGraduationSales,
     supportEmail: row.supportEmail,
   };
 }

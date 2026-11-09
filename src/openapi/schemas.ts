@@ -81,6 +81,11 @@ export const NotificationType = z
     // FR-02: the buyer reported a paid sale not shipped; a paid, unshipped sale was refunded.
     'NOT_SHIPPED_REPORTED',
     'SALE_REFUNDED',
+    // B5 PR 3a.
+    'SELLER_WELCOME',
+    'SELLER_LIMIT_NEAR',
+    'SELLER_GRADUATED',
+    'SELLER_LIMIT_RETURNED',
   ])
   .meta({
     id: 'NotificationType',
@@ -626,6 +631,10 @@ export const PlatformSettingsDto = z
     reviewEditWindowHours: z.number().int(),
     // FR-02.
     shipByHours: z.number().int(),
+    // B5 PR 3a: a new seller's monthly limit, and the completed sales that lift it.
+    newSellerMonthlyItems: z.number().int(),
+    newSellerMonthlyValue: z.number().int(),
+    sellerGraduationSales: z.number().int(),
     supportEmail: z.string(),
   })
   .meta({ id: 'PlatformSettings' });
@@ -875,6 +884,27 @@ export const SellerItemDto = z
 
 export const PaginatedSellerItemsDto = paginated('PaginatedSellerItems', SellerItemDto);
 
+/** B5 PR 3a: the seller's monthly limit this month, and where they stand (docs/B5 sections 3.3, 9). */
+export const SellerLimitsDto = z
+  .object({
+    /** `limit` is null when no limit applies (an established seller without an admin override). */
+    items: z.object({ used: z.number().int(), limit: z.number().int().nullable() }),
+    /** The starting prices of the counted listings, in PKR. */
+    value: z.object({ used: z.number().int(), limit: z.number().int().nullable() }),
+    /** Midnight on the 1st of next month, Asia/Karachi. */
+    resetsAt: isoDateTime,
+    completedSales: z.number().int(),
+    salesToGraduate: z.number().int(),
+    /** NEW: under the limit until enough completed sales. ESTABLISHED: no limit. RESTRICTED: the limit
+     * is back because of refunds in the last 12 months. */
+    standing: z.enum(['NEW', 'ESTABLISHED', 'RESTRICTED']),
+    /** The last 12 months, which decide RESTRICTED. */
+    paidSales: z.number().int(),
+    refunds: z.number().int(),
+    refundBuyers: z.number().int(),
+  })
+  .meta({ id: 'SellerLimits' });
+
 export const SellerItemsSummaryDto = z
   .object({
     counts: z.object({
@@ -885,6 +915,7 @@ export const SellerItemsSummaryDto = z
       unsold: z.number().int(),
       closed: z.number().int(),
     }),
+    limits: SellerLimitsDto,
   })
   .meta({ id: 'SellerItemsSummary' });
 

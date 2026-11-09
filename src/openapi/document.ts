@@ -383,7 +383,16 @@ const documentInput = {
     // 12.6.1, 2026-11-09, patch: documentation only. GET /auctions with a non-empty `search` and GET
     // /auctions/facets declare 429: without a token that verifies, the two share 60 requests a minute
     // per IP (G6). Signed-in callers, opening an auction and the plain list are not counted by it.
-    version: '12.6.1',
+    //
+    // 12.7.0, 2026-11-09, minor: B5 PR 3a, the monthly selling limit. Additive. GET
+    // /seller/items/summary gains a required `limits` (SellerLimits: items and value used and allowed
+    // this month, resetsAt, completedSales, salesToGraduate, standing NEW | ESTABLISHED | RESTRICTED and
+    // the 12-month refund figures). PlatformSettings and UpdateSettingsRequest gain
+    // newSellerMonthlyItems, newSellerMonthlyValue and sellerGraduationSales. NotificationType gains
+    // SELLER_WELCOME, SELLER_LIMIT_NEAR, SELLER_GRADUATED and SELLER_LIMIT_RETURNED (an open set).
+    // Behaviour: POST /listings and the resubmit (PATCH /listings/{listingId}) answer 422 with code
+    // SELLER_LIMIT_REACHED over the limit; a resubmit counts in the month it is resubmitted.
+    version: '12.7.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -800,7 +809,7 @@ const documentInput = {
           403: forbidden,
           422: unprocessable(
             'A business rule was violated: price floor, increment ceiling, image ownership, ' +
-            'or category attributes',
+            'category attributes, or the monthly selling limit (code SELLER_LIMIT_REACHED)',
           ),
         },
       },
@@ -821,7 +830,7 @@ const documentInput = {
           409: errBody('Only a rejected listing can be edited and resubmitted'),
           422: unprocessable(
             'A business rule was violated: price floor, increment ceiling, image ownership, ' +
-            'or category attributes',
+            'category attributes, or the monthly selling limit (code SELLER_LIMIT_REACHED)',
           ),
         },
       },

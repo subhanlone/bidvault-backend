@@ -263,6 +263,10 @@ export const updateSettingsSchema = z
     reviewEditWindowHours: z.coerce.number().int().positive().optional(),
     // FR-02.
     shipByHours: z.coerce.number().int().positive().optional(),
+    // B5 PR 3a.
+    newSellerMonthlyItems: z.coerce.number().int().positive().max(1000).optional(),
+    newSellerMonthlyValue: z.coerce.number().int().positive().max(MAX_MONEY).optional(),
+    sellerGraduationSales: z.coerce.number().int().min(0).max(1000).optional(),
     // Stores an address, so it gets the strict rule — same one register uses.
     supportEmail: strictEmail.optional(),
   })
