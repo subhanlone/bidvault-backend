@@ -86,6 +86,11 @@ export const NotificationType = z
     'SELLER_LIMIT_NEAR',
     'SELLER_GRADUATED',
     'SELLER_LIMIT_RETURNED',
+    // B5 PR 3b.
+    'SELLER_REVOKED',
+    'SELLER_RESTORED',
+    'SELLER_LIMIT_CHANGED',
+    'SELLER_LIMIT_REQUESTED',
   ])
   .meta({
     id: 'NotificationType',
@@ -589,6 +594,11 @@ export const AdminUserDto = z
     status: UserStatus,
     /** FR-15: the account was anonymized (deleted); no action applies to it any more. */
     deleted: z.boolean(),
+    /** B5 PR 3b: ACTIVE sells; REVOKED had selling paused by an admin (restorable); NONE never enrolled. */
+    sellerStatus: z.enum(['NONE', 'ACTIVE', 'REVOKED']),
+    /** B5 PR 3b: an admin's personal monthly limit; null means the platform number applies. */
+    sellerLimitOverrideItems: z.number().int().nullable(),
+    sellerLimitOverrideValue: z.number().int().nullable(),
     createdAt: isoDateTime,
   })
   .meta({ id: 'AdminUser' });

@@ -245,6 +245,37 @@ export async function sendAccountSuspendedEmail(
   ));
 }
 
+export async function sendSellingPausedEmail(
+  to: { email: string; name: string },
+  reason: string,
+  endedLiveAuctions: boolean,
+): Promise<void> {
+  await send(to.email, 'Selling on your BidVault account has been paused', base(
+    'Selling paused',
+    `
+    ${h1('Selling on your account has been paused')}
+    ${p(`Hi ${to.name}, an administrator has paused selling on your BidVault account. You can still sign in and buy.`)}
+    ${divider()}
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${infoRow('Reason', reason)}
+    </table>
+    ${divider()}
+    ${p(`Listings waiting for review were withdrawn. ${endedLiveAuctions ? 'Your live auctions were ended.' : 'Your live auctions will finish as normal.'} Sales you have already made continue: ship them and answer any dispute as usual.`)}
+    ${p('Contact support if you believe this is a mistake.')}
+    `,
+  ));
+}
+
+export async function sendSellingRestoredEmail(to: { email: string; name: string }): Promise<void> {
+  await send(to.email, 'You can sell on BidVault again', base(
+    'Selling restored',
+    `
+    ${h1('You can sell again')}
+    ${p(`Hi ${to.name}, an administrator has restored selling on your BidVault account. You can list items again.`)}
+    `,
+  ));
+}
+
 export async function sendAccountReinstatedEmail(to: { email: string; name: string }): Promise<void> {
   await send(to.email, 'Your BidVault account has been reinstated', base(
     'Account reinstated',

@@ -124,6 +124,9 @@ export async function anonymizeUser(userId: string, tx?: Prisma.TransactionClien
         sellerProvince: null,
         sellerPhone: null,
         sellerBio: null,
+        sellerRevokedAt: null,
+        sellerLimitOverrideItems: null,
+        sellerLimitOverrideValue: null,
       },
     });
     await db.refreshToken.updateMany({
