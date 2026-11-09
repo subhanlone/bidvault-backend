@@ -385,3 +385,28 @@ export const enrollSellerSchema = z
       .optional(),
   })
   .meta({ id: 'EnrollSellerRequest' });
+
+// ---- listing reports (G5) ---------------------------------------------------------------
+
+export const REPORT_REASONS = ['PROHIBITED_ITEM', 'MISLEADING', 'COUNTERFEIT', 'OTHER'] as const;
+export const REPORT_STATUSES = ['OPEN', 'ACTIONED', 'DISMISSED'] as const;
+export const REPORT_NOTE_MAX = 500;
+
+export const reportListingSchema = z
+  .object({
+    reason: z.enum(REPORT_REASONS),
+    /** Optional; what the reporter saw. Only admins read it. */
+    note: z.string().trim().max(REPORT_NOTE_MAX).optional(),
+  })
+  .meta({ id: 'ReportListingRequest' });
+
+/** OPEN is not a resolution: a report is decided once, as actioned or dismissed. */
+export const resolveReportSchema = z
+  .object({ status: z.enum(['ACTIONED', 'DISMISSED']) })
+  .meta({ id: 'ResolveReportRequest' });
+
+export const adminReportsQuerySchema = paginationQuerySchema.extend({
+  /** Which reports to list; OPEN when omitted. */
+  status: z.enum(REPORT_STATUSES).optional(),
+});
+

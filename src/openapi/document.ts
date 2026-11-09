@@ -372,7 +372,14 @@ const documentInput = {
     // POST /admin/users/{userId}/anonymize and /suspend refuse an administrator (the caller
     // included) and an already-deleted account; POST /auth/delete-account refuses the last active
     // administrator. Register refuses an address on the reserved .invalid domain (400).
-    version: '12.5.0',
+    //
+    // 12.6.0, 2026-11-09, minor: G5, Report listing. Additive only. New: POST
+    // /auctions/{auctionId}/report (an account that is not an admin and not the listed seller; one
+    // report per person per auction, a repeat returns the existing one with alreadyReported), GET /admin/reports
+    // (by status, OPEN by default, oldest first) and PATCH /admin/reports/{reportId} (ACTIONED or
+    // DISMISSED, audited). New schemas ListingReport, AdminListingReport, PaginatedAdminReports,
+    // ReportReason and ReportStatus.
+    version: '12.6.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -722,6 +729,29 @@ const documentInput = {
             'The bid violates an auction rule: closed, ended, below the floor, or above the ' +
             'ceiling',
           ),
+        },
+      },
+    },
+    '/auctions/{auctionId}/report': {
+      post: {
+        tags: ['Auctions'],
+        security: [{ bearerAuth: [] }],
+        summary:
+          'G5: report a listing as breaking the rules. One report per person per auction: a repeat answers with the ' +
+          'report already made and alreadyReported true. Not for admins, and not for the listed seller (403). ' +
+          'The listed seller never sees reports or who made them.',
+        requestParams: { path: z.object({ auctionId: z.string() }) },
+        requestBody: jsonRequest(R.reportListingSchema),
+        responses: {
+          200: okBody(
+            z.object({ report: S.ListingReportDto, alreadyReported: z.boolean() }),
+            'The report: just made, or the one this person made before (alreadyReported)',
+          ),
+          400: badRequest,
+          401: unauthorized,
+          403: errBody('An admin, or the seller of this auction'),
+          404: notFound,
+          409: errBody('The auction has already been removed (cancelled)'),
         },
       },
     },
@@ -1372,6 +1402,39 @@ const documentInput = {
           403: forbidden,
           404: notFound,
           409: errBody('This dispute has already been resolved'),
+        },
+      },
+    },
+    '/admin/reports': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'G5: listing reports with one status (OPEN when omitted), oldest first, cursor-paginated.',
+        requestParams: { query: R.adminReportsQuerySchema },
+        responses: {
+          200: okBody(S.PaginatedAdminReportsDto, 'A page of reports'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+        },
+      },
+    },
+    '/admin/reports/{reportId}': {
+      patch: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary:
+          'G5: decide an OPEN report, ACTIONED or DISMISSED; audited as LISTING_REPORT_RESOLVED. Repeating the same ' +
+          'decision answers 200 and changes nothing. Never changes the auction (use takedown or cancel for that).',
+        requestParams: { path: z.object({ reportId: z.string() }) },
+        requestBody: jsonRequest(R.resolveReportSchema),
+        responses: {
+          200: okBody(z.object({ report: S.ListingReportDto }), 'Resolved'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('The report was already decided the other way'),
         },
       },
     },

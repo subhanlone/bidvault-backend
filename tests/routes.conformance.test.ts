@@ -264,6 +264,25 @@ describe('auth', () => {
 // ---- auctions ---------------------------------------------------------------------
 
 describe('auctions', () => {
+  it('POST /auctions/{auctionId}/report: made, then already reported, 403 for the own seller', async () => {
+    hit('post', '/auctions/{auctionId}/report');
+    const send = (token: string) =>
+      request(app).post(api(`/auctions/${w.liveAuctionId}/report`)).set(auth(token)).send({ reason: 'COUNTERFEIT' });
+
+    const first = await send(w.buyer.token);
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({
+      success: true,
+      data: { alreadyReported: false, report: { auctionId: w.liveAuctionId, status: 'OPEN' } },
+    });
+    const again = await send(w.buyer.token);
+    expect(again.status).toBe(200);
+    expect(again.body).toMatchObject({ data: { alreadyReported: true } });
+    const own = await send(w.seller.token);
+    expect(own.status).toBe(403);
+    expect(own.body).toEqual(failureContaining('your own listing'));
+  });
+
   it('GET /auctions', async () => {
     hit('get', '/auctions');
     const res = await request(app).get(api('/auctions'));
@@ -971,6 +990,33 @@ describe('admin', () => {
     expect(
       resData<Array<{ transactionId: string }>>(res).some((tx) => tx.transactionId === w.transactionId),
     ).toBe(true);
+  });
+
+  it('GET /admin/reports and PATCH /admin/reports/{reportId}', async () => {
+    hit('get', '/admin/reports');
+    hit('patch', '/admin/reports/{reportId}');
+    const filed = await request(app)
+      .post(api(`/auctions/${w.liveAuctionId}/report`))
+      .set(auth(w.buyer.token))
+      .send({ reason: 'MISLEADING', note: 'The photos are of another model.' });
+    const reportId = resData<{ report: { reportId: string } }>(filed).report.reportId;
+
+    const list = await request(app).get(api('/admin/reports')).set(auth(w.admin.token));
+    expect(list.status).toBe(200);
+    expect(resData<Paginated<{ reportId: string }>>(list).items.map((r) => r.reportId)).toEqual([reportId]);
+
+    const resolved = await request(app)
+      .patch(api(`/admin/reports/${reportId}`))
+      .set(auth(w.admin.token))
+      .send({ status: 'ACTIONED' });
+    expect(resolved.status).toBe(200);
+
+    const other = await request(app)
+      .patch(api(`/admin/reports/${reportId}`))
+      .set(auth(w.admin.token))
+      .send({ status: 'DISMISSED' });
+    expect(other.status).toBe(409);
+    expect(other.body).toEqual(failureContaining('already marked actioned'));
   });
 
   it('GET /admin/transactions/unshipped', async () => {

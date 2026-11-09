@@ -15,6 +15,7 @@ import settingsRoutes from './modules/settings/settings.routes.js';
 import sellerItemsRoutes from './modules/seller-items/seller-items.routes.js';
 import sellerRoutes from './modules/seller/seller.routes.js';
 import sellersRoutes from './modules/sellers/sellers.routes.js';
+import { adminReportRoutes, reportRoutes } from './modules/reports/reports.routes.js';
 import { env, clientOrigins } from './config/env.js';
 import { maintenanceGuard } from './middleware/maintenance.js';
 import { errorHandler, notFound } from './middleware/error-handler.js';
@@ -44,9 +45,12 @@ import { noStore } from './middleware/no-store.js';
 export const routeMounts: Array<[string, express.Router]> = [
   ['/api/v1/auth', authRoutes],
   ['/api/v1/auctions', auctionRoutes],
+  // G5: POST /auctions/{auctionId}/report, beside the auctions router rather than inside it.
+  ['/api/v1/auctions', reportRoutes],
   ['/api/v1/listings', listingRoutes],
   ['/api/v1/watchlist', watchlistRoutes],
   ['/api/v1/payments', paymentRoutes],
+  ['/api/v1/admin/reports', adminReportRoutes],
   ['/api/v1/admin', adminRoutes],
   ['/api/v1/notifications', notificationRoutes],
   ['/api/v1/reviews', reviewRoutes],
