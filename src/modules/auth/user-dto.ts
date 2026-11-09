@@ -4,7 +4,7 @@ import type { UserDtoType } from '../../openapi/schemas.js';
 /** The user object every auth response carries -- never the password hash, never seller-private
  * details (phone, bio). `isSeller` is what the client shows seller screens from. */
 export function sanitizeUser(
-  user: Pick<User, 'id' | 'name' | 'email' | 'role' | 'isEmailVerified' | 'isSeller' | 'sellerSince' | 'createdAt'>,
+  user: Pick<User, 'id' | 'name' | 'email' | 'role' | 'isEmailVerified' | 'isSeller' | 'sellerSince' | 'sellerRevokedAt' | 'createdAt'>,
 ): UserDtoType {
   return {
     userId: user.id,
@@ -14,6 +14,7 @@ export function sanitizeUser(
     isEmailVerified: user.isEmailVerified,
     isSeller: user.isSeller,
     sellerSince: user.sellerSince ? user.sellerSince.toISOString() : null,
+    sellerRevokedAt: user.sellerRevokedAt ? user.sellerRevokedAt.toISOString() : null,
     createdAt: user.createdAt.toISOString(),
   };
 }

@@ -236,3 +236,33 @@ describe('POST /seller/limit-request', () => {
     expect((await askForMore(w.seller.token, { note: 'x'.repeat(501) })).status).toBe(400);
   });
 });
+
+describe('a paused seller cannot undo it themselves', () => {
+  const ENROL = { acceptTerms: true, termsVersion: '2026-10', confirmAdult: true, city: 'Lahore', province: 'Punjab' };
+
+  it('enrolling again is refused while selling is paused', async () => {
+    await revoke(w.seller.id);
+    const res = await request(app).post(api('/seller/enroll')).set(auth(w.seller.token)).send(ENROL);
+    expect(res.status).toBe(403);
+    expect(resError(res).error).toMatch(/paused by an administrator/i);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: w.seller.id } })).isSeller).toBe(false);
+  });
+
+  it('after a restore the account sells again without enrolling', async () => {
+    await revoke(w.seller.id);
+    await restore(w.seller.id);
+    const res = await request(app).post(api('/seller/enroll')).set(auth(w.seller.token)).send(ENROL);
+    expect(res.status).toBe(200);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: w.seller.id } })).isSeller).toBe(true);
+  });
+
+  it('the signed-in user says when selling was paused, so the screens can say so', async () => {
+    const before = await request(app).get(api('/auth/me')).set(auth(w.seller.token));
+    expect(resData<{ user: { sellerRevokedAt: string | null } }>(before).user.sellerRevokedAt).toBeNull();
+    await revoke(w.seller.id);
+    const after = await request(app).get(api('/auth/me')).set(auth(w.seller.token));
+    const user = resData<{ user: { isSeller: boolean; sellerRevokedAt: string | null } }>(after).user;
+    expect(user.isSeller).toBe(false);
+    expect(user.sellerRevokedAt).not.toBeNull();
+  });
+});

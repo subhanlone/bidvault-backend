@@ -133,6 +133,8 @@ export const UserDto = z
     isSeller: z.boolean(),
     /** When the account became a seller, or null if it is not one. */
     sellerSince: isoDateTime.nullable(),
+    /** B5 PR 3b: when an admin paused this account's selling, or null. Only an admin can restore it. */
+    sellerRevokedAt: isoDateTime.nullable(),
     createdAt: isoDateTime,
   })
   .meta({ id: 'User' });

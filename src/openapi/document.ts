@@ -400,7 +400,11 @@ const documentInput = {
     // sellerStatus (NONE | ACTIVE | REVOKED), sellerLimitOverrideItems and sellerLimitOverrideValue.
     // NotificationType gains SELLER_REVOKED, SELLER_RESTORED, SELLER_LIMIT_CHANGED and
     // SELLER_LIMIT_REQUESTED.
-    version: '12.8.0',
+    //
+    // 12.8.1, 2026-11-09, patch: a fix. POST /seller/enroll refused nothing for an account whose
+    // selling an admin had paused, so it undid the pause; it now answers 403. User gains a required
+    // sellerRevokedAt (nullable), so the client can say selling is paused (informational for oasdiff).
+    version: '12.8.1',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -724,7 +728,7 @@ const documentInput = {
           200: okBody(z.object({ user: S.UserDto }), 'The account, now a seller'),
           400: badRequest,
           401: unauthorized,
-          403: forbidden,
+          403: errBody('Not a buyer account, or an administrator paused selling on this account (only a restore gives it back)'),
           409: errBody('The seller terms changed since the form was shown'),
         },
       },

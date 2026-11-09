@@ -17,6 +17,7 @@ export interface EnrollSellerInput {
 export type EnrollSellerResult =
   | { kind: 'ok'; user: User }
   | { kind: 'not-found' }
+  | { kind: 'revoked' }
   | { kind: 'terms-changed' };
 
 /**
@@ -31,13 +32,16 @@ export type EnrollSellerResult =
  */
 export async function enrollSeller(userId: string, input: EnrollSellerInput): Promise<EnrollSellerResult> {
   const outcome = await prisma.$transaction(async (tx) => {
-    const [row] = await tx.$queryRaw<Array<{ id: string; isSeller: boolean }>>`
-      SELECT id, "isSeller" FROM "User" WHERE id = ${userId} FOR UPDATE
+    const [row] = await tx.$queryRaw<Array<{ id: string; isSeller: boolean; sellerRevokedAt: Date | null }>>`
+      SELECT id, "isSeller", "sellerRevokedAt" FROM "User" WHERE id = ${userId} FOR UPDATE
     `;
     if (!row) return { kind: 'not-found' as const };
     if (row.isSeller) {
       return { kind: 'ok' as const, user: await tx.user.findUniqueOrThrow({ where: { id: userId } }) };
     }
+    // B5 PR 3b: an admin paused this account's selling. Only an admin's restore gives it back; enrolling
+    // again must not, or the pause would last as long as it takes to tick the terms box.
+    if (row.sellerRevokedAt) return { kind: 'revoked' as const };
     if (input.termsVersion !== SELLER_TERMS_VERSION) return { kind: 'terms-changed' as const };
 
     const now = new Date();
