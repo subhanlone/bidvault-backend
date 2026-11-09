@@ -3,6 +3,7 @@ import { ipKeyGenerator, MemoryStore, rateLimit, type Store } from 'express-rate
 import { RedisStore, type RedisReply } from 'rate-limit-redis';
 import { env } from '../config/env.js';
 import { getRateLimitRedis } from '../infra/redis.js';
+import { verifyAccessToken } from '../utils/jwt.js';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -96,6 +97,44 @@ function makeLimiter(params: {
     store,
   });
 }
+
+/**
+ * True when the request carries an access token that verifies. The public browse routes never check
+ * a token themselves, so the mere presence of an Authorization header proves nothing: anyone could
+ * send one to skip a limit meant for anonymous callers.
+ */
+function hasValidAccessToken(req: Request): boolean {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) return false;
+  try {
+    verifyAccessToken(header.slice('Bearer '.length));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The reads that cost the database a scan: a word search over the auctions, and the facet counts. */
+function isExpensiveRead(req: Request): boolean {
+  if (req.path === '/facets') return true;
+  const search = req.query.search;
+  return typeof search === 'string' && search.trim() !== '';
+}
+
+/**
+ * G6 (guest browsing, decision I): anonymous callers get 60 expensive reads a minute per IP, search
+ * and facets together. Mounted on GET /auctions and GET /auctions/facets only. Opening an auction and
+ * the plain list are left to the global limit: a mobile carrier puts many real people behind one IP,
+ * and those reads are cheap. A signed-in person is not counted.
+ */
+export const anonymousSearchRateLimit = makeLimiter({
+  name: 'anonymous-search',
+  windowMs: MINUTE,
+  limit: 60,
+  keyGenerator: keyByIp,
+  skip: (req) => !isExpensiveRead(req) || hasValidAccessToken(req),
+  message: 'Too many searches. Please try again shortly.',
+});
 
 export const globalRateLimit = makeLimiter({
   name: 'global',
