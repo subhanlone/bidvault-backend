@@ -23,6 +23,10 @@ router.post(
       fail(res, 'User not found.', 404);
       return;
     }
+    if (result.kind === 'revoked') {
+      fail(res, 'Selling on your account was paused by an administrator. Contact support if you believe this is a mistake.', 403);
+      return;
+    }
     if (result.kind === 'terms-changed') {
       fail(res, 'The seller terms have changed. Please review them and try again.', 409);
       return;
