@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "12.4.0",
+    "version": "12.5.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -800,7 +800,7 @@
             }
           },
           "409": {
-            "description": "You have an active auction or a pending transaction",
+            "description": "You have an active auction or a pending transaction, or you are the only active administrator",
             "content": {
               "application/json": {
                 "schema": {
@@ -6185,7 +6185,7 @@
             }
           },
           "409": {
-            "description": "The user has an active auction or a pending transaction",
+            "description": "The account is an administrator, is already deleted, or has an active auction or a pending transaction",
             "content": {
               "application/json": {
                 "schema": {
@@ -6307,7 +6307,7 @@
             }
           },
           "409": {
-            "description": "Already suspended, or the admin tried to suspend their own account",
+            "description": "Already suspended or deleted, an administrator account, or the admin tried to suspend their own account",
             "content": {
               "application/json": {
                 "schema": {
@@ -9727,6 +9727,9 @@
           "status": {
             "$ref": "#/components/schemas/UserStatus"
           },
+          "deleted": {
+            "type": "boolean"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -9739,6 +9742,7 @@
           "email",
           "role",
           "status",
+          "deleted",
           "createdAt"
         ],
         "additionalProperties": false

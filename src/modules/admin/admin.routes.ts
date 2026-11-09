@@ -18,7 +18,7 @@ import {
   suspendUserSchema,
   takedownListingSchema,
 } from '../../openapi/requests.js';
-import { checkAccountDeletable, anonymizeUser } from '../../services/account.service.js';
+import { checkAccountDeletable, anonymizeUser, isAnonymized } from '../../services/account.service.js';
 import { dispatchEmail, sendAccountDeletedEmail } from '../../services/email.service.js';
 import {
   disputeResponseDueAt,
@@ -525,6 +525,7 @@ router.get(
         email: u.email,
         role: u.role,
         status: u.status,
+        deleted: isAnonymized(u),
         createdAt: u.createdAt.toISOString(),
       })),
       nextCursor,
@@ -542,6 +543,8 @@ router.post(
     const result = await suspendUser(req.params.userId, req.auth!.userId, req.body.reason);
     if (result.kind === 'not-found') { fail(res, 'User not found.', 404); return; }
     if (result.kind === 'self') { fail(res, 'You cannot suspend your own account.', 409); return; }
+    if (result.kind === 'admin') { fail(res, 'Administrator accounts cannot be suspended.', 409); return; }
+    if (result.kind === 'deleted') { fail(res, 'This account is already deleted.', 409); return; }
     if (result.kind === 'already-suspended') { fail(res, 'This account is already suspended.', 409); return; }
     ok(res, { userId: req.params.userId, status: 'SUSPENDED' });
   }),
@@ -570,6 +573,19 @@ router.post(
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
       fail(res, 'User not found.', 404);
+      return;
+    }
+    // FR-15: a second anonymize would e-mail the .invalid address and audit a deletion that
+    // already happened.
+    if (isAnonymized(user)) {
+      fail(res, 'This account is already deleted.', 409);
+      return;
+    }
+    // FR-15: administrators, the caller included, are not deleted from the Users screen. An
+    // admin who is leaving closes their own account (POST /auth/delete-account), which refuses
+    // the last active one.
+    if (user.role === 'ADMIN') {
+      fail(res, 'Administrator accounts cannot be deleted here.', 409);
       return;
     }
 

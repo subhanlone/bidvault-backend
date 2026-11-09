@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { TransactionStatus } from '@prisma/client';
+import type { Prisma, TransactionStatus } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
 import { hashPassword } from '../utils/password.js';
 
@@ -21,6 +21,18 @@ import { hashPassword } from '../utils/password.js';
  */
 
 const DELETED_NAME = 'Deleted User';
+
+/** Every anonymized account's address ends with this, and no other account's can: register
+ * refuses the reserved `.invalid` TLD (config/email.ts). So it is how a deleted account is
+ * recognised. */
+const ANONYMIZED_EMAIL_SUFFIX = '@bidvault.invalid';
+
+export function isAnonymized(user: { email: string }): boolean {
+  return user.email.endsWith(ANONYMIZED_EMAIL_SUFFIX);
+}
+
+/** Prisma filter for accounts that have not been anonymized. */
+export const notAnonymized: Prisma.UserWhereInput = { NOT: { email: { endsWith: ANONYMIZED_EMAIL_SUFFIX } } };
 
 export interface DeleteGuardResult {
   allowed: boolean;
@@ -77,13 +89,17 @@ export async function checkAccountDeletable(userId: string): Promise<DeleteGuard
  * (there is no such override route today, but the separation keeps the guard reusable rather
  * than duplicated into a "force" flag).
  */
-export async function anonymizeUser(userId: string): Promise<void> {
+/**
+ * Pass `tx` to anonymize inside a caller's transaction (delete-account does, to hold its lock on
+ * the administrator rows until the account is gone); without it the two writes get their own.
+ */
+export async function anonymizeUser(userId: string, tx?: Prisma.TransactionClient): Promise<void> {
   // Unusable but well-formed: keeps `passwordHash` a valid bcrypt string (nothing downstream
   // has to special-case an empty one) while guaranteeing no password will ever match it.
   const unusablePassword = await hashPassword(crypto.randomUUID());
 
-  await prisma.$transaction([
-    prisma.user.update({
+  const write = async (db: Prisma.TransactionClient) => {
+    await db.user.update({
       where: { id: userId },
       data: {
         name: DELETED_NAME,
@@ -91,7 +107,7 @@ export async function anonymizeUser(userId: string): Promise<void> {
         // Changing it away from the address the person knows is also what makes login
         // impossible afterward: the lookup by email in POST /auth/login will simply find no
         // row, the same clean 401 an unrecognised address always gets.
-        email: `deleted-${userId}@bidvault.invalid`,
+        email: `deleted-${userId}${ANONYMIZED_EMAIL_SUFFIX}`,
         passwordHash: unusablePassword,
         notifyOutbid: false,
         notifyWins: false,
@@ -109,10 +125,13 @@ export async function anonymizeUser(userId: string): Promise<void> {
         sellerPhone: null,
         sellerBio: null,
       },
-    }),
-    prisma.refreshToken.updateMany({
+    });
+    await db.refreshToken.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
-    }),
-  ]);
+    });
+  };
+
+  if (tx) await write(tx);
+  else await prisma.$transaction(write);
 }

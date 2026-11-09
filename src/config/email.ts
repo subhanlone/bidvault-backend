@@ -45,7 +45,10 @@ export const strictEmail = z
   .trim()
   .max(254, INVALID) // RFC 5321 maximum for an address
   .pipe(z.email(INVALID))
-  .refine((value) => DOMAIN_SHAPE.test(value), INVALID);
+  .refine((value) => DOMAIN_SHAPE.test(value), INVALID)
+  // RFC 2606 reserves `.invalid`: no mail can ever reach it, and it is the domain an anonymized
+  // account's address is moved to (services/account.service.ts), which must stay unregistrable.
+  .refine((value) => !/\.invalid$/i.test(value), INVALID);
 
 export const lookupEmail = z
   .string()

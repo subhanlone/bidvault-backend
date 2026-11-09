@@ -49,7 +49,7 @@ import {
   loginEmailRateLimit,
   loginIpRateLimit,
 } from '../../middleware/rate-limit.js';
-import { checkAccountDeletable, anonymizeUser } from '../../services/account.service.js';
+import { checkAccountDeletable, anonymizeUser, notAnonymized } from '../../services/account.service.js';
 
 const router = Router();
 const MAX_OTP_ATTEMPTS = 5;
@@ -770,11 +770,30 @@ router.post(
       return;
     }
 
-    // Sent to the real address before anonymizeUser replaces it -- there is nothing left to
-    // deliver to afterward.
-    dispatchEmail(sendAccountDeletedEmail({ email: user.email, name: user.name }), 'account deleted');
+    if (user.role === 'ADMIN') {
+      // FR-15: the platform must keep an active administrator. The admin rows are locked (in id
+      // order, so two callers cannot deadlock) for the count and the anonymize together:
+      // otherwise two admins leaving at once would each see the other and both go.
+      const left = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "User" WHERE role = 'ADMIN' ORDER BY id FOR UPDATE`;
+        const others = await tx.user.count({
+          where: { role: 'ADMIN', status: 'ACTIVE', id: { not: userId }, ...notAnonymized },
+        });
+        if (others === 0) return false;
+        await anonymizeUser(userId, tx);
+        return true;
+      });
+      if (!left) {
+        fail(res, 'You are the only active administrator, so this account cannot be closed.', 409);
+        return;
+      }
+    } else {
+      await anonymizeUser(userId);
+    }
 
-    await anonymizeUser(userId);
+    // The address and name were read before anonymizeUser replaced them; sent only once the
+    // account is really gone.
+    dispatchEmail(sendAccountDeletedEmail({ email: user.email, name: user.name }), 'account deleted');
     clearRefreshCookie(res);
     ok(res, { message: 'Your account has been deleted.' });
   }),

@@ -366,7 +366,13 @@ const documentInput = {
     // NEEDS_SHIPPING) and NotificationType gains NOT_SHIPPED_REPORTED and SALE_REFUNDED (an open set).
     // Behaviour change: a takedown now refunds a paid, unshipped sale instead of leaving it to be
     // shipped.
-    version: '12.4.0',
+    //
+    // 12.5.0, 2026-11-09, minor: FR-15, administrator accounts are protected. AdminUser (GET
+    // /admin/users) gains a required `deleted` flag (informational for oasdiff). New 409 cases:
+    // POST /admin/users/{userId}/anonymize and /suspend refuse an administrator (the caller
+    // included) and an already-deleted account; POST /auth/delete-account refuses the last active
+    // administrator. Register refuses an address on the reserved .invalid domain (400).
+    version: '12.5.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -533,7 +539,7 @@ const documentInput = {
           200: okBody(z.object({ message: z.string() }), 'Account deleted'),
           400: badRequest,
           401: unauthorized,
-          409: errBody('You have an active auction or a pending transaction'),
+          409: errBody('You have an active auction or a pending transaction, or you are the only active administrator'),
           422: unprocessable('The password is incorrect'),
         },
       },
@@ -1397,7 +1403,7 @@ const documentInput = {
           401: unauthorized,
           403: forbidden,
           404: notFound,
-          409: errBody('The user has an active auction or a pending transaction'),
+          409: errBody('The account is an administrator, is already deleted, or has an active auction or a pending transaction'),
         },
       },
     },
@@ -1414,7 +1420,7 @@ const documentInput = {
           401: unauthorized,
           403: forbidden,
           404: notFound,
-          409: errBody('Already suspended, or the admin tried to suspend their own account'),
+          409: errBody('Already suspended or deleted, an administrator account, or the admin tried to suspend their own account'),
         },
       },
     },

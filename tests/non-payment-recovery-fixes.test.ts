@@ -21,8 +21,8 @@ vi.mock('resend', () => ({
 // retry is to make the generator hand out a code that is already taken. Everything else about it
 // stays real; with nothing queued it is the original function.
 const codes = vi.hoisted(() => ({ next: [] as string[] }));
-vi.mock('../src/modules/listings/listings.routes.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/modules/listings/listings.routes.js')>();
+vi.mock('../src/utils/listing-code.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/utils/listing-code.js')>();
   return { ...actual, generateListingCode: () => codes.next.shift() ?? actual.generateListingCode() };
 });
 

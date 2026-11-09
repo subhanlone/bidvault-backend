@@ -1,4 +1,5 @@
 import { prisma } from '../db/prisma.js';
+import { isAnonymized } from './account.service.js';
 import { dispatchEmail, sendAccountSuspendedEmail, sendAccountReinstatedEmail } from './email.service.js';
 
 /**
@@ -52,7 +53,13 @@ export function invalidateUserStatusCache(userId: string): void {
   cache.delete(userId);
 }
 
-export type SuspendUserResult = { kind: 'ok' } | { kind: 'not-found' } | { kind: 'self' } | { kind: 'already-suspended' };
+export type SuspendUserResult =
+  | { kind: 'ok' }
+  | { kind: 'not-found' }
+  | { kind: 'self' }
+  | { kind: 'admin' }
+  | { kind: 'deleted' }
+  | { kind: 'already-suspended' };
 
 /**
  * Deliberately does not touch this seller's live auctions -- LIFECYCLE-IMPLEMENTATION-PLAN.md's
@@ -70,10 +77,14 @@ export async function suspendUser(
   if (userId === adminUserId) return { kind: 'self' };
 
   const outcome = await prisma.$transaction(async (tx) => {
-    const [row] = await tx.$queryRaw<Array<{ id: string; status: string; email: string; name: string }>>`
-      SELECT id, status, email, name FROM "User" WHERE id = ${userId} FOR UPDATE
+    const [row] = await tx.$queryRaw<Array<{ id: string; status: string; email: string; name: string; role: string }>>`
+      SELECT id, status, email, name, role FROM "User" WHERE id = ${userId} FOR UPDATE
     `;
     if (!row) return { kind: 'not-found' as const };
+    // FR-15: an anonymized account has nobody behind it to suspend, and its address is .invalid.
+    if (isAnonymized(row)) return { kind: 'deleted' as const };
+    // FR-15: administrators are not managed from the Users screen; one admin cannot lock out another.
+    if (row.role === 'ADMIN') return { kind: 'admin' as const };
     if (row.status === 'SUSPENDED') return { kind: 'already-suspended' as const };
 
     await tx.user.update({ where: { id: row.id }, data: { status: 'SUSPENDED' } });

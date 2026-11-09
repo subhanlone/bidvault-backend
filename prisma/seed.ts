@@ -1,10 +1,13 @@
 import { PrismaClient, AuctionStatus, ListingStatus, UserRole, ItemCondition } from '@prisma/client';
 import { hash } from '@node-rs/bcrypt';
 import { assertSeedTarget, requiredPassword } from '../scripts/seed-guard.js';
+import { enrolledSellerFields } from '../scripts/seed-seller.js';
 
 assertSeedTarget('prisma:seed');
 
 const prisma = new PrismaClient();
+
+const PHONE_ATTRIBUTES = { brand: 'Apple', model: 'iPhone 15 Pro Max' };
 
 function addHours(date: Date, h: number): Date {
   return new Date(date.getTime() + h * 60 * 60 * 1000);
@@ -16,6 +19,7 @@ async function upsertUser(params: {
   role: UserRole;
   password: string;
   isEmailVerified?: boolean;
+  seller?: ReturnType<typeof enrolledSellerFields>;
 }) {
   const passwordHash = await hash(params.password, 12);
   return prisma.user.upsert({
@@ -31,6 +35,7 @@ async function upsertUser(params: {
       role: params.role,
       passwordHash,
       isEmailVerified: params.isEmailVerified ?? true,
+      ...params.seller,
     },
   });
 }
@@ -51,8 +56,10 @@ async function main() {
   const seller = await upsertUser({
     name: 'Ahmed Raza',
     email: 'ahmed@gmail.com',
-    role: UserRole.SELLER,
+    // FR-13: an ordinary account that has enrolled as a seller, as every real seller is (B5).
+    role: UserRole.BUYER,
     password: sellerPassword,
+    seller: enrolledSellerFields('Lahore', 'Punjab'),
   });
 
   await upsertUser({
@@ -63,13 +70,16 @@ async function main() {
   });
 
   const listing = await prisma.listing.upsert({
-    where: { listingCode: 'BV-2026-01001' },
+    // FR-13: the item-number shape (BV-<year>-<10 hex>), so searching for it finds this item.
+    where: { listingCode: 'BV-2026-0000000001' },
     update: {},
     create: {
-      listingCode: 'BV-2026-01001',
+      listingCode: 'BV-2026-0000000001',
       sellerId: seller.id,
       title: 'iPhone 15 Pro Max 256GB - Natural Titanium',
-      category: 'Electronics',
+      // FR-13: one of the seven real categories ('Electronics' alone matched none of them).
+      category: 'Electronics & Gadgets',
+      attributes: PHONE_ATTRIBUTES,
       condition: ItemCondition.LIKE_NEW,
       description:
         'iPhone 15 Pro Max 256GB, excellent condition, original box and accessories included.',
@@ -92,6 +102,7 @@ async function main() {
       sellerId: seller.id,
       title: listing.title,
       category: listing.category,
+      attributes: PHONE_ATTRIBUTES,
       condition: listing.condition,
       description: listing.description,
       imageUrl: listing.imageUrl,
