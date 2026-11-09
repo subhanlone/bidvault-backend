@@ -379,7 +379,11 @@ const documentInput = {
     // (by status, OPEN by default, oldest first) and PATCH /admin/reports/{reportId} (ACTIONED or
     // DISMISSED, audited). New schemas ListingReport, AdminListingReport, PaginatedAdminReports,
     // ReportReason and ReportStatus.
-    version: '12.6.0',
+    //
+    // 12.6.1, 2026-11-09, patch: documentation only. GET /auctions with a non-empty `search` and GET
+    // /auctions/facets declare 429: without a token that verifies, the two share 60 requests a minute
+    // per IP (G6). Signed-in callers, opening an auction and the plain list are not counted by it.
+    version: '12.6.1',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -598,7 +602,12 @@ const documentInput = {
             search: z.string().optional(),
           }).extend(R.browseQuerySchema.shape).extend(R.paginationQuerySchema.shape),
         },
-        responses: { 200: okBody(S.PaginatedAuctionsDto, 'A page of matching auctions'), 400: badRequest },
+        responses: {
+          200: okBody(S.PaginatedAuctionsDto, 'A page of matching auctions'),
+          400: badRequest,
+          // G6: a word search without a signed-in token shares 60 a minute per IP with /auctions/facets.
+          429: tooManyRequests,
+        },
       },
     },
     '/auctions/facets': {
@@ -615,7 +624,12 @@ const documentInput = {
             search: z.string().optional(),
           }).extend(R.browseQuerySchema.omit({ sort: true }).shape),
         },
-        responses: { 200: okBody(S.AuctionFacetsDto, 'Counts per filter choice'), 400: badRequest },
+        responses: {
+          200: okBody(S.AuctionFacetsDto, 'Counts per filter choice'),
+          400: badRequest,
+          // G6: without a signed-in token, shares 60 a minute per IP with a word search on /auctions.
+          429: tooManyRequests,
+        },
       },
     },
     '/auctions/mine': {

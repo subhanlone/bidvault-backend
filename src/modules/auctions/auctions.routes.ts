@@ -17,6 +17,7 @@ import { loadFacets } from './browse-facets.js';
 import { sellerRoom } from '../../socket/seller-room.js';
 import { auctionGuestsRoom, auctionMembersRoom } from '../../socket/auction-subscriptions.js';
 import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
+import { anonymousSearchRateLimit } from '../../middleware/rate-limit.js';
 
 const CANCEL_ERROR_STATUS: Record<Exclude<CancelAuctionResult['kind'], 'ok'>, [string, number]> = {
   'not-found': ['Auction not found.', 404],
@@ -30,6 +31,7 @@ const MAX_STORED_MONEY = 2_000_000_000;
 
 router.get(
   '/',
+  anonymousSearchRateLimit,
   asyncHandler(async (req, res) => {
     const parsed = parseBrowseQuery(req.query);
     if (!parsed.ok) {
@@ -65,6 +67,7 @@ router.get(
 // "facets" for an auction id.
 router.get(
   '/facets',
+  anonymousSearchRateLimit,
   asyncHandler(async (req, res) => {
     const parsed = parseBrowseQuery(req.query);
     if (!parsed.ok) {
