@@ -928,6 +928,19 @@ describe('settings', () => {
   });
 });
 
+// ---- agentic AI -------------------------------------------------------------------
+
+describe('ai', () => {
+  it('GET /ai/valuations/{auctionId}: public; the test env has no AI keys, so the feature says it is off', async () => {
+    hit('get', '/ai/valuations/{auctionId}');
+    const res = await request(app).get(api(`/ai/valuations/${w.liveAuctionId}`));
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, data: { configured: false, status: null, refreshing: false } });
+    const missing = await request(app).get(api('/ai/valuations/no-such-auction'));
+    expect(missing.status).toBe(404);
+  });
+});
+
 // ---- admin ------------------------------------------------------------------------
 
 describe('admin', () => {

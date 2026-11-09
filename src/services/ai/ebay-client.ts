@@ -13,12 +13,19 @@ export interface MarketListing {
   /** In USD: the only currency the pricing converts. */
   price: number;
   currency: 'USD';
-  /** Bids the eBay auction has had; 0 when unknown (the fallback source has no such figure). */
-  bidCount: number;
+  /**
+   * Bids the eBay auction has had, or null when the source cannot say (the web fallback). The
+   * valuation counts only auctions with at least one bid (decided 2026-11-09): with none, the price
+   * is just the seller's starting price, not what any buyer offered.
+   */
+  bidCount: number | null;
 }
 
-/** How many auctions to ask eBay for: enough for the agent to throw out the odd ones. */
-const SEARCH_LIMIT = 10;
+/**
+ * How many auctions to ask eBay for. Many have no bid yet (6 of 10 in the first live run), and those
+ * are dropped, so this leaves enough with bids for a comparison of at least three.
+ */
+const SEARCH_LIMIT = 30;
 
 let cachedToken: { value: string; expiresAt: number; appId: string } | null = null;
 

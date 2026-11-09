@@ -34,7 +34,7 @@ function readArray(text: string): RawItem[] | null {
  * `reasoning_effort: "low"` is Groq's own advice for this tool: higher efforts run long browser
  * sessions and spend many times the tokens (one query went from 45 s to 8 s with it). The answer is
  * prose the model writes, so everything in it is checked: only entries with a title and a positive
- * numeric USD price are kept, and these have no bid count.
+ * numeric USD price are kept, and their bid count is unknown (null).
  */
 export async function searchAuctionListingsViaGroq(query: string): Promise<MarketListing[]> {
   const keys = aiKeys();
@@ -76,7 +76,8 @@ export async function searchAuctionListingsViaGroq(query: string): Promise<Marke
     for (const item of items) {
       const price = Number(item.price);
       if (typeof item.title !== 'string' || !item.title.trim() || !Number.isFinite(price) || price <= 0) continue;
-      listings.push({ id: listings.length + 1, title: item.title.trim(), price, currency: 'USD', bidCount: 0 });
+      // The web gives no reliable bid count: unknown, not zero.
+      listings.push({ id: listings.length + 1, title: item.title.trim(), price, currency: 'USD', bidCount: null });
     }
     return listings;
   } finally {

@@ -43,7 +43,7 @@ describe('searchAuctionListingsViaGroq', () => {
 
     const result = await searchAuctionListingsViaGroq('Sony WH-1000XM4');
 
-    expect(result).toEqual([{ id: 1, title: 'Sony WH-1000XM4', price: 153.26, currency: 'USD', bidCount: 0 }]);
+    expect(result).toEqual([{ id: 1, title: 'Sony WH-1000XM4', price: 153.26, currency: 'USD', bidCount: null }]);
     expect(sent[0].body).toMatchObject({ model: 'openai/gpt-oss-120b', reasoning_effort: 'low', tools: [{ type: 'browser_search' }] });
     expect(JSON.stringify(sent[0].body.messages)).toMatch(/auction/i);
     expect(sent[0].auth).toBe('Bearer groq-test');
@@ -56,8 +56,8 @@ describe('searchAuctionListingsViaGroq', () => {
     const { searchAuctionListingsViaGroq } = await load();
 
     expect(await searchAuctionListingsViaGroq('x')).toEqual([
-      { id: 1, title: 'A', price: 20, currency: 'USD', bidCount: 0 },
-      { id: 2, title: 'B', price: 31.5, currency: 'USD', bidCount: 0 },
+      { id: 1, title: 'A', price: 20, currency: 'USD', bidCount: null },
+      { id: 2, title: 'B', price: 31.5, currency: 'USD', bidCount: null },
     ]);
   });
 

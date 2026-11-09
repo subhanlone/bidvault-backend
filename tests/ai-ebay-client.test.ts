@@ -84,6 +84,8 @@ describe('searchAuctionListings', () => {
     expect(search).toContain(`q=${encodeURIComponent('Seller\'s "rare" item & more')}`);
     expect(search).toContain(`filter=${encodeURIComponent('buyingOptions:{AUCTION}')}`);
     expect(search).not.toContain('&more');
+    // Enough candidates that, after keeping only auctions with bids, a comparison is still possible.
+    expect(search).toContain('limit=30');
   });
 
   it('answers an empty list, not an error, when eBay finds nothing', async () => {

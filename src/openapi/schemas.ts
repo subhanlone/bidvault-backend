@@ -647,6 +647,8 @@ export const PlatformSettingsDto = z
     newSellerMonthlyItems: z.number().int(),
     newSellerMonthlyValue: z.number().int(),
     sellerGraduationSales: z.number().int(),
+    // Agentic AI: converts eBay's USD bids into PKR.
+    usdToPkrRate: z.number(),
     supportEmail: z.string(),
   })
   .meta({ id: 'PlatformSettings' });
@@ -804,6 +806,34 @@ export const AdminListingReportDto = z
     resolvedAt: isoDateTime.optional(),
   })
   .meta({ id: 'AdminListingReport' });
+
+// ---- agentic AI valuation ------------------------------------------------------------------
+
+export const AiValuationStatus = z
+  .enum(['QUEUED', 'RUNNING', 'READY', 'INSUFFICIENT_DATA', 'FAILED', 'PAUSED'])
+  .meta({ id: 'AiValuationStatus' });
+
+/**
+ * A comparable-price estimate for one auction, from eBay auctions with bids, chosen by an AI agent and
+ * averaged by plain code. `configured` false: the feature is off (no keys) and the panel is hidden.
+ * `status` null: no estimate exists and none is being made (an ended or removed auction).
+ */
+export const AiValuationDto = z
+  .object({
+    configured: z.boolean(),
+    status: AiValuationStatus.nullable(),
+    /** Whole rupees; only with READY. */
+    averagePricePkr: z.number().int().nullable(),
+    listingsUsed: z.number().int().nullable(),
+    listingsConsidered: z.number().int().nullable(),
+    /** EBAY (the Browse API) or WEB (a web search, when eBay was unavailable). */
+    source: z.string().nullable(),
+    /** When the shown outcome was computed: the page states the data's age (eBay's freshness rule). */
+    computedAt: isoDateTime.nullable(),
+    /** A newer run has been asked for and is not finished; the outcome shown is the previous one. */
+    refreshing: z.boolean(),
+  })
+  .meta({ id: 'AiValuation' });
 
 export const PaginatedAuctionsDto = paginated('PaginatedAuctions', AuctionDto);
 export const PaginatedAdminReportsDto = paginated('PaginatedAdminReports', AdminListingReportDto);

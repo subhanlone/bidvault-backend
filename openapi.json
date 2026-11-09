@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "12.8.1",
+    "version": "12.9.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -2056,6 +2056,60 @@
           },
           "422": {
             "description": "The bid violates an auction rule: closed, ended, below the floor, or above the ceiling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/valuations/{auctionId}": {
+      "get": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Agentic AI: a comparable-price estimate from eBay auctions with bids. Public. Never runs the AI itself: answers the stored estimate and, for a live auction, asks a background job for a run when there is none or it is stale (6 h for a price, 24 h for not enough data, 1 h after a failure). configured false: the feature is off.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "auctionId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The estimate, or its state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/AiValuation"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -7972,6 +8026,11 @@
             "minimum": 0,
             "maximum": 1000
           },
+          "usdToPkrRate": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 100000
+          },
           "supportEmail": {
             "type": "string",
             "maxLength": 254
@@ -9464,6 +9523,103 @@
         ],
         "additionalProperties": false
       },
+      "AiValuation": {
+        "type": "object",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiValuationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "averagePricePkr": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "listingsUsed": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "listingsConsidered": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "computedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "refreshing": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "configured",
+          "status",
+          "averagePricePkr",
+          "listingsUsed",
+          "listingsConsidered",
+          "source",
+          "computedAt",
+          "refreshing"
+        ],
+        "additionalProperties": false
+      },
+      "AiValuationStatus": {
+        "type": "string",
+        "enum": [
+          "QUEUED",
+          "RUNNING",
+          "READY",
+          "INSUFFICIENT_DATA",
+          "FAILED",
+          "PAUSED"
+        ]
+      },
       "ListingReport": {
         "type": "object",
         "properties": {
@@ -10564,6 +10720,9 @@
             "minimum": -9007199254740991,
             "maximum": 9007199254740991
           },
+          "usdToPkrRate": {
+            "type": "number"
+          },
           "supportEmail": {
             "type": "string"
           }
@@ -10580,6 +10739,7 @@
           "newSellerMonthlyItems",
           "newSellerMonthlyValue",
           "sellerGraduationSales",
+          "usdToPkrRate",
           "supportEmail"
         ],
         "additionalProperties": false

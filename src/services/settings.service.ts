@@ -24,6 +24,8 @@ export interface PlatformSettingsData {
   newSellerMonthlyItems: number;
   newSellerMonthlyValue: number;
   sellerGraduationSales: number;
+  // Agentic AI: converts eBay's USD bids into PKR.
+  usdToPkrRate: number;
   supportEmail: string;
 }
 
@@ -42,6 +44,7 @@ const DEFAULTS: PlatformSettingsData = {
   newSellerMonthlyItems: 10,
   newSellerMonthlyValue: 150_000,
   sellerGraduationSales: 3,
+  usdToPkrRate: 280,
   supportEmail: 'support@bidvault.tech',
 };
 
@@ -65,6 +68,7 @@ type SettingRow = {
   newSellerMonthlyItems: number;
   newSellerMonthlyValue: number;
   sellerGraduationSales: number;
+  usdToPkrRate: number;
   supportEmail: string;
 };
 
@@ -81,6 +85,7 @@ function toData(row: SettingRow): PlatformSettingsData {
     newSellerMonthlyItems: row.newSellerMonthlyItems,
     newSellerMonthlyValue: row.newSellerMonthlyValue,
     sellerGraduationSales: row.sellerGraduationSales,
+    usdToPkrRate: row.usdToPkrRate,
     supportEmail: row.supportEmail,
   };
 }

@@ -17,6 +17,8 @@ import {
   refundUnansweredReport,
 } from '../services/fulfillment.service.js';
 import { findOverduePayments, voidOverduePayment } from '../services/auction-control.service.js';
+import { AI_VALUATION_QUEUE, type AiValuationJobData, type AiValuationJobName } from '../queues/ai-valuation.queue.js';
+import { runAiValuation } from '../services/ai/run-ai-valuation.js';
 
 // BV-025: close-auction.ts sends email through email.service.ts, which reads
 // emailNotifsEnabled via getPlatformSettings() -- this process needs the same cross-process
@@ -43,6 +45,21 @@ const worker = new Worker<AuctionLifecycleJobData, unknown, AuctionLifecycleJobN
     concurrency: 10,
   },
 );
+
+// Agentic AI valuation: the same process, its own queue. One run at a time, to stay inside Groq's
+// per-minute limits; the lock outlasts the slowest run (the web fallback's 150 s plus the agent's 90 s)
+// so a long run is not taken for a stalled one and started twice.
+const aiValuationWorker = new Worker<AiValuationJobData, unknown, AiValuationJobName>(
+  AI_VALUATION_QUEUE,
+  async (job) => {
+    await runAiValuation(job.data.auctionId);
+  },
+  { connection: redisConnection, prefix: env.QUEUE_PREFIX, concurrency: 1, lockDuration: 5 * 60_000 },
+);
+
+aiValuationWorker.on('failed', (job, err) => {
+  console.error(`AI valuation job failed: ${job?.id ?? 'unknown'}`, err);
+});
 
 worker.on('completed', (job) => {
   console.log(`Auction lifecycle job completed: ${job.name} (${job.id})`);
@@ -236,6 +253,7 @@ async function shutdown() {
   clearInterval(paymentSweepTimer);
   clearInterval(heartbeatTimer);
   await worker.close();
+  await aiValuationWorker.close();
   await prisma.$disconnect();
   await redisConnection.quit();
   process.exit(0);

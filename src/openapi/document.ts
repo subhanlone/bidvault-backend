@@ -404,7 +404,12 @@ const documentInput = {
     // 12.8.1, 2026-11-09, patch: a fix. POST /seller/enroll refused nothing for an account whose
     // selling an admin had paused, so it undid the pause; it now answers 403. User gains a required
     // sellerRevokedAt (nullable), so the client can say selling is paused (informational for oasdiff).
-    version: '12.8.1',
+    //
+    // 12.9.0, 2026-11-09, minor: Agentic AI valuation. Additive. New: GET /ai/valuations/{auctionId}
+    // (public; AiValuation: configured, status QUEUED | RUNNING | READY | INSUFFICIENT_DATA | FAILED |
+    // PAUSED or null, averagePricePkr, listingsUsed, listingsConsidered, source, computedAt, refreshing).
+    // PlatformSettings and UpdateSettingsRequest gain usdToPkrRate.
+    version: '12.9.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -782,6 +787,17 @@ const documentInput = {
             'ceiling',
           ),
         },
+      },
+    },
+    '/ai/valuations/{auctionId}': {
+      get: {
+        tags: ['AI'],
+        summary:
+          'Agentic AI: a comparable-price estimate from eBay auctions with bids. Public. Never runs the AI itself: answers ' +
+          'the stored estimate and, for a live auction, asks a background job for a run when there is none or it is stale ' +
+          '(6 h for a price, 24 h for not enough data, 1 h after a failure). configured false: the feature is off.',
+        requestParams: { path: z.object({ auctionId: z.string() }) },
+        responses: { 200: okBody(S.AiValuationDto, 'The estimate, or its state'), 404: notFound },
       },
     },
     '/auctions/{auctionId}/report': {
