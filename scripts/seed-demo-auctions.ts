@@ -6,22 +6,17 @@
  */
 import { PrismaClient, ItemCondition, AuctionStatus } from '@prisma/client';
 import { hash } from '@node-rs/bcrypt';
-import crypto from 'node:crypto';
 import { auctionLifecycleQueue, scheduleAuctionLifecycle } from '../src/queues/auction-lifecycle.queue.js';
 import { redisConnection } from '../src/infra/redis.js';
 import { assertSeedTarget, requiredPassword } from './seed-guard.js';
+import { enrolledSellerFields } from './seed-seller.js';
+import { generateListingCode } from '../src/utils/listing-code.js';
 
 // This script is designed to be pointed at production (see the header above), so the guard
 // permits that — it just has to be asked for by name via ALLOW_PRODUCTION_SEED=1.
 assertSeedTarget('seed-demo-auctions');
 
 const prisma = new PrismaClient();
-
-function generateListingCode(): string {
-  const year = new Date().getFullYear();
-  const suffix = crypto.randomBytes(3).toString('hex').toUpperCase();
-  return `BV-${year}-${suffix}`;
-}
 
 function hoursAgo(h: number): Date {
   return new Date(Date.now() - h * 60 * 60 * 1000);
@@ -31,7 +26,7 @@ function hoursFromNow(h: number): Date {
 }
 
 async function upsertUser(params: {
-  email: string; name: string; role: 'BUYER' | 'SELLER';
+  email: string; name: string; seller?: ReturnType<typeof enrolledSellerFields>;
 }) {
   const passwordHash = await hash(requiredPassword('SEED_DEMO_PASSWORD'), 12);
   return prisma.user.upsert({
@@ -40,9 +35,11 @@ async function upsertUser(params: {
     create: {
       name: params.name,
       email: params.email,
-      role: params.role,
+      // FR-13: every account is a BUYER; a seller is one that has enrolled (B5).
+      role: 'BUYER',
       passwordHash,
       isEmailVerified: true,
+      ...params.seller,
     },
   });
 }
@@ -50,17 +47,17 @@ async function upsertUser(params: {
 async function main() {
   // ── Demo buyers & sellers ───────────────────────────────────────────────
   const buyers = await Promise.all([
-    upsertUser({ email: 'bilal.khan.demo@gmail.com', name: 'Bilal Khan', role: 'BUYER' }),
-    upsertUser({ email: 'ayesha.malik.demo@gmail.com', name: 'Ayesha Malik', role: 'BUYER' }),
-    upsertUser({ email: 'hamza.sheikh.demo@gmail.com', name: 'Hamza Sheikh', role: 'BUYER' }),
-    upsertUser({ email: 'fatima.iqbal.demo@gmail.com', name: 'Fatima Iqbal', role: 'BUYER' }),
-    upsertUser({ email: 'usman.tariq.demo@gmail.com', name: 'Usman Tariq', role: 'BUYER' }),
+    upsertUser({ email: 'bilal.khan.demo@gmail.com', name: 'Bilal Khan' }),
+    upsertUser({ email: 'ayesha.malik.demo@gmail.com', name: 'Ayesha Malik' }),
+    upsertUser({ email: 'hamza.sheikh.demo@gmail.com', name: 'Hamza Sheikh' }),
+    upsertUser({ email: 'fatima.iqbal.demo@gmail.com', name: 'Fatima Iqbal' }),
+    upsertUser({ email: 'usman.tariq.demo@gmail.com', name: 'Usman Tariq' }),
   ]);
   const [bilal, ayesha, hamza, fatima, usman] = buyers;
 
-  const sellerZainab = await upsertUser({ email: 'zainab.hussain.demo@gmail.com', name: 'Zainab Hussain', role: 'SELLER' });
-  const sellerTariq = await upsertUser({ email: 'tariq.mehmood.demo@gmail.com', name: 'Tariq Mehmood', role: 'SELLER' });
-  const sellerSana = await upsertUser({ email: 'sana.aslam.demo@gmail.com', name: 'Sana Aslam', role: 'SELLER' });
+  const sellerZainab = await upsertUser({ email: 'zainab.hussain.demo@gmail.com', name: 'Zainab Hussain', seller: enrolledSellerFields('Karachi', 'Sindh') });
+  const sellerTariq = await upsertUser({ email: 'tariq.mehmood.demo@gmail.com', name: 'Tariq Mehmood', seller: enrolledSellerFields('Lahore', 'Punjab') });
+  const sellerSana = await upsertUser({ email: 'sana.aslam.demo@gmail.com', name: 'Sana Aslam', seller: enrolledSellerFields('Islamabad', 'Islamabad Capital Territory') });
 
   interface DemoItem {
     seller: typeof sellerZainab;

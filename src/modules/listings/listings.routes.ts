@@ -23,6 +23,7 @@ import type { ListingDtoType } from '../../openapi/schemas.js';
 import { submitListingSchema, rejectListingSchema } from '../../openapi/requests.js';
 import { uploadSignatureRateLimit } from '../../middleware/rate-limit.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
+import { generateListingCode } from '../../utils/listing-code.js';
 
 const router = Router();
 const ALLOWED_UPLOAD_FORMATS = 'jpg,png,webp';
@@ -74,18 +75,6 @@ function toListingDto(
     isLive: listing.status === 'APPROVED' && listing.auction?.status === 'ACTIVE',
     auctionId: listing.auction?.id,
   };
-}
-
-// Exported for services/auction-control.service.ts's relist path (A5, Phase 6), which needs
-// the exact same collision-safe code generation for the fresh Listing row it creates.
-export function generateListingCode(): string {
-  const year = new Date().getFullYear();
-  // BV-014: widened from randomBytes(3) (16.7M values -- ~50% collision odds by ~4,800
-  // listings sharing a year prefix) to randomBytes(5) (1.1 x 10^12 values), which makes a
-  // collision effectively impossible on its own. The retry below is the actual fix; this is
-  // just cheaper insurance against needing it.
-  const suffix = crypto.randomBytes(5).toString('hex').toUpperCase();
-  return `BV-${year}-${suffix}`;
 }
 
 function isOwnedCloudinaryImage(imageUrl: string, sellerId: string): boolean {

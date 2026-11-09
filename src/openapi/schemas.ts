@@ -582,6 +582,8 @@ export const AdminUserDto = z
     email: z.string(),
     role: UserRole,
     status: UserStatus,
+    /** FR-15: the account was anonymized (deleted); no action applies to it any more. */
+    deleted: z.boolean(),
     createdAt: isoDateTime,
   })
   .meta({ id: 'AdminUser' });

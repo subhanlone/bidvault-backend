@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import type { Server } from 'socket.io';
 import { prisma } from '../db/prisma.js';
 import { getPlatformSettings, paymentDueAtFrom } from './settings.service.js';
-import { generateListingCode } from '../modules/listings/listings.routes.js';
+import { generateListingCode } from '../utils/listing-code.js';
 import { scheduleAuctionLifecycle, cancelScheduledJob } from '../queues/auction-lifecycle.queue.js';
 import {
   dispatchEmail,
