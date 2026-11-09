@@ -35,8 +35,8 @@ export type CancelAuctionResult =
   | { kind: 'wrong-state' }
   | { kind: 'has-bids' };
 
-type CancelActor = { userId: string; isAdmin: boolean; reason: string };
-type CancelledAuction = {
+export type CancelActor = { userId: string; isAdmin: boolean; reason: string };
+export type CancelledAuction = {
   title: string;
   seller: { id: string; email: string; name: string };
   bidders: { id: string; email: string; name: string }[];
@@ -48,7 +48,7 @@ type CancelledAuction = {
  * (the job, the live notice, the e-mails) is announceCancel's. Split so a takedown can cancel the
  * auction in the same transaction as the listing's removal.
  */
-async function cancelLockedAuction(
+export async function cancelLockedAuction(
   tx: Prisma.TransactionClient,
   auctionId: string,
   actor: CancelActor,
@@ -103,7 +103,7 @@ async function cancelLockedAuction(
 }
 
 /** After a cancel has committed: the close job, the live notice and the e-mails. */
-async function announceCancel(auctionId: string, cancelled: CancelledAuction, actor: CancelActor, io?: Server) {
+export async function announceCancel(auctionId: string, cancelled: CancelledAuction, actor: CancelActor, io?: Server) {
   // The cancel has committed, so a failure here must not undo the answer, the live notice or the
   // e-mails below. A job that could not be removed (Redis down, or a worker already running it) is
   // harmless: closeAuction refuses an auction that is no longer ACTIVE.

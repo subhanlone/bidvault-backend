@@ -203,6 +203,15 @@ const OPERATIONS: Op[] = [
     body: () => ({ reason: 'Authz probe' }) },
   { method: 'post', contractPath: '/admin/users/{userId}/reinstate',
     url: (w) => `/admin/users/${w.otherBuyer.id}/reinstate`, allow: ['ADMIN'] },
+  // B5 PR 3b.
+  { method: 'post', contractPath: '/admin/users/{userId}/revoke-seller',
+    url: (w) => `/admin/users/${w.otherSeller.id}/revoke-seller`, allow: ['ADMIN'],
+    body: () => ({ reason: 'Authz probe' }) },
+  { method: 'post', contractPath: '/admin/users/{userId}/restore-seller',
+    url: (w) => `/admin/users/${w.otherSeller.id}/restore-seller`, allow: ['ADMIN'] },
+  { method: 'put', contractPath: '/admin/users/{userId}/seller-limit',
+    url: (w) => `/admin/users/${w.otherSeller.id}/seller-limit`, allow: ['ADMIN'],
+    body: () => ({ items: 20, value: null }) },
   // Phase 7 (C3): w.pendingListingId is PENDING, not APPROVED, so the happy path never fires
   // here either -- see tests/listing-takedown.test.ts.
   { method: 'post', contractPath: '/admin/listings/{listingId}/takedown',
@@ -238,6 +247,8 @@ const OPERATIONS: Op[] = [
 
   // ---- becoming a seller (B5; behaviour is in tests/account-model.test.ts) ------------------------
   // Open to any non-admin: an account that is already a seller just gets its own record back.
+  { method: 'post', contractPath: '/seller/limit-request', url: () => '/seller/limit-request', allow: ['SELLER'],
+    body: () => ({}) },
   { method: 'post', contractPath: '/seller/enroll', url: () => '/seller/enroll',
     allow: ['BUYER', 'SELLER'],
     body: () => ({

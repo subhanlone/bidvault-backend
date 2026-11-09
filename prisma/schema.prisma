@@ -145,6 +145,9 @@ model User {
   // B5 PR 3a: an admin's per-person monthly limit, replacing the platform numbers (lower to
   // restrain, higher to trust); null means the platform numbers apply.
   sellerLimitOverrideItems Int?
+  // B5 PR 3b: when an admin paused this account's selling (isSeller false); cleared on restore. It is
+  // what tells a revoked seller from someone who never enrolled.
+  sellerRevokedAt          DateTime?
   sellerLimitOverrideValue Int?
   createdAt                DateTime                 @default(now())
   updatedAt                DateTime                 @updatedAt

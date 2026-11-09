@@ -414,3 +414,28 @@ export const adminReportsQuerySchema = paginationQuerySchema.extend({
   status: z.enum(REPORT_STATUSES).optional(),
 });
 
+// ---- seller standing, admin side (B5 PR 3b) ---------------------------------------------
+
+export const SELLER_LIMIT_ITEMS_MAX = 1000;
+
+export const revokeSellerSchema = z
+  .object({
+    /** Shown to the person, and to bidders when live auctions are ended too. */
+    reason: z.string().trim().min(3).max(500),
+    /** D4's refinement: end the seller's live auctions as well (for fraud-type cases). Off by default. */
+    endLiveAuctions: z.boolean().optional(),
+  })
+  .meta({ id: 'RevokeSellerRequest' });
+
+/** Null removes that half of the override, so the platform number applies again. */
+export const setSellerLimitSchema = z
+  .object({
+    items: z.number().int().positive().max(SELLER_LIMIT_ITEMS_MAX).nullable(),
+    value: z.number().int().positive().max(MAX_MONEY).nullable(),
+  })
+  .meta({ id: 'SetSellerLimitRequest' });
+
+export const sellerLimitRequestSchema = z
+  .object({ note: z.string().trim().max(500).optional() })
+  .meta({ id: 'SellerLimitRequest' });
+

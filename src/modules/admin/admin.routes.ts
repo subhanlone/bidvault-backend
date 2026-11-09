@@ -16,9 +16,12 @@ import {
   resolveDisputeSchema,
   cancelAuctionSchema,
   suspendUserSchema,
+  revokeSellerSchema,
+  setSellerLimitSchema,
   takedownListingSchema,
 } from '../../openapi/requests.js';
 import { checkAccountDeletable, anonymizeUser, isAnonymized } from '../../services/account.service.js';
+import { restoreSeller, revokeSeller, sellerStatusOf, setSellerLimit } from '../../services/seller-admin.service.js';
 import { dispatchEmail, sendAccountDeletedEmail } from '../../services/email.service.js';
 import {
   disputeResponseDueAt,
@@ -512,7 +515,10 @@ router.get(
 
     const rows = await prisma.user.findMany({
       where,
-      select: { id: true, name: true, email: true, role: true, status: true, createdAt: true },
+      select: {
+        id: true, name: true, email: true, role: true, status: true, createdAt: true,
+        isSeller: true, sellerRevokedAt: true, sellerLimitOverrideItems: true, sellerLimitOverrideValue: true,
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
@@ -526,6 +532,9 @@ router.get(
         role: u.role,
         status: u.status,
         deleted: isAnonymized(u),
+        sellerStatus: sellerStatusOf(u),
+        sellerLimitOverrideItems: u.sellerLimitOverrideItems,
+        sellerLimitOverrideValue: u.sellerLimitOverrideValue,
         createdAt: u.createdAt.toISOString(),
       })),
       nextCursor,
@@ -609,6 +618,51 @@ router.post(
     });
 
     ok(res, { userId, status: 'ANONYMIZED' });
+  }),
+);
+
+// B5 PR 3b (section 3.4, D4): pause selling. Live auctions finish unless endLiveAuctions; pending
+// listings are withdrawn with the reason; sales already made continue.
+router.post(
+  '/users/:userId/revoke-seller',
+  requireAuth(['ADMIN']),
+  validateBody(revokeSellerSchema),
+  asyncHandler<z.infer<typeof revokeSellerSchema>>(async (req, res) => {
+    const io = req.app.get('io') as Server | undefined;
+    const result = await revokeSeller(req.params.userId, req.auth!.userId, req.body.reason, req.body.endLiveAuctions ?? false, io);
+    if (result.kind === 'not-found') { fail(res, 'User not found.', 404); return; }
+    if (result.kind === 'refused') { fail(res, result.message, 409); return; }
+    ok(res, {
+      userId: req.params.userId,
+      sellerStatus: 'REVOKED' as const,
+      withdrawnListings: result.withdrawnListings,
+      cancelledAuctions: result.cancelledAuctions,
+    });
+  }),
+);
+
+router.post(
+  '/users/:userId/restore-seller',
+  requireAuth(['ADMIN']),
+  asyncHandler(async (req, res) => {
+    const result = await restoreSeller(req.params.userId, req.auth!.userId);
+    if (result.kind === 'not-found') { fail(res, 'User not found.', 404); return; }
+    if (result.kind === 'refused') { fail(res, result.message, 409); return; }
+    ok(res, { userId: req.params.userId, sellerStatus: 'ACTIVE' as const });
+  }),
+);
+
+// B5 PR 3b (section 3.3): a personal monthly limit, replacing the platform numbers; null for either
+// half removes it.
+router.put(
+  '/users/:userId/seller-limit',
+  requireAuth(['ADMIN']),
+  validateBody(setSellerLimitSchema),
+  asyncHandler<z.infer<typeof setSellerLimitSchema>>(async (req, res) => {
+    const result = await setSellerLimit(req.params.userId, req.auth!.userId, req.body.items, req.body.value);
+    if (result.kind === 'not-found') { fail(res, 'User not found.', 404); return; }
+    if (result.kind === 'refused') { fail(res, result.message, 409); return; }
+    ok(res, { userId: req.params.userId, items: result.items, value: result.value });
   }),
 );
 

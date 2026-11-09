@@ -821,6 +821,13 @@ describe('seller items', () => {
 });
 
 describe('seller account', () => {
+  it('POST /seller/limit-request', async () => {
+    hit('post', '/seller/limit-request');
+    const res = await request(app).post(api('/seller/limit-request')).set(auth(w.seller.token)).send({ note: 'More please.' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, data: { alreadyRequested: false } });
+  });
+
   it('POST /seller/enroll', async () => {
     hit('post', '/seller/enroll');
     const res = await request(app).post(api('/seller/enroll')).set(auth(w.buyer.token)).send({
@@ -1124,6 +1131,36 @@ describe('admin', () => {
       .send({ reason: 'Requested via support ticket.' });
     expect(res.status).toBe(200);
     expect(resData<{ status: string }>(res).status).toBe('ANONYMIZED');
+  });
+
+  it('POST revoke-seller, restore-seller and PUT seller-limit (B5 PR 3b)', async () => {
+    hit('post', '/admin/users/{userId}/revoke-seller');
+    hit('post', '/admin/users/{userId}/restore-seller');
+    hit('put', '/admin/users/{userId}/seller-limit');
+
+    const revoked = await request(app)
+      .post(api(`/admin/users/${w.otherSeller.id}/revoke-seller`))
+      .set(auth(w.admin.token))
+      .send({ reason: 'Items not as described.' });
+    expect(revoked.status).toBe(200);
+    expect(revoked.body).toMatchObject({ success: true, data: { sellerStatus: 'REVOKED' } });
+    const again = await request(app)
+      .post(api(`/admin/users/${w.otherSeller.id}/revoke-seller`))
+      .set(auth(w.admin.token))
+      .send({ reason: 'Items not as described.' });
+    expect(again.status).toBe(409);
+    expect(again.body).toEqual(failureContaining('already paused'));
+
+    const restored = await request(app).post(api(`/admin/users/${w.otherSeller.id}/restore-seller`)).set(auth(w.admin.token));
+    expect(restored.status).toBe(200);
+    expect(restored.body).toMatchObject({ success: true, data: { sellerStatus: 'ACTIVE' } });
+
+    const limited = await request(app)
+      .put(api(`/admin/users/${w.otherSeller.id}/seller-limit`))
+      .set(auth(w.admin.token))
+      .send({ items: 20, value: null });
+    expect(limited.status).toBe(200);
+    expect(limited.body).toMatchObject({ success: true, data: { items: 20, value: null } });
   });
 
   it('POST /admin/users/{userId}/suspend and .../reinstate', async () => {

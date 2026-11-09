@@ -4,7 +4,8 @@ import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
-import { enrollSellerSchema } from '../../openapi/requests.js';
+import { enrollSellerSchema, sellerLimitRequestSchema } from '../../openapi/requests.js';
+import { requestHigherLimit } from '../../services/seller-admin.service.js';
 import { enrollSeller } from '../../services/seller-account.service.js';
 import { sanitizeUser } from '../auth/user-dto.js';
 
@@ -27,6 +28,22 @@ router.post(
       return;
     }
     ok(res, { user: sanitizeUser(result.user) });
+  }),
+);
+
+// B5 PR 3b, D7: "Request a higher limit". One a month; the admins are told, and answer by setting a
+// personal limit (PUT /admin/users/{userId}/seller-limit).
+router.post(
+  '/limit-request',
+  requireAuth(['SELLER']),
+  validateBody(sellerLimitRequestSchema),
+  asyncHandler<z.infer<typeof sellerLimitRequestSchema>>(async (req, res) => {
+    const result = await requestHigherLimit(req.auth!.userId, req.body.note || undefined);
+    if (result.kind === 'no-limit') {
+      fail(res, 'You have no monthly limit to raise.', 409);
+      return;
+    }
+    ok(res, { requestedAt: result.requestedAt.toISOString(), alreadyRequested: result.alreadyRequested });
   }),
 );
 

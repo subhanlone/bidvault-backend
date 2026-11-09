@@ -392,7 +392,15 @@ const documentInput = {
     // SELLER_WELCOME, SELLER_LIMIT_NEAR, SELLER_GRADUATED and SELLER_LIMIT_RETURNED (an open set).
     // Behaviour: POST /listings and the resubmit (PATCH /listings/{listingId}) answer 422 with code
     // SELLER_LIMIT_REACHED over the limit; a resubmit counts in the month it is resubmitted.
-    version: '12.7.0',
+    //
+    // 12.8.0, 2026-11-09, minor: B5 PR 3b, admin control of selling. Additive. New: POST
+    // /admin/users/{userId}/revoke-seller (reason, optional endLiveAuctions), POST
+    // /admin/users/{userId}/restore-seller, PUT /admin/users/{userId}/seller-limit (items and value,
+    // each nullable) and POST /seller/limit-request (one a month). AdminUser gains required
+    // sellerStatus (NONE | ACTIVE | REVOKED), sellerLimitOverrideItems and sellerLimitOverrideValue.
+    // NotificationType gains SELLER_REVOKED, SELLER_RESTORED, SELLER_LIMIT_CHANGED and
+    // SELLER_LIMIT_REQUESTED.
+    version: '12.8.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -683,6 +691,23 @@ const documentInput = {
           200: okBody(S.SellerItemsSummaryDto, 'Item counts per tab'),
           401: unauthorized,
           403: forbidden,
+        },
+      },
+    },
+    '/seller/limit-request': {
+      post: {
+        tags: ['Seller'],
+        security: [{ bearerAuth: [] }],
+        summary:
+          'B5 PR 3b, D7: ask the admins for a higher monthly limit. One a month: a repeat answers with the first ' +
+          '(alreadyRequested). 409 for a seller who has no limit.',
+        requestBody: jsonRequest(R.sellerLimitRequestSchema),
+        responses: {
+          200: okBody(z.object({ requestedAt: z.iso.datetime(), alreadyRequested: z.boolean() }), 'Recorded'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          409: errBody('No monthly limit applies to this seller'),
         },
       },
     },
@@ -1507,6 +1532,70 @@ const documentInput = {
           403: forbidden,
           404: notFound,
           409: errBody('Already suspended or deleted, an administrator account, or the admin tried to suspend their own account'),
+        },
+      },
+    },
+    '/admin/users/{userId}/revoke-seller': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary:
+          'B5 PR 3b: pause selling (D4). Live auctions finish unless endLiveAuctions (bidders told the reason); ' +
+          'pending listings are withdrawn (REJECTED with the reason); sales already made continue.',
+        requestParams: { path: z.object({ userId: z.string() }) },
+        requestBody: jsonRequest(R.revokeSellerSchema),
+        responses: {
+          200: okBody(
+            z.object({
+              userId: z.string(),
+              sellerStatus: z.literal('REVOKED'),
+              withdrawnListings: z.number().int(),
+              cancelledAuctions: z.number().int(),
+            }),
+            'Selling paused',
+          ),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Not selling, already paused, an administrator, or a deleted account'),
+        },
+      },
+    },
+    '/admin/users/{userId}/restore-seller': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary: 'B5 PR 3b: give back selling that an admin paused.',
+        requestParams: { path: z.object({ userId: z.string() }) },
+        responses: {
+          200: okBody(z.object({ userId: z.string(), sellerStatus: z.literal('ACTIVE') }), 'Selling restored'),
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Already selling, never a seller, or a deleted account'),
+        },
+      },
+    },
+    '/admin/users/{userId}/seller-limit': {
+      put: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        summary:
+          'B5 PR 3b: a personal monthly limit (items, starting-price value) replacing the platform numbers, ' +
+          'whatever the standing; null for either half removes it.',
+        requestParams: { path: z.object({ userId: z.string() }) },
+        requestBody: jsonRequest(R.setSellerLimitSchema),
+        responses: {
+          200: okBody(
+            z.object({ userId: z.string(), items: z.number().int().nullable(), value: z.number().int().nullable() }),
+            'The limit now set',
+          ),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('An administrator or a deleted account'),
         },
       },
     },
