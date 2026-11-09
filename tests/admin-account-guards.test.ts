@@ -162,7 +162,7 @@ describe('self-service delete-account for administrators', () => {
     const res = await deleteOwnAccount(w.admin.token);
 
     expect(res.status).toBe(409);
-    expect(resError(res).error).toMatch(/only administrator/i);
+    expect(resError(res).error).toMatch(/only active administrator/i);
     const row = await prisma.user.findUniqueOrThrow({ where: { id: w.admin.id } });
     expect(row.email).toBe(w.admin.email);
   });
