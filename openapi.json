@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "12.6.1",
+    "version": "12.7.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -2282,7 +2282,7 @@
             }
           },
           "422": {
-            "description": "A business rule was violated: price floor, increment ceiling, image ownership, or category attributes",
+            "description": "A business rule was violated: price floor, increment ceiling, image ownership, category attributes, or the monthly selling limit (code SELLER_LIMIT_REACHED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2400,7 +2400,7 @@
             }
           },
           "422": {
-            "description": "A business rule was violated: price floor, increment ceiling, image ownership, or category attributes",
+            "description": "A business rule was violated: price floor, increment ceiling, image ownership, category attributes, or the monthly selling limit (code SELLER_LIMIT_REACHED)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7465,6 +7465,21 @@
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
           },
+          "newSellerMonthlyItems": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000
+          },
+          "newSellerMonthlyValue": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 2000000000
+          },
+          "sellerGraduationSales": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
           "supportEmail": {
             "type": "string",
             "maxLength": 254
@@ -8619,10 +8634,123 @@
               "closed"
             ],
             "additionalProperties": false
+          },
+          "limits": {
+            "$ref": "#/components/schemas/SellerLimits"
           }
         },
         "required": [
-          "counts"
+          "counts",
+          "limits"
+        ],
+        "additionalProperties": false
+      },
+      "SellerLimits": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "object",
+            "properties": {
+              "used": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "used",
+              "limit"
+            ],
+            "additionalProperties": false
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "used": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "used",
+              "limit"
+            ],
+            "additionalProperties": false
+          },
+          "resetsAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "completedSales": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "salesToGraduate": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "standing": {
+            "type": "string",
+            "enum": [
+              "NEW",
+              "ESTABLISHED",
+              "RESTRICTED"
+            ]
+          },
+          "paidSales": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "refunds": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "refundBuyers": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "items",
+          "value",
+          "resetsAt",
+          "completedSales",
+          "salesToGraduate",
+          "standing",
+          "paidSales",
+          "refunds",
+          "refundBuyers"
         ],
         "additionalProperties": false
       },
@@ -9569,7 +9697,11 @@
           "LISTING_REMOVED",
           "BID_RECEIVED",
           "NOT_SHIPPED_REPORTED",
-          "SALE_REFUNDED"
+          "SALE_REFUNDED",
+          "SELLER_WELCOME",
+          "SELLER_LIMIT_NEAR",
+          "SELLER_GRADUATED",
+          "SELLER_LIMIT_RETURNED"
         ]
       },
       "NotificationRead": {
@@ -9859,6 +9991,21 @@
             "minimum": -9007199254740991,
             "maximum": 9007199254740991
           },
+          "newSellerMonthlyItems": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "newSellerMonthlyValue": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "sellerGraduationSales": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
           "supportEmail": {
             "type": "string"
           }
@@ -9872,6 +10019,9 @@
           "paymentDeadlineHours",
           "reviewEditWindowHours",
           "shipByHours",
+          "newSellerMonthlyItems",
+          "newSellerMonthlyValue",
+          "sellerGraduationSales",
           "supportEmail"
         ],
         "additionalProperties": false

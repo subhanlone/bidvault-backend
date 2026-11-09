@@ -24,6 +24,10 @@ import { submitListingSchema, rejectListingSchema } from '../../openapi/requests
 import { uploadSignatureRateLimit } from '../../middleware/rate-limit.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import { generateListingCode } from '../../utils/listing-code.js';
+import { checkMonthlyLimit, lockSellerForListing, noteNearLimit } from '../../services/seller-limit.service.js';
+
+/** B5 PR 3a: a stable code for the client, beside the message that names the limit and its reset. */
+const SELLER_LIMIT_REACHED = 'SELLER_LIMIT_REACHED';
 
 const router = Router();
 const ALLOWED_UPLOAD_FORMATS = 'jpg,png,webp';
@@ -290,28 +294,43 @@ router.post(
     // information the seller did anything wrong. Re-rolling and retrying is the honest fix;
     // surfacing it as a 409 (what the shared P2002 handler would otherwise turn it into) would
     // blame the seller for something they never touched, after they just filled in a 3-step form.
+    //
+    // B5 PR 3a: the monthly limit is checked and the listing created under the seller's row lock, so
+    // two submissions at once cannot both pass with one item left. A code collision aborts the
+    // transaction (Postgres refuses further statements after an error), so the whole of it is retried.
+    const sellerId = req.auth!.userId;
     let listing: Prisma.ListingGetPayload<{ include: { seller: true; auction: true } }> | undefined;
+    let refused: string | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        listing = await prisma.listing.create({
-          data: {
-            listingCode: generateListingCode(),
-            sellerId: req.auth!.userId,
-            title: req.body.title,
-            category: req.body.category,
-            condition: req.body.condition,
-            description: req.body.description,
-            startPrice: req.body.startPrice,
-            reservePrice: req.body.reservePrice,
-            minIncrement: req.body.minIncrement,
-            durationDays: req.body.durationDays,
-            imageUrl: req.body.imageUrl,
-            emoji: req.body.emoji,
-            attributes: attributesResult.data as Prisma.InputJsonValue,
-            status: 'PENDING',
-          },
-          include: { seller: true, auction: true },
+        const outcome = await prisma.$transaction(async (tx) => {
+          await lockSellerForListing(tx, sellerId);
+          const check = await checkMonthlyLimit(tx, sellerId, req.body.startPrice);
+          if (!check.ok) return { kind: 'refused' as const, message: check.message };
+          const created = await tx.listing.create({
+            data: {
+              listingCode: generateListingCode(),
+              sellerId,
+              title: req.body.title,
+              category: req.body.category,
+              condition: req.body.condition,
+              description: req.body.description,
+              startPrice: req.body.startPrice,
+              reservePrice: req.body.reservePrice,
+              minIncrement: req.body.minIncrement,
+              durationDays: req.body.durationDays,
+              imageUrl: req.body.imageUrl,
+              emoji: req.body.emoji,
+              attributes: attributesResult.data as Prisma.InputJsonValue,
+              status: 'PENDING',
+            },
+            include: { seller: true, auction: true },
+          });
+          await noteNearLimit(tx, sellerId);
+          return { kind: 'created' as const, created };
         });
+        if (outcome.kind === 'refused') refused = outcome.message;
+        else listing = outcome.created;
         break;
       } catch (err) {
         const isCodeCollision =
@@ -321,8 +340,12 @@ router.post(
         if (!isCodeCollision || attempt === 2) throw err;
       }
     }
-    // Unreachable except by construction: the loop above only exits via `break` (success) or
-    // `throw` (exhausted retries / a different error) -- listing is always assigned by here.
+    if (refused) {
+      fail(res, refused, 422, SELLER_LIMIT_REACHED);
+      return;
+    }
+    // Unreachable except by construction: the loop above only exits via `break` (a listing or a
+    // refusal) or `throw` (exhausted retries / a different error).
     if (!listing) throw new Error('unreachable: listing creation loop exited without a result');
 
     dispatchEmail(sendListingSubmittedEmail(
@@ -379,25 +402,41 @@ router.patch(
       return;
     }
 
-    const updated = await prisma.listing.update({
-      where: { id: existing.id },
-      data: {
-        title: req.body.title,
-        category: req.body.category,
-        condition: req.body.condition,
-        description: req.body.description,
-        startPrice: req.body.startPrice,
-        reservePrice: req.body.reservePrice,
-        minIncrement: req.body.minIncrement,
-        durationDays: req.body.durationDays,
-        imageUrl: req.body.imageUrl,
-        emoji: req.body.emoji,
-        attributes: attributesResult.data as Prisma.InputJsonValue,
-        status: 'PENDING',
-        rejectionReason: null,
-      },
-      include: { seller: true, auction: true },
+    // B5 PR 3a: going back to review uses the month again (the rejected listing stopped counting), so
+    // the limit is checked under the same lock as a new submission, and the month is this one.
+    const sellerId = req.auth!.userId;
+    const outcome = await prisma.$transaction(async (tx) => {
+      await lockSellerForListing(tx, sellerId);
+      const check = await checkMonthlyLimit(tx, sellerId, req.body.startPrice);
+      if (!check.ok) return { kind: 'refused' as const, message: check.message };
+      const row = await tx.listing.update({
+        where: { id: existing.id },
+        data: {
+          title: req.body.title,
+          category: req.body.category,
+          condition: req.body.condition,
+          description: req.body.description,
+          startPrice: req.body.startPrice,
+          reservePrice: req.body.reservePrice,
+          minIncrement: req.body.minIncrement,
+          durationDays: req.body.durationDays,
+          imageUrl: req.body.imageUrl,
+          emoji: req.body.emoji,
+          attributes: attributesResult.data as Prisma.InputJsonValue,
+          status: 'PENDING',
+          rejectionReason: null,
+          submittedAt: new Date(),
+        },
+        include: { seller: true, auction: true },
+      });
+      await noteNearLimit(tx, sellerId);
+      return { kind: 'updated' as const, row };
     });
+    if (outcome.kind === 'refused') {
+      fail(res, outcome.message, 422, SELLER_LIMIT_REACHED);
+      return;
+    }
+    const updated = outcome.row;
 
     dispatchEmail(sendListingSubmittedEmail(
       { email: updated.seller.email, name: updated.seller.name },

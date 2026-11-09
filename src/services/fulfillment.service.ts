@@ -1,6 +1,7 @@
 import type { Prisma, TransactionStatus } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
 import { getPlatformSettings } from './settings.service.js';
+import { noteStandingChange, sellerStanding } from './seller-limit.service.js';
 import {
   dispatchEmail,
   sendItemShippedEmail,
@@ -139,7 +140,10 @@ async function deliverAndPaySeller(tx: Prisma.TransactionClient, row: LockedTran
     select: { auction: { select: { title: true } }, seller: { select: { id: true, email: true, name: true } } },
   });
 
+  // B5 PR 3a: a completed sale can lift the seller's monthly limit; read the standing before it.
+  const standingBefore = await sellerStanding(tx, row.sellerId);
   await tx.auctionTransaction.update({ where: { id: row.id }, data: { status: 'DELIVERED' } });
+  await noteStandingChange(tx, row.sellerId, standingBefore);
   await tx.ledgerEntry.create({
     data: { sellerId: row.sellerId, transactionId: row.id, amount: row.finalAmount },
   });
@@ -384,7 +388,10 @@ export async function resolveDispute(
       // A pure status flip — a dispute is only reachable from SHIPPED, so no payout has ever
       // fired for this transaction, and the gateway never actually moved money to begin with.
       // There is nothing to reverse.
+      // B5 PR 3a: every refunded paid sale is a defect, which can bring the monthly limit back.
+      const standingBefore = await sellerStanding(tx, sale.sellerId);
       await tx.auctionTransaction.update({ where: { id: dispute.transactionId }, data: { status: 'REFUNDED' } });
+      await noteStandingChange(tx, sale.sellerId, standingBefore);
     }
 
     const title = dispute.transaction.auction.title;
@@ -614,6 +621,9 @@ export async function refundLockedSale(
   transactionId: string,
   actor: RefundActor,
 ): Promise<RefundedSale> {
+  // B5 PR 3a: every refunded paid sale is a defect, which can bring the monthly limit back.
+  const { sellerId } = await tx.auctionTransaction.findUniqueOrThrow({ where: { id: transactionId }, select: { sellerId: true } });
+  const standingBefore = await sellerStanding(tx, sellerId);
   const sale = await tx.auctionTransaction.update({
     where: { id: transactionId },
     data: { status: 'REFUNDED' },
@@ -626,6 +636,8 @@ export async function refundLockedSale(
       seller: { select: { email: true, name: true } },
     },
   });
+
+  await noteStandingChange(tx, sellerId, standingBefore);
 
   await tx.auditLog.create({
     data: {

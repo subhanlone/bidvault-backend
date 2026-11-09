@@ -49,6 +49,9 @@ describe('getPlatformSettings', () => {
       paymentDeadlineHours: 48,
       reviewEditWindowHours: 72,
       shipByHours: 72,
+      newSellerMonthlyItems: 10,
+      newSellerMonthlyValue: 150_000,
+      sellerGraduationSales: 3,
       supportEmail: 'support@bidvault.tech',
     });
 
