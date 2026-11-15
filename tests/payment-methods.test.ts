@@ -7,7 +7,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { APPROVED_TEST_CARD, DECLINED_TEST_CARD } from '../src/services/payment-gateway.service.js';
-import { resError } from './helpers/api.js';
+import { resData, resError } from './helpers/api.js';
+
+type Invoice = { amount: number; payment?: Record<string, unknown>; refund?: Record<string, unknown> };
+type WonRow = { transactionId: string; payment?: unknown; refund?: { paidTo?: string } };
+type SellerItemRow = { sale?: { transactionId: string; refund?: Record<string, unknown> } };
+type AdminRow = { transactionId: string; payment?: unknown };
 
 vi.mock('../src/services/email.service.js', async () => {
   const actual = await vi.importActual<typeof import('../src/services/email.service.js')>(
@@ -69,7 +74,7 @@ describe('POST /payments/:id/pay with a method', () => {
   ] as const)('pays with %s and stores method, hint, reference; never a full number', async (method, body, hint, bankRef) => {
     const res = await pay(body);
     expect(res.status).toBe(200);
-    expect(res.body.data).toMatchObject({ status: 'COMPLETED' });
+    expect(resData<{ status: string }>(res)).toMatchObject({ status: 'COMPLETED' });
 
     const row = await reload(w.transactionId);
     expect(row).toMatchObject({ status: 'COMPLETED', paymentMethod: method, paymentAccountHint: hint, bankTransferReference: bankRef });
@@ -105,7 +110,7 @@ describe('POST /payments/:id/pay with a method', () => {
     const declined = await pay({ method: 'CARD', cardNumber: DECLINED_TEST_CARD });
     // A decline is an ordinary outcome, answered 200 with the sale still PENDING (BV-006).
     expect(declined.status).toBe(200);
-    expect(declined.body.data).toMatchObject({ status: 'PENDING', lastPaymentError: 'Your card was declined.' });
+    expect(resData<{ status: string; lastPaymentError?: string }>(declined)).toMatchObject({ status: 'PENDING', lastPaymentError: 'Your card was declined.' });
     const afterDecline = await reload(w.transactionId);
     expect(afterDecline.status).toBe('PENDING');
     expect(afterDecline.lastPaymentError).toBe('Your card was declined.');
@@ -130,32 +135,33 @@ describe('payment and refund details in the read models', () => {
     await payThenSellerRefund({ method: 'JAZZCASH', walletNumber: '03001234567' });
     const res = await get(`/payments/${w.transactionId}/invoice`, w.buyer.token);
     expect(res.status).toBe(200);
-    expect(res.body.data.payment).toEqual({ method: 'JAZZCASH', methodLabel: 'JazzCash', accountHint: '0300•••567' });
-    expect(res.body.data.refund).toMatchObject({
-      amount: res.body.data.amount,
+    const invoice = resData<Invoice>(res);
+    expect(invoice.payment).toEqual({ method: 'JAZZCASH', methodLabel: 'JazzCash', accountHint: '0300•••567' });
+    expect(invoice.refund).toMatchObject({
+      amount: invoice.amount,
       paidTo: 'JazzCash 0300•••567',
       reasonText: 'The seller could not send the item',
       expectedArrival: 'Immediately (simulated: no real money moves)',
     });
-    expect(res.body.data.refund.refundReference).toMatch(/^RFD-/);
+    expect(invoice.refund?.refundReference).toMatch(/^RFD-/);
   });
 
   it('the seller\'s invoice names the method but never the hint or the bank reference', async () => {
     await payThenSellerRefund({ method: 'BANK_TRANSFER', bankReference: 'FT2611110001' });
     const res = await get(`/payments/${w.transactionId}/invoice`, w.seller.token);
     expect(res.status).toBe(200);
-    expect(res.body.data.payment).toEqual({ method: 'BANK_TRANSFER', methodLabel: 'Bank transfer' });
+    const invoice = resData<Invoice>(res);
+    expect(invoice.payment).toEqual({ method: 'BANK_TRANSFER', methodLabel: 'Bank transfer' });
     const text = JSON.stringify(res.body);
     expect(text).not.toContain('•••');
     expect(text).not.toContain('FT2611110001');
-    expect(res.body.data.refund).not.toHaveProperty('paidTo');
+    expect(invoice.refund).not.toHaveProperty('paidTo');
   });
 
   it('my-wins carries the payment and the refund', async () => {
     await payThenSellerRefund({ method: 'EASYPAISA', walletNumber: '03451234567' });
     const res = await get('/payments/my-wins', w.buyer.token);
-    const mine = (res.body.data as Array<{ transactionId: string; payment?: unknown; refund?: { paidTo?: string } }>)
-      .find((t) => t.transactionId === w.transactionId);
+    const mine = resData<WonRow[]>(res).find((t) => t.transactionId === w.transactionId);
     expect(mine?.payment).toMatchObject({ method: 'EASYPAISA', accountHint: '0345•••567' });
     expect(mine?.refund?.paidTo).toBe('Easypaisa 0345•••567');
   });
@@ -164,8 +170,7 @@ describe('payment and refund details in the read models', () => {
     await payThenSellerRefund({ method: 'JAZZCASH', walletNumber: '03001234567' });
     const res = await get('/seller/items?tab=sold', w.seller.token);
     expect(res.status).toBe(200);
-    const item = (res.body.data.items as Array<{ sale?: { transactionId: string; refund?: Record<string, unknown> } }>)
-      .find((i) => i.sale?.transactionId === w.transactionId);
+    const item = resData<{ items: SellerItemRow[] }>(res).items.find((i) => i.sale?.transactionId === w.transactionId);
     expect(item?.sale?.refund).toMatchObject({ reasonText: 'The seller could not send the item', note: 'Item broke in storage', refundedBy: 'SELLER' });
     expect(JSON.stringify(item)).not.toContain('•••');
   });
@@ -174,7 +179,7 @@ describe('payment and refund details in the read models', () => {
     expect((await pay({ method: 'CARD', cardNumber: APPROVED_TEST_CARD })).status).toBe(200);
     await prisma.auctionTransaction.update({ where: { id: w.transactionId }, data: { shipByAt: new Date(Date.now() - 60_000) } });
     const res = await get('/admin/transactions/unshipped', w.admin.token);
-    const row = (res.body.data as Array<{ transactionId: string; payment?: unknown }>).find((t) => t.transactionId === w.transactionId);
+    const row = resData<AdminRow[]>(res).find((t) => t.transactionId === w.transactionId);
     expect(row?.payment).toEqual({ method: 'CARD', methodLabel: 'Card', accountHint: 'Visa •••4242' });
   });
 
@@ -185,7 +190,8 @@ describe('payment and refund details in the read models', () => {
     });
     const res = await get(`/payments/${w.transactionId}/invoice`, w.buyer.token);
     expect(res.status).toBe(200);
-    expect(res.body.data.payment).toEqual({ method: 'CARD', methodLabel: 'Card' });
-    expect(res.body.data.refund).toEqual({ amount: res.body.data.amount, paymentReference: 'PAY-legacy0001' });
+    const invoice = resData<Invoice>(res);
+    expect(invoice.payment).toEqual({ method: 'CARD', methodLabel: 'Card' });
+    expect(invoice.refund).toEqual({ amount: invoice.amount, paymentReference: 'PAY-legacy0001' });
   });
 });
