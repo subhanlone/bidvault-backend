@@ -5,7 +5,7 @@
  *   seller refund        -> NOT_SHIPPED_SELLER, SELLER, the seller's reason
  *   admin refund         -> NOT_SHIPPED_ADMIN,  ADMIN,  the admin's reason
  *   unanswered report    -> NOT_SHIPPED_AUTO,   SYSTEM, no note
- *   listing takedown     -> LISTING_TAKEN_DOWN, ADMIN,  "Listing removed: <reason>"
+ *   listing takedown     -> LISTING_TAKEN_DOWN, ADMIN,  the admin's reason (the reason text already says it was removed)
  *   dispute upheld       -> DISPUTE_UPHELD,     ADMIN,  the resolution note
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -101,7 +101,7 @@ describe('every refund path writes the full refund record', () => {
     const { listingId } = await prisma.auction.findUniqueOrThrow({ where: { id: w.closedAuctionId }, select: { listingId: true } });
     const r = await takedownListing(listingId, w.admin.id, 'Counterfeit item');
     expect(r.kind).toBe('ok');
-    expectRecord(await reload(), 'LISTING_TAKEN_DOWN', 'ADMIN', 'Listing removed: Counterfeit item');
+    expectRecord(await reload(), 'LISTING_TAKEN_DOWN', 'ADMIN', 'Counterfeit item');
   });
 
   it('an admin upholds the buyer\'s dispute', async () => {
@@ -131,6 +131,15 @@ describe('refund notifications explain the refund in full', () => {
     expect(notice?.message).toContain('RFD-');
     expect(notice?.message).toContain('PAY-');
     expect(notice?.message).toContain('Immediately (simulated: no real money moves)');
+    expect(notice?.message).toContain('Back to: JazzCash 0300•••567.');
+  });
+
+  it('a refund of a sale paid before methods existed says it went back to the card, in plain words', async () => {
+    await markPaid({ paymentMethod: null, paymentAccountHint: null });
+    await refundUnshippedSale(w.transactionId, { by: 'admin', userId: w.admin.id, reason: 'Seller unreachable' });
+    const [notice] = await noticesOf(w.buyer.id);
+    expect(notice?.message).toContain('Back to: Card.');
+    expect(notice?.message).not.toContain('to your');
   });
 
   it('an admin refund tells the seller why, who and when, but not the buyer\'s account', async () => {

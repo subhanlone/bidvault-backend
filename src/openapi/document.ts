@@ -419,7 +419,13 @@ const documentInput = {
     // and refund (RefundSummary); SellerItem.sale gains refund; AdminTransaction gains payment. New
     // schemas: PaymentMethod, RefundReason, RefundedBy, PaymentInfo, RefundSummary. The seller's views
     // never carry the buyer's account hint, bank reference, paidTo or expectedArrival.
-    version: '13.0.0',
+    //
+    // 13.1.0, 2026-11-15, minor: review follow-ups. PayTransactionRequest's CARD branch: cardNumber
+    // must now be 12-19 digits, optionally grouped by single spaces or dashes (pattern added). The
+    // server used to accept any 12-24 characters, letters included, and kept their last 4 as the
+    // stored hint; a card number with letters was never valid input and the one client already sends
+    // digits only, so no real caller can notice: minor, not major. walletNumber gains an example.
+    version: '13.1.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +

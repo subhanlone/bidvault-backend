@@ -393,6 +393,7 @@ export async function resolveDispute(
     });
 
     let refunds: ReturnType<typeof refundViews> | null = null;
+    let refundedSale: PresentableSale | null = null;
     if (resolution === 'REFUND') {
       // A pure status flip — a dispute is only reachable from SHIPPED, so no payout has ever
       // fired for this transaction, and the gateway never actually moved money to begin with.
@@ -406,6 +407,7 @@ export async function resolveDispute(
       });
       await noteStandingChange(tx, sale.sellerId, standingBefore);
       refunds = refundViews(written);
+      refundedSale = written;
     }
 
     const title = dispute.transaction.auction.title;
@@ -447,20 +449,19 @@ export async function resolveDispute(
       buyer: dispute.transaction.winner,
       seller: dispute.transaction.seller,
       payout,
-      refunds,
+      refundedSale,
     };
   });
 
   if (outcome.kind !== 'ok') return outcome;
 
-  if (outcome.refunds) {
+  if (outcome.refundedSale) {
     dispatchEmail(
       sendDisputeResolvedEmail(outcome.buyer, outcome.seller, {
         auctionTitle: outcome.auctionTitle,
         resolution: 'REFUNDED',
         note,
-        buyerRefund: outcome.refunds.buyerRefund,
-        sellerRefund: outcome.refunds.sellerRefund,
+        sale: outcome.refundedSale,
       }),
       `dispute-resolved-refunded (${outcome.transactionId})`,
     );
@@ -617,7 +618,10 @@ export async function reportNotShipped(
 /** Who refunded a paid, unshipped sale. `system` is the worker refunding an unanswered report. */
 export type RefundActor =
   | { by: 'seller'; userId: string; reason: string }
-  | { by: 'admin'; userId: string; reason: string }
+  /** `note` is what the buyer reads as the refund's note when it differs from the audit wording
+   * (a takedown audits "Listing removed: <reason>" but its refund already says the listing was
+   * removed, so the note is the bare reason). */
+  | { by: 'admin'; userId: string; reason: string; note?: string }
   | { by: 'system'; reason: string };
 
 /**
@@ -636,7 +640,7 @@ export function refundRecordData(
     refundReference: `RFD-${randomBytes(9).toString('base64url')}`,
     refundReason: reason,
     refundedBy: actor.by === 'seller' ? 'SELLER' : actor.by === 'admin' ? 'ADMIN' : 'SYSTEM',
-    refundNote: actor.by === 'system' ? null : actor.reason,
+    refundNote: actor.by === 'system' ? null : actor.by === 'admin' ? (actor.note ?? actor.reason) : actor.reason,
   };
 }
 
@@ -646,9 +650,8 @@ export type RefundedSale = {
   finalAmount: number;
   buyer: { email: string; name: string };
   seller: { email: string; name: string };
-  /** The refund explained for each side, from the row just written (refund-summary.ts). */
-  buyerRefund: RefundSummaryView;
-  sellerRefund: RefundSummaryView;
+  /** The row just written, for the e-mails, which word each side from it themselves. */
+  sale: PresentableSale;
 };
 
 /** The row columns refund-summary.ts needs, selected wherever a refund is written. */
@@ -738,7 +741,7 @@ export async function refundLockedSale(
 
   return {
     transactionId, auctionTitle: title, finalAmount: sale.finalAmount, buyer: sale.winner, seller: sale.seller,
-    buyerRefund, sellerRefund,
+    sale,
   };
 }
 
@@ -748,8 +751,7 @@ export function announceRefund(refunded: RefundedSale, actor: RefundActor): void
     sendSaleRefundedEmail(refunded.buyer, refunded.seller, {
       auctionTitle: refunded.auctionTitle,
       by: actor.by,
-      buyerRefund: refunded.buyerRefund,
-      sellerRefund: refunded.sellerRefund,
+      sale: refunded.sale,
     }),
     `sale-refunded (${refunded.transactionId})`,
   );

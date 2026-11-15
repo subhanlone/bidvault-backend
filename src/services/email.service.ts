@@ -2,7 +2,7 @@ import { Resend } from 'resend';
 import { env } from '../config/env.js';
 import { OTP_EXPIRY_SECONDS } from '../config/otp.js';
 import { getPlatformSettings } from './settings.service.js';
-import { decidedByText, refundDateText, type RefundSummaryView } from './refund-summary.js';
+import { decidedByText, refundDateText, refundSummary, type PresentableSale, type RefundSummaryView } from './refund-summary.js';
 
 const client = env.RESEND_API_KEY ? new Resend(env.RESEND_API_KEY) : null;
 const FROM = env.RESEND_FROM_EMAIL ?? 'BidVault <onboarding@resend.dev>';
@@ -795,18 +795,20 @@ export async function sendSaleRefundedEmail(
   details: {
     auctionTitle: string;
     by: 'seller' | 'admin' | 'system';
-    /** From refundSummary(row, 'buyer') and refundSummary(row, 'seller'). */
-    buyerRefund: RefundSummaryView;
-    sellerRefund: RefundSummaryView;
+    /** The refunded sale. Each side's wording is made here from it (refund-summary.ts), so the
+     * buyer's view, with where the money went, can never be handed to the seller. */
+    sale: PresentableSale;
   },
 ): Promise<void> {
   if (!(await alertsEnabled())) return;
+  const buyerRefund = refundSummary(details.sale, 'buyer');
+  const sellerRefund = refundSummary(details.sale, 'seller');
 
   await send(buyer.email, `Refunded — "${details.auctionTitle}"`, base('Refunded', `
     ${h1('Your purchase has been refunded')}
     ${p(`Hi ${buyer.name}, your purchase of "${details.auctionTitle}" has been refunded. Here is where the money went and why.`)}
     ${divider()}
-    ${refundRows(details.auctionTitle, details.buyerRefund)}
+    ${buyerRefund ? refundRows(details.auctionTitle, buyerRefund) : ''}
   `));
 
   // A seller who refunded the sale themselves needs no e-mail telling them so.
@@ -815,7 +817,7 @@ export async function sendSaleRefundedEmail(
     ${h1('This sale was refunded to the buyer')}
     ${p(`Hi ${seller.name}, the buyer of "${details.auctionTitle}" has been refunded. No payout will be made for this sale.`)}
     ${divider()}
-    ${refundRows(details.auctionTitle, details.sellerRefund)}
+    ${sellerRefund ? refundRows(details.auctionTitle, sellerRefund) : ''}
   `));
 }
 
@@ -826,28 +828,31 @@ export async function sendDisputeResolvedEmail(
     auctionTitle: string;
     resolution: 'REFUNDED' | 'RELEASED';
     note: string;
-    /** Present when REFUNDED: each side's view of the refund (refund-summary.ts). */
-    buyerRefund?: RefundSummaryView;
-    sellerRefund?: RefundSummaryView;
+    /** Present when REFUNDED: the refunded sale, worded per side here (refund-summary.ts). */
+    sale?: PresentableSale;
   },
 ): Promise<void> {
   if (!(await alertsEnabled())) return;
   const refunded = details.resolution === 'REFUNDED';
+  const buyerRefund = refunded && details.sale ? refundSummary(details.sale, 'buyer') : undefined;
+  const sellerRefund = refunded && details.sale ? refundSummary(details.sale, 'seller') : undefined;
+  // The refund table already has the admin's note as its "Note" row; say it once.
+  const notePara = (view: RefundSummaryView | undefined) => (view?.note ? '' : p(`Note from the admin: ${details.note}`));
   const buyerBody = `
     ${h1('Dispute resolved')}
     ${p(`Hi ${buyer.name}, an admin has reviewed your dispute on "${details.auctionTitle}".`)}
     ${divider()}
     ${p(refunded ? 'Your payment has been refunded.' : 'The seller\'s payout has been released — the item was found to have been delivered as described.')}
-    ${p(`Note from the admin: ${details.note}`)}
-    ${refunded && details.buyerRefund ? `${divider()}${refundRows(details.auctionTitle, details.buyerRefund)}` : ''}
+    ${notePara(buyerRefund)}
+    ${buyerRefund ? `${divider()}${refundRows(details.auctionTitle, buyerRefund)}` : ''}
   `;
   const sellerBody = `
     ${h1('Dispute resolved')}
     ${p(`Hi ${seller.name}, an admin has reviewed the dispute raised on "${details.auctionTitle}".`)}
     ${divider()}
     ${p(refunded ? 'The buyer has been refunded; no payout will be sent for this sale.' : 'Your payout has been released.')}
-    ${p(`Note from the admin: ${details.note}`)}
-    ${refunded && details.sellerRefund ? `${divider()}${refundRows(details.auctionTitle, details.sellerRefund)}` : ''}
+    ${notePara(sellerRefund)}
+    ${sellerRefund ? `${divider()}${refundRows(details.auctionTitle, sellerRefund)}` : ''}
   `;
   await Promise.all([
     send(buyer.email, `Dispute resolved — "${details.auctionTitle}"`, base('Dispute resolved', buyerBody)),
