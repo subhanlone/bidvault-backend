@@ -75,7 +75,7 @@ const pay = (token = w.buyer.token) =>
   request(app)
     .post(api(`/payments/${w.transactionId}/pay`))
     .set(bearer(token))
-    .send({ cardNumber: APPROVED_TEST_CARD, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
+    .send({ method: 'CARD', cardNumber: APPROVED_TEST_CARD, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
 
 describe('paying a sale', () => {
   it('is refused once the sale has been voided, and the sale stays voided', async () => {

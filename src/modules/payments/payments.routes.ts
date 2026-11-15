@@ -14,7 +14,7 @@ import {
   respondToDisputeSchema,
 } from '../../openapi/requests.js';
 import { dispatchEmail, sendPaymentCompletedEmail } from '../../services/email.service.js';
-import { charge } from '../../services/payment-gateway.service.js';
+import { charge, type ChargeInput } from '../../services/payment-gateway.service.js';
 import { getPlatformSettings, shipByAtFrom } from '../../services/settings.service.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import {
@@ -218,7 +218,14 @@ router.post(
   asyncHandler<z.infer<typeof payTransactionSchema>>(async (req, res) => {
     const winnerId = req.auth!.userId;
     const { transactionId } = req.params;
-    const { cardNumber, deliveryAddress, deliveryPhone } = req.body;
+    const body = req.body;
+    const { deliveryAddress, deliveryPhone } = body;
+    // Only the chosen method's field reaches the gateway; the schema has already refused any
+    // other method's field and normalised a wallet number.
+    const chargeInput: ChargeInput =
+      body.method === 'CARD' ? { method: 'CARD', cardNumber: body.cardNumber }
+        : body.method === 'BANK_TRANSFER' ? { method: 'BANK_TRANSFER', bankReference: body.bankReference }
+          : { method: body.method, walletNumber: body.walletNumber };
     const { shipByHours } = await getPlatformSettings();
 
     // The whole read-decide-write runs under a row lock — a double-clicked Pay button is
@@ -264,7 +271,7 @@ router.post(
         return { kind: 'removed' as const };
       }
 
-      const result = charge({ method: 'CARD', cardNumber });
+      const result = charge(chargeInput);
 
       if (!result.ok) {
         await dbTx.auctionTransaction.update({
@@ -282,6 +289,11 @@ router.post(
           deliveryAddress,
           deliveryPhone,
           paymentReference: result.reference,
+          // How it was paid, as a masked hint only. A retry after a declined card overwrites
+          // nothing stale: these are written only here, on success.
+          paymentMethod: result.method,
+          paymentAccountHint: result.accountHint,
+          bankTransferReference: result.bankTransferReference,
           status: 'COMPLETED',
           paidAt,
           shipByAt: shipByAtFrom(paidAt, shipByHours),

@@ -54,7 +54,7 @@ const pay = (cardNumber: string) =>
   request(app)
     .post(api(`/payments/${w.transactionId}/pay`))
     .set(auth(w.buyer.token))
-    .send({ cardNumber, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
+    .send({ method: 'CARD', cardNumber, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
 
 const txRow = () => prisma.auctionTransaction.findUniqueOrThrow({ where: { id: w.transactionId } });
 

@@ -143,7 +143,7 @@ const OPERATIONS: Op[] = [
     url: (w) => `/payments/${w.transactionId}/invoice`, allow: ['BUYER', 'SELLER', 'ADMIN'] },
   { method: 'post', contractPath: '/payments/{transactionId}/pay',
     url: (w) => `/payments/${w.transactionId}/pay`, allow: ['BUYER', 'SELLER'],
-    body: () => ({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }) },
+    body: () => ({ method: 'CARD', cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' }) },
   { method: 'patch', contractPath: '/payments/{transactionId}/ship',
     url: (w) => `/payments/${w.transactionId}/ship`, allow: ['BUYER', 'SELLER'] },
   { method: 'post', contractPath: '/payments/{transactionId}/confirm-receipt',
@@ -342,6 +342,7 @@ describe('one user cannot reach another user\'s data', () => {
       .post(api(`/payments/${w.otherBuyerTransactionId}/pay`))
       .set(bearer(w.buyer.token))
       .send({
+        method: 'CARD',
         cardNumber: '4242424242424242',
         deliveryAddress: '123 Test Street, Karachi',
         deliveryPhone: '03001234567',

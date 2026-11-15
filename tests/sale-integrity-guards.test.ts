@@ -67,7 +67,7 @@ const pay = () =>
   request(app)
     .post(api(`/payments/${w.transactionId}/pay`))
     .set(bearer(w.buyer.token))
-    .send({ cardNumber: APPROVED_TEST_CARD, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
+    .send({ method: 'CARD', cardNumber: APPROVED_TEST_CARD, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
 
 /** Holds `change` open in a transaction, starts `action`, then commits the change. */
 async function whileHeld<T>(change: (tx: Prisma.TransactionClient) => Promise<unknown>, action: () => Promise<T>) {

@@ -92,7 +92,7 @@ const pay = () =>
   request(app)
     .post(api(`/payments/${w.transactionId}/pay`))
     .set(bearer(w.buyer.token))
-    .send({ cardNumber: APPROVED_TEST_CARD, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
+    .send({ method: 'CARD', cardNumber: APPROVED_TEST_CARD, deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
 const report = (token = w.buyer.token) =>
   request(app).post(api(`/payments/${w.transactionId}/report-not-shipped`)).set(bearer(token)).send({ note: 'Nothing yet.' });
 const sellerRefund = (token = w.seller.token) =>

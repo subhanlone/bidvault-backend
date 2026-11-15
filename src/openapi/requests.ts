@@ -7,6 +7,7 @@ import { CATEGORIES } from '../modules/listings/category-attributes.js';
 import { SELLER_ITEM_TABS } from '../modules/seller-items/seller-item-stage.js';
 import { SELLER_BIO_MAX, SELLER_PROVINCES } from '../config/seller.js';
 import { ItemCondition } from './schemas.js';
+import { normalizePkMobile } from '../services/payment-gateway.service.js';
 
 /**
  * Every request body the API accepts.
@@ -190,17 +191,49 @@ export const cancelAuctionSchema = z
 
 // ---- payments ---------------------------------------------------------------------
 
+// BV-047 / E4: the platform held no delivery contact data at all before this. Collected
+// alongside payment rather than as a separate step, since the buyer is already filling in the
+// checkout form at that point.
+const payDelivery = {
+  deliveryAddress: z.string().trim().min(10).max(300),
+  deliveryPhone: z.string().trim().min(7).max(20),
+};
+
+// JazzCash and Easypaisa take any Pakistani mobile number, stored nowhere in full: it is
+// normalised to 03XXXXXXXXX here and the gateway keeps only a masked hint.
+const pkMobile = z.string().trim().transform((raw, ctx) => {
+  const normalized = normalizePkMobile(raw);
+  if (!normalized) {
+    ctx.addIssue({ code: 'custom', message: 'Enter a Pakistani mobile number, e.g. 0300 1234567' });
+    return z.NEVER;
+  }
+  return normalized;
+});
+
+// One branch per payment method (all simulated). Each branch is strict, so a field belonging to
+// another method is a 400: a card number typed before the buyer switched to JazzCash can never
+// reach the server.
 export const payTransactionSchema = z
-  .object({
-    // Never stored — services/payment-gateway.service.ts reads it once to decide success/
-    // decline and discards it, the same as a real processor would.
-    cardNumber: z.string().trim().min(12).max(24),
-    // BV-047 / E4: the platform held no delivery contact data at all before this. Collected
-    // alongside payment rather than as a separate step, since the buyer is already filling in
-    // the checkout form at that point.
-    deliveryAddress: z.string().trim().min(10).max(300),
-    deliveryPhone: z.string().trim().min(7).max(20),
-  })
+  .discriminatedUnion('method', [
+    z.object({
+      method: z.literal('CARD'),
+      // Never stored — services/payment-gateway.service.ts reads it once to decide success/
+      // decline and keeps only a "Visa •••4242" hint, the same as a real processor would.
+      cardNumber: z.string().trim().min(12).max(24),
+      ...payDelivery,
+    }).strict(),
+    z.object({
+      method: z.enum(['JAZZCASH', 'EASYPAISA']),
+      walletNumber: pkMobile,
+      ...payDelivery,
+    }).strict(),
+    z.object({
+      method: z.literal('BANK_TRANSFER'),
+      // What the buyer typed from their bank's confirmation; kept so the sale can be matched.
+      bankReference: z.string().trim().regex(/^[A-Za-z0-9-]{6,30}$/, 'Enter the transfer reference: 6 to 30 letters, digits or dashes'),
+      ...payDelivery,
+    }).strict(),
+  ])
   .meta({ id: 'PayTransactionRequest' });
 
 export const raiseDisputeSchema = z
