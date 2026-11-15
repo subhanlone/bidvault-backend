@@ -114,3 +114,50 @@ describe('every refund path writes the full refund record', () => {
     expectRecord(await reload(), 'DISPUTE_UPHELD', 'ADMIN', 'Photos show the damage');
   });
 });
+
+describe('refund notifications explain the refund in full', () => {
+  const noticesOf = (userId: string) =>
+    prisma.notification.findMany({ where: { userId, type: { in: ['SALE_REFUNDED', 'DISPUTE_RESOLVED'] } }, orderBy: { createdAt: 'desc' } });
+
+  it('a JazzCash sale refunded by the seller tells the buyer where the money went, why and the references', async () => {
+    await markPaid({ paymentMethod: 'JAZZCASH', paymentAccountHint: '0300•••567' });
+    await refundUnshippedSale(w.transactionId, { by: 'seller', userId: w.seller.id, reason: 'Item broke in storage' });
+
+    const [notice] = await noticesOf(w.buyer.id);
+    expect(notice?.message).toContain('PKR');
+    expect(notice?.message).toContain('JazzCash 0300•••567');
+    expect(notice?.message).toContain('The seller could not send the item');
+    expect(notice?.message).toContain('Item broke in storage');
+    expect(notice?.message).toContain('RFD-');
+    expect(notice?.message).toContain('PAY-');
+    expect(notice?.message).toContain('Immediately (simulated: no real money moves)');
+  });
+
+  it('an admin refund tells the seller why, who and when, but not the buyer\'s account', async () => {
+    await markPaid({ paymentMethod: 'EASYPAISA', paymentAccountHint: '0345•••567' });
+    await refundUnshippedSale(w.transactionId, { by: 'admin', userId: w.admin.id, reason: 'Seller unreachable' });
+
+    const [notice] = await noticesOf(w.seller.id);
+    expect(notice?.message).toContain('The item was not sent, so BidVault refunded the buyer');
+    expect(notice?.message).toContain('Seller unreachable');
+    expect(notice?.message).toContain('Decided by BidVault');
+    expect(notice?.message).toContain('No payout will be made');
+    expect(notice?.message).not.toContain('•••');
+  });
+
+  it('a bank-transfer sale refunded through a dispute: the buyer is told the transfer, the seller never is', async () => {
+    await markPaid({ status: 'DISPUTED', shippedAt: new Date(), paymentMethod: 'BANK_TRANSFER', paymentAccountHint: null, bankTransferReference: 'FT2611110001' });
+    const dispute = await prisma.dispute.create({
+      data: { transactionId: w.transactionId, raisedByUserId: w.buyer.id, reason: 'Arrived broken, not as described' },
+    });
+    await resolveDispute(dispute.id, w.admin.id, 'REFUND', 'Photos show the damage');
+
+    const [buyerNotice] = await noticesOf(w.buyer.id);
+    expect(buyerNotice?.message).toContain('Bank transfer (ref FT2611110001)');
+    expect(buyerNotice?.message).toContain('Your dispute was decided in your favour');
+    const [sellerNotice] = await noticesOf(w.seller.id);
+    expect(sellerNotice?.message).not.toContain('FT2611110001');
+    expect(sellerNotice?.message).not.toContain('•••');
+    expect(sellerNotice?.message).toContain("The buyer's dispute was decided in their favour");
+  });
+});

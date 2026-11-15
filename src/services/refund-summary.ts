@@ -120,3 +120,44 @@ export function refundSummary(sale: PresentableSale, viewer: Viewer): RefundSumm
   }
   return view;
 }
+
+const DECIDED_BY: Record<RefundedBy, string> = {
+  SELLER: 'the seller',
+  ADMIN: 'BidVault',
+  SYSTEM: 'BidVault automatically',
+};
+
+/** "The seller" / "BidVault" / "BidVault automatically", for an e-mail's "Decided by" row. */
+export function decidedByText(by: RefundedBy): string {
+  const text = DECIDED_BY[by];
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** A refund date the way the other e-mails print dates: "15 Nov 2026", Pakistan time. */
+export function refundDateText(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Karachi' });
+}
+
+/** A sentence ends with one full stop, whatever the person who wrote the note typed. */
+const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
+const pkr = (amount: number) => `PKR ${amount.toLocaleString()}`;
+
+/** The buyer's in-app notice: how much, where it went, why, the references and when it lands. */
+export function buyerRefundMessage(title: string, v: RefundSummaryView): string {
+  const parts = [`Refunded ${pkr(v.amount)} for "${title}"${v.paidTo ? ` to your ${v.paidTo}` : ''}.`];
+  if (v.reasonText) parts.push(`Why: ${sentence(v.reasonText)}`);
+  if (v.note) parts.push(`Note: ${sentence(v.note)}`);
+  if (v.refundReference) parts.push(`Refund ref ${v.refundReference}${v.paymentReference ? ` (payment ${v.paymentReference})` : ''}.`);
+  if (v.expectedArrival) parts.push(sentence(v.expectedArrival));
+  return parts.join(' ');
+}
+
+/** The seller's in-app notice: how much, why, who decided and when; never where the money went. */
+export function sellerRefundMessage(title: string, v: RefundSummaryView): string {
+  const parts = [`The buyer of "${title}" was refunded ${pkr(v.amount)}.`];
+  if (v.reasonText) parts.push(`Why: ${sentence(v.reasonText)}`);
+  if (v.note) parts.push(`Note: ${sentence(v.note)}`);
+  if (v.refundedBy) parts.push(`Decided by ${DECIDED_BY[v.refundedBy]}${v.refundedAt ? ` on ${refundDateText(v.refundedAt)}` : ''}.`);
+  parts.push('No payout will be made.');
+  return parts.join(' ');
+}
