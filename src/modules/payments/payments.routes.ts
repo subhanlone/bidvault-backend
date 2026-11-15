@@ -14,7 +14,7 @@ import {
   respondToDisputeSchema,
 } from '../../openapi/requests.js';
 import { dispatchEmail, sendPaymentCompletedEmail } from '../../services/email.service.js';
-import { chargeCard } from '../../services/payment-gateway.service.js';
+import { charge } from '../../services/payment-gateway.service.js';
 import { getPlatformSettings, shipByAtFrom } from '../../services/settings.service.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import {
@@ -264,14 +264,14 @@ router.post(
         return { kind: 'removed' as const };
       }
 
-      const charge = chargeCard(cardNumber);
+      const result = charge({ method: 'CARD', cardNumber });
 
-      if (!charge.ok) {
+      if (!result.ok) {
         await dbTx.auctionTransaction.update({
           where: { id: row.id },
-          data: { deliveryAddress, deliveryPhone, lastPaymentError: charge.reason },
+          data: { deliveryAddress, deliveryPhone, lastPaymentError: result.reason },
         });
-        return { kind: 'declined' as const, reason: charge.reason };
+        return { kind: 'declined' as const, reason: result.reason };
       }
 
       // FR-02: the seller's ship-by time runs from the payment, the way eBay's handling time does.
@@ -281,7 +281,7 @@ router.post(
         data: {
           deliveryAddress,
           deliveryPhone,
-          paymentReference: charge.reference,
+          paymentReference: result.reference,
           status: 'COMPLETED',
           paidAt,
           shipByAt: shipByAtFrom(paidAt, shipByHours),
