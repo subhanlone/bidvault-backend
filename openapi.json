@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "12.9.0",
+    "version": "13.0.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -7850,29 +7850,102 @@
         ]
       },
       "PayTransactionRequest": {
-        "type": "object",
-        "properties": {
-          "cardNumber": {
-            "type": "string",
-            "minLength": 12,
-            "maxLength": 24
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "const": "CARD"
+              },
+              "cardNumber": {
+                "type": "string",
+                "minLength": 12,
+                "maxLength": 24
+              },
+              "deliveryAddress": {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 300
+              },
+              "deliveryPhone": {
+                "type": "string",
+                "minLength": 7,
+                "maxLength": 20
+              }
+            },
+            "required": [
+              "method",
+              "cardNumber",
+              "deliveryAddress",
+              "deliveryPhone"
+            ],
+            "additionalProperties": false
           },
-          "deliveryAddress": {
-            "type": "string",
-            "minLength": 10,
-            "maxLength": 300
+          {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "JAZZCASH",
+                  "EASYPAISA"
+                ]
+              },
+              "walletNumber": {
+                "type": "string"
+              },
+              "deliveryAddress": {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 300
+              },
+              "deliveryPhone": {
+                "type": "string",
+                "minLength": 7,
+                "maxLength": 20
+              }
+            },
+            "required": [
+              "method",
+              "walletNumber",
+              "deliveryAddress",
+              "deliveryPhone"
+            ],
+            "additionalProperties": false
           },
-          "deliveryPhone": {
-            "type": "string",
-            "minLength": 7,
-            "maxLength": 20
+          {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "const": "BANK_TRANSFER"
+              },
+              "bankReference": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9-]{6,30}$"
+              },
+              "deliveryAddress": {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 300
+              },
+              "deliveryPhone": {
+                "type": "string",
+                "minLength": 7,
+                "maxLength": 20
+              }
+            },
+            "required": [
+              "method",
+              "bankReference",
+              "deliveryAddress",
+              "deliveryPhone"
+            ],
+            "additionalProperties": false
           }
-        },
-        "required": [
-          "cardNumber",
-          "deliveryAddress",
-          "deliveryPhone"
-        ]
+        ],
+        "type": "object"
       },
       "RaiseDisputeRequest": {
         "type": "object",
@@ -9099,6 +9172,9 @@
                     "type": "null"
                   }
                 ]
+              },
+              "refund": {
+                "$ref": "#/components/schemas/RefundSummary"
               }
             },
             "required": [
@@ -9199,6 +9275,67 @@
           "DELIVERED",
           "DISPUTED",
           "REFUNDED"
+        ]
+      },
+      "RefundSummary": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "$ref": "#/components/schemas/RefundReason"
+          },
+          "reasonText": {
+            "type": "string"
+          },
+          "refundedBy": {
+            "$ref": "#/components/schemas/RefundedBy"
+          },
+          "note": {
+            "type": "string"
+          },
+          "refundedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "refundReference": {
+            "type": "string"
+          },
+          "paymentReference": {
+            "type": "string"
+          },
+          "paidTo": {
+            "type": "string"
+          },
+          "expectedArrival": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount"
+        ],
+        "additionalProperties": false
+      },
+      "RefundReason": {
+        "type": "string",
+        "enum": [
+          "NOT_SHIPPED_SELLER",
+          "NOT_SHIPPED_ADMIN",
+          "NOT_SHIPPED_AUTO",
+          "DISPUTE_UPHELD",
+          "LISTING_TAKEN_DOWN"
+        ]
+      },
+      "RefundedBy": {
+        "type": "string",
+        "enum": [
+          "SELLER",
+          "ADMIN",
+          "SYSTEM"
         ]
       },
       "SellerItemsSummary": {
@@ -10052,6 +10189,12 @@
           },
           "reviewComment": {
             "type": "string"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentInfo"
+          },
+          "refund": {
+            "$ref": "#/components/schemas/RefundSummary"
           }
         },
         "required": [
@@ -10067,6 +10210,37 @@
           "reviewed"
         ],
         "additionalProperties": false
+      },
+      "PaymentInfo": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "$ref": "#/components/schemas/PaymentMethod"
+          },
+          "methodLabel": {
+            "type": "string"
+          },
+          "accountHint": {
+            "type": "string"
+          },
+          "bankTransferReference": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "method",
+          "methodLabel"
+        ],
+        "additionalProperties": false
+      },
+      "PaymentMethod": {
+        "type": "string",
+        "enum": [
+          "CARD",
+          "JAZZCASH",
+          "EASYPAISA",
+          "BANK_TRANSFER"
+        ]
       },
       "SellerStats": {
         "type": "object",
@@ -10336,6 +10510,12 @@
           },
           "disputeResolutionNote": {
             "type": "string"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentInfo"
+          },
+          "refund": {
+            "$ref": "#/components/schemas/RefundSummary"
           }
         },
         "required": [
@@ -10916,6 +11096,9 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentInfo"
           }
         },
         "required": [

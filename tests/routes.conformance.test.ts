@@ -591,7 +591,7 @@ describe('payments', () => {
     const res = await request(app)
       .post(api(`/payments/${w.transactionId}/pay`))
       .set(auth(w.buyer.token))
-      .send({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
+      .send({ method: 'CARD', cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
     expect(res.status).toBe(200);
     expect(resData<{ status: string }>(res).status).toBe('COMPLETED');
   });
@@ -606,7 +606,7 @@ describe('payments', () => {
     expect(res.status).toBe(400);
     const failure = resError(res);
     expect(failure.error).toBe('Validation error');
-    expect(failure.details).toHaveProperty('cardNumber');
+    expect(failure.details).toHaveProperty('method');
   });
 
   // BV-065: the outcome.status branch in the handler can answer 409 for a transaction that
@@ -621,7 +621,7 @@ describe('payments', () => {
     const res = await request(app)
       .post(api(`/payments/${w.transactionId}/pay`))
       .set(auth(w.buyer.token))
-      .send({ cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
+      .send({ method: 'CARD', cardNumber: '4242424242424242', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567' });
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject(failureContaining('already'));
   });

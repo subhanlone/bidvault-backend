@@ -39,6 +39,7 @@ let w: World;
 const reload = (id: string) => prisma.auctionTransaction.findUniqueOrThrow({ where: { id } });
 
 const payBody = (cardNumber: string) => ({
+  method: 'CARD',
   cardNumber,
   deliveryAddress: '123 Test Street, Karachi',
   deliveryPhone: '03001234567',

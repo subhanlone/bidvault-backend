@@ -642,7 +642,7 @@ export async function takedownListing(
 
     let refunded: RefundedSale | null = null;
     if (openSale?.status === 'COMPLETED') {
-      refunded = await refundLockedSale(tx, openSale.id, refundActor);
+      refunded = await refundLockedSale(tx, openSale.id, refundActor, 'LISTING_TAKEN_DOWN');
     }
 
     const cancelled =

@@ -14,7 +14,18 @@ export function validateBody<T>(schema: ZodType<T>) {
       // z.flattenError replaces zod 3's error.flatten(), which is deprecated in
       // zod 4. Same { formErrors, fieldErrors } shape, so the response body is
       // byte-for-byte what it was.
-      sendValidationError(res, z.flattenError(parsed.error).fieldErrors);
+      const details: Record<string, string[] | undefined> = { ...z.flattenError(parsed.error).fieldErrors };
+      // A strict schema (the pay body's method branches) reports a field that does not belong as
+      // one root-level "unrecognized_keys" issue, which flattenError files under formErrors, so
+      // `details` came back empty. Name each such field, so the 400 says which one to drop.
+      for (const issue of parsed.error.issues) {
+        if (issue.code !== 'unrecognized_keys') continue;
+        for (const key of issue.keys) {
+          const path = [...issue.path, key].join('.');
+          details[path] = [...(details[path] ?? []), 'This field is not allowed here.'];
+        }
+      }
+      sendValidationError(res, details);
       return;
     }
 

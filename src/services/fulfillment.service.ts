@@ -1,4 +1,5 @@
-import type { Prisma, TransactionStatus } from '@prisma/client';
+import { randomBytes } from 'node:crypto';
+import type { Prisma, RefundReason, TransactionStatus } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
 import { getPlatformSettings } from './settings.service.js';
 import { noteStandingChange, sellerStanding } from './seller-limit.service.js';
@@ -11,6 +12,13 @@ import {
   sendNotShippedReportedEmail,
   sendSaleRefundedEmail,
 } from './email.service.js';
+import {
+  buyerRefundMessage,
+  refundSummary,
+  sellerRefundMessage,
+  type PresentableSale,
+  type RefundSummaryView,
+} from './refund-summary.js';
 
 /**
  * BV-047: the post-payment half of a sale, absent from the platform entirely before this
@@ -384,32 +392,38 @@ export async function resolveDispute(
       },
     });
 
+    let refunds: ReturnType<typeof refundViews> | null = null;
     if (resolution === 'REFUND') {
       // A pure status flip — a dispute is only reachable from SHIPPED, so no payout has ever
       // fired for this transaction, and the gateway never actually moved money to begin with.
       // There is nothing to reverse.
       // B5 PR 3a: every refunded paid sale is a defect, which can bring the monthly limit back.
       const standingBefore = await sellerStanding(tx, sale.sellerId);
-      await tx.auctionTransaction.update({ where: { id: dispute.transactionId }, data: { status: 'REFUNDED' } });
+      const written = await tx.auctionTransaction.update({
+        where: { id: dispute.transactionId },
+        data: refundRecordData('DISPUTE_UPHELD', { by: 'admin', userId: adminUserId, reason: note }, new Date()),
+        select: PRESENTABLE_SELECT,
+      });
       await noteStandingChange(tx, sale.sellerId, standingBefore);
+      refunds = refundViews(written);
     }
 
     const title = dispute.transaction.auction.title;
     await tx.notification.createMany({
       data:
-        resolution === 'REFUND'
+        refunds
           ? [
               {
                 userId: dispute.transaction.winnerId,
                 type: 'DISPUTE_RESOLVED',
                 title: 'Dispute resolved — refunded',
-                message: `Your dispute for "${title}" was resolved. You've been refunded.`,
+                message: buyerRefundMessage(title, refunds.buyerRefund),
               },
               {
                 userId: dispute.transaction.sellerId,
                 type: 'DISPUTE_RESOLVED',
                 title: 'Dispute resolved — refunded',
-                message: `The dispute for "${title}" was resolved in the buyer's favour. No payout will be issued.`,
+                message: sellerRefundMessage(title, refunds.sellerRefund),
               },
             ]
           : [
@@ -433,17 +447,20 @@ export async function resolveDispute(
       buyer: dispute.transaction.winner,
       seller: dispute.transaction.seller,
       payout,
+      refunds,
     };
   });
 
   if (outcome.kind !== 'ok') return outcome;
 
-  if (resolution === 'REFUND') {
+  if (outcome.refunds) {
     dispatchEmail(
       sendDisputeResolvedEmail(outcome.buyer, outcome.seller, {
         auctionTitle: outcome.auctionTitle,
         resolution: 'REFUNDED',
         note,
+        buyerRefund: outcome.refunds.buyerRefund,
+        sellerRefund: outcome.refunds.sellerRefund,
       }),
       `dispute-resolved-refunded (${outcome.transactionId})`,
     );
@@ -603,13 +620,59 @@ export type RefundActor =
   | { by: 'admin'; userId: string; reason: string }
   | { by: 'system'; reason: string };
 
+/**
+ * The status flip to REFUNDED together with the refund record, so no path can set one without the
+ * other: when, an RFD- reference (made like PAY-), why, who, and the seller's or admin's own words
+ * (null for the worker, whose reason is fixed). Used by refundLockedSale and by resolveDispute.
+ */
+export function refundRecordData(
+  reason: RefundReason,
+  actor: RefundActor,
+  at: Date,
+): Prisma.AuctionTransactionUpdateInput {
+  return {
+    status: 'REFUNDED',
+    refundedAt: at,
+    refundReference: `RFD-${randomBytes(9).toString('base64url')}`,
+    refundReason: reason,
+    refundedBy: actor.by === 'seller' ? 'SELLER' : actor.by === 'admin' ? 'ADMIN' : 'SYSTEM',
+    refundNote: actor.by === 'system' ? null : actor.reason,
+  };
+}
+
 export type RefundedSale = {
   transactionId: string;
   auctionTitle: string;
   finalAmount: number;
   buyer: { email: string; name: string };
   seller: { email: string; name: string };
+  /** The refund explained for each side, from the row just written (refund-summary.ts). */
+  buyerRefund: RefundSummaryView;
+  sellerRefund: RefundSummaryView;
 };
+
+/** The row columns refund-summary.ts needs, selected wherever a refund is written. */
+const PRESENTABLE_SELECT = {
+  status: true,
+  finalAmount: true,
+  paymentReference: true,
+  paymentMethod: true,
+  paymentAccountHint: true,
+  bankTransferReference: true,
+  refundedAt: true,
+  refundReference: true,
+  refundReason: true,
+  refundedBy: true,
+  refundNote: true,
+} satisfies Prisma.AuctionTransactionSelect;
+
+/** Both sides' views of a refund just written. Throws if the row is not REFUNDED: a caller bug. */
+function refundViews(row: PresentableSale): { buyerRefund: RefundSummaryView; sellerRefund: RefundSummaryView } {
+  const buyerRefund = refundSummary(row, 'buyer');
+  const sellerRefund = refundSummary(row, 'seller');
+  if (!buyerRefund || !sellerRefund) throw new Error('refundViews: the sale is not REFUNDED');
+  return { buyerRefund, sellerRefund };
+}
 
 /**
  * Refunds a sale whose row the caller has locked and found COMPLETED: the status, the audit row and
@@ -620,17 +683,18 @@ export async function refundLockedSale(
   tx: Prisma.TransactionClient,
   transactionId: string,
   actor: RefundActor,
+  reason: RefundReason,
 ): Promise<RefundedSale> {
   // B5 PR 3a: every refunded paid sale is a defect, which can bring the monthly limit back.
   const { sellerId } = await tx.auctionTransaction.findUniqueOrThrow({ where: { id: transactionId }, select: { sellerId: true } });
   const standingBefore = await sellerStanding(tx, sellerId);
   const sale = await tx.auctionTransaction.update({
     where: { id: transactionId },
-    data: { status: 'REFUNDED' },
+    data: refundRecordData(reason, actor, new Date()),
     select: {
+      ...PRESENTABLE_SELECT,
       winnerId: true,
       sellerId: true,
-      finalAmount: true,
       auction: { select: { title: true } },
       winner: { select: { email: true, name: true } },
       seller: { select: { email: true, name: true } },
@@ -649,13 +713,16 @@ export async function refundLockedSale(
     },
   });
 
+  // Built from the row just written, so the notice says exactly what was recorded: where the
+  // money went, why, who, when and the references for the buyer; never the buyer's account for
+  // the seller.
   const title = sale.auction.title;
-  const amount = `PKR ${sale.finalAmount.toLocaleString()}`;
+  const { buyerRefund, sellerRefund } = refundViews(sale);
   const sellerNotice = {
     userId: sale.sellerId,
     type: 'SALE_REFUNDED',
     title: 'Sale refunded',
-    message: `The buyer of "${title}" was refunded because it was not sent. No payout will be made. Reason: ${actor.reason}`,
+    message: sellerRefundMessage(title, sellerRefund),
   };
   await tx.notification.createMany({
     data: [
@@ -663,13 +730,16 @@ export async function refundLockedSale(
         userId: sale.winnerId,
         type: 'SALE_REFUNDED',
         title: 'Purchase refunded',
-        message: `Your purchase of "${title}" was refunded (${amount}) because it was not sent. Reason: ${actor.reason}`,
+        message: buyerRefundMessage(title, buyerRefund),
       },
       ...(actor.by === 'seller' ? [] : [sellerNotice]),
     ],
   });
 
-  return { transactionId, auctionTitle: title, finalAmount: sale.finalAmount, buyer: sale.winner, seller: sale.seller };
+  return {
+    transactionId, auctionTitle: title, finalAmount: sale.finalAmount, buyer: sale.winner, seller: sale.seller,
+    buyerRefund, sellerRefund,
+  };
 }
 
 /** After a refund has committed: the e-mails. */
@@ -677,9 +747,9 @@ export function announceRefund(refunded: RefundedSale, actor: RefundActor): void
   dispatchEmail(
     sendSaleRefundedEmail(refunded.buyer, refunded.seller, {
       auctionTitle: refunded.auctionTitle,
-      finalAmount: refunded.finalAmount,
       by: actor.by,
-      reason: actor.reason,
+      buyerRefund: refunded.buyerRefund,
+      sellerRefund: refunded.sellerRefund,
     }),
     `sale-refunded (${refunded.transactionId})`,
   );
@@ -702,7 +772,8 @@ export async function refundUnshippedSale(
     if (actor.by === 'seller' && row.sellerId !== actor.userId) return { kind: 'forbidden' as const };
     // Only a sale paid and not yet sent. Once shipped, a problem goes through the buyer's dispute.
     if (row.status !== 'COMPLETED') return { kind: 'wrong-state' as const };
-    return { kind: 'ok' as const, refunded: await refundLockedSale(tx, row.id, actor) };
+    const reason = actor.by === 'seller' ? 'NOT_SHIPPED_SELLER' : 'NOT_SHIPPED_ADMIN';
+    return { kind: 'ok' as const, refunded: await refundLockedSale(tx, row.id, actor, reason) };
   });
 
   if (outcome.kind !== 'ok') return outcome;
@@ -739,7 +810,7 @@ export async function refundUnansweredReport(transactionId: string): Promise<Ref
     });
     const due = autoRefundAtOf({ status: 'COMPLETED', notShippedReportedAt });
     if (!due || due > new Date()) return { kind: 'wrong-state' as const };
-    return { kind: 'ok' as const, refunded: await refundLockedSale(tx, row.id, actor) };
+    return { kind: 'ok' as const, refunded: await refundLockedSale(tx, row.id, actor, 'NOT_SHIPPED_AUTO') };
   });
 
   if (outcome.kind !== 'ok') return outcome;

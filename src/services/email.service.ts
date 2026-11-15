@@ -2,6 +2,7 @@ import { Resend } from 'resend';
 import { env } from '../config/env.js';
 import { OTP_EXPIRY_SECONDS } from '../config/otp.js';
 import { getPlatformSettings } from './settings.service.js';
+import { decidedByText, refundDateText, type RefundSummaryView } from './refund-summary.js';
 
 const client = env.RESEND_API_KEY ? new Resend(env.RESEND_API_KEY) : null;
 const FROM = env.RESEND_FROM_EMAIL ?? 'BidVault <onboarding@resend.dev>';
@@ -764,45 +765,71 @@ export async function sendNotShippedReportedEmail(
 // FR-02: a paid sale that was never shipped is refunded, by the seller, an admin (or a takedown),
 // or automatically after an unanswered not-shipped report. Nobody was paid out: the seller is paid
 // only once the buyer has the item.
+/**
+ * The refund explained as e-mail rows. The buyer's table has every row it has a value for: Item,
+ * Refunded, Back to, Why, Note, Decided by, Date, Refund ref, Payment ref, Expected. The seller's
+ * view (refund-summary.ts) never carries paidTo or expectedArrival, so "Back to" and "Expected"
+ * cannot appear for the seller.
+ */
+function refundRows(auctionTitle: string, v: RefundSummaryView): string {
+  const rows: Array<[string, string | undefined]> = [
+    ['Item', auctionTitle],
+    ['Refunded', `PKR ${v.amount.toLocaleString()}`],
+    ['Back to', v.paidTo],
+    ['Why', v.reasonText],
+    ['Note', v.note],
+    ['Decided by', v.refundedBy ? decidedByText(v.refundedBy) : undefined],
+    ['Date', v.refundedAt ? refundDateText(v.refundedAt) : undefined],
+    ['Refund ref', v.refundReference],
+    ['Payment ref', v.paymentReference],
+    ['Expected', v.expectedArrival],
+  ];
+  return `<table width="100%" cellpadding="0" cellspacing="0">
+      ${rows.filter(([, value]) => value).map(([label, value]) => infoRow(label, value!)).join('')}
+    </table>`;
+}
+
 export async function sendSaleRefundedEmail(
   buyer: { email: string; name: string },
   seller: { email: string; name: string },
-  details: { auctionTitle: string; finalAmount: number; by: 'seller' | 'admin' | 'system'; reason: string },
+  details: {
+    auctionTitle: string;
+    by: 'seller' | 'admin' | 'system';
+    /** From refundSummary(row, 'buyer') and refundSummary(row, 'seller'). */
+    buyerRefund: RefundSummaryView;
+    sellerRefund: RefundSummaryView;
+  },
 ): Promise<void> {
   if (!(await alertsEnabled())) return;
-  const pkr = `PKR ${details.finalAmount.toLocaleString()}`;
-  const who =
-    details.by === 'seller' ? 'The seller' : details.by === 'admin' ? 'BidVault' : 'BidVault, automatically,';
 
   await send(buyer.email, `Refunded — "${details.auctionTitle}"`, base('Refunded', `
     ${h1('Your purchase has been refunded')}
-    ${p(`Hi ${buyer.name}, ${who} refunded your purchase because the item was not sent.`)}
+    ${p(`Hi ${buyer.name}, your purchase of "${details.auctionTitle}" has been refunded. Here is where the money went and why.`)}
     ${divider()}
-    <table width="100%" cellpadding="0" cellspacing="0">
-      ${infoRow('Item', details.auctionTitle)}
-      ${infoRow('Refunded', pkr)}
-      ${infoRow('Reason', details.reason)}
-    </table>
+    ${refundRows(details.auctionTitle, details.buyerRefund)}
   `));
 
   // A seller who refunded the sale themselves needs no e-mail telling them so.
   if (details.by === 'seller') return;
   await send(seller.email, `Sale refunded — "${details.auctionTitle}"`, base('Sale refunded', `
     ${h1('This sale was refunded to the buyer')}
-    ${p(`Hi ${seller.name}, the buyer of "${details.auctionTitle}" has been refunded because the item was not sent. No payout will be made for this sale.`)}
+    ${p(`Hi ${seller.name}, the buyer of "${details.auctionTitle}" has been refunded. No payout will be made for this sale.`)}
     ${divider()}
-    <table width="100%" cellpadding="0" cellspacing="0">
-      ${infoRow('Item', details.auctionTitle)}
-      ${infoRow('Amount', pkr)}
-      ${infoRow('Reason', details.reason)}
-    </table>
+    ${refundRows(details.auctionTitle, details.sellerRefund)}
   `));
 }
 
 export async function sendDisputeResolvedEmail(
   buyer: { email: string; name: string },
   seller: { email: string; name: string },
-  details: { auctionTitle: string; resolution: 'REFUNDED' | 'RELEASED'; note: string },
+  details: {
+    auctionTitle: string;
+    resolution: 'REFUNDED' | 'RELEASED';
+    note: string;
+    /** Present when REFUNDED: each side's view of the refund (refund-summary.ts). */
+    buyerRefund?: RefundSummaryView;
+    sellerRefund?: RefundSummaryView;
+  },
 ): Promise<void> {
   if (!(await alertsEnabled())) return;
   const refunded = details.resolution === 'REFUNDED';
@@ -812,6 +839,7 @@ export async function sendDisputeResolvedEmail(
     ${divider()}
     ${p(refunded ? 'Your payment has been refunded.' : 'The seller\'s payout has been released — the item was found to have been delivered as described.')}
     ${p(`Note from the admin: ${details.note}`)}
+    ${refunded && details.buyerRefund ? `${divider()}${refundRows(details.auctionTitle, details.buyerRefund)}` : ''}
   `;
   const sellerBody = `
     ${h1('Dispute resolved')}
@@ -819,6 +847,7 @@ export async function sendDisputeResolvedEmail(
     ${divider()}
     ${p(refunded ? 'The buyer has been refunded; no payout will be sent for this sale.' : 'Your payout has been released.')}
     ${p(`Note from the admin: ${details.note}`)}
+    ${refunded && details.sellerRefund ? `${divider()}${refundRows(details.auctionTitle, details.sellerRefund)}` : ''}
   `;
   await Promise.all([
     send(buyer.email, `Dispute resolved — "${details.auctionTitle}"`, base('Dispute resolved', buyerBody)),

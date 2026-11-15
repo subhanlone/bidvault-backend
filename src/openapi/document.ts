@@ -409,7 +409,17 @@ const documentInput = {
     // (public; AiValuation: configured, status QUEUED | RUNNING | READY | INSUFFICIENT_DATA | FAILED |
     // PAUSED or null, averagePricePkr, listingsUsed, listingsConsidered, source, computedAt, refreshing).
     // PlatformSettings and UpdateSettingsRequest gain usdToPkrRate.
-    version: '12.9.0',
+    //
+    // 13.0.0, 2026-11-15, major: multiple payment methods and full refund details (all simulated).
+    // Breaking: PayTransactionRequest is now discriminated on a required `method`: CARD (cardNumber),
+    // JAZZCASH | EASYPAISA (walletNumber, a Pakistani mobile normalised to 03XXXXXXXXX) or
+    // BANK_TRANSFER (bankReference, 6-30 of [A-Za-z0-9-]); each branch is strict, so a body without
+    // `method`, or with another method's field, is a 400 (the old card-only client breaks). Every
+    // response change is an optional addition: Invoice and WonTransaction gain payment (PaymentInfo)
+    // and refund (RefundSummary); SellerItem.sale gains refund; AdminTransaction gains payment. New
+    // schemas: PaymentMethod, RefundReason, RefundedBy, PaymentInfo, RefundSummary. The seller's views
+    // never carry the buyer's account hint, bank reference, paidTo or expectedArrival.
+    version: '13.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +

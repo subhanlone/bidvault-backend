@@ -38,6 +38,7 @@ import {
   type TakedownListingResult,
 } from '../../services/auction-control.service.js';
 import { suspendUser, reinstateUser } from '../../services/user-status.service.js';
+import { paymentInfo } from '../../services/refund-summary.js';
 
 const router = Router();
 
@@ -241,6 +242,7 @@ router.get(
       status: tx.status,
       lastPaymentError: tx.lastPaymentError ?? undefined,
       createdAt: tx.createdAt.toISOString(),
+      payment: paymentInfo(tx, 'admin'),
     })));
   }),
 );
@@ -336,6 +338,7 @@ router.get(
       paidAt: tx.paidAt?.toISOString(),
       shipByAt: shipByAtOf(tx, shipByHours)?.toISOString(),
       notShippedReportedAt: tx.notShippedReportedAt?.toISOString(),
+      payment: paymentInfo(tx, 'admin'),
     })));
   }),
 );

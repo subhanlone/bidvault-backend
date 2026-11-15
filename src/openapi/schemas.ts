@@ -416,6 +416,53 @@ export const SellerReviewsDto = z
   })
   .meta({ id: 'SellerReviews' });
 
+// How a sale was paid (all simulated) and why it was refunded. Built per viewer by
+// services/refund-summary.ts: the seller never receives accountHint, bankTransferReference,
+// paidTo or expectedArrival.
+export const PaymentMethod = z
+  .enum(['CARD', 'JAZZCASH', 'EASYPAISA', 'BANK_TRANSFER'])
+  .meta({ id: 'PaymentMethod' });
+export const RefundReason = z
+  .enum(['NOT_SHIPPED_SELLER', 'NOT_SHIPPED_ADMIN', 'NOT_SHIPPED_AUTO', 'DISPUTE_UPHELD', 'LISTING_TAKEN_DOWN'])
+  .meta({ id: 'RefundReason' });
+export const RefundedBy = z.enum(['SELLER', 'ADMIN', 'SYSTEM']).meta({ id: 'RefundedBy' });
+
+/** How a paid sale was paid. A sale paid before methods existed shows as CARD with no hint. */
+export const PaymentInfoDto = z
+  .object({
+    method: PaymentMethod,
+    methodLabel: z.string(),
+    /** "Visa •••4242" or "0300•••567"; never sent to the seller. */
+    accountHint: z.string().optional(),
+    /** The bank transfer's reference; never sent to the seller. */
+    bankTransferReference: z.string().optional(),
+  })
+  .meta({ id: 'PaymentInfo' });
+
+/**
+ * A refunded sale explained. A refund made before the refund record existed carries only amount
+ * and paymentReference. paidTo and expectedArrival are for the buyer and admins only.
+ */
+export const RefundSummaryDto = z
+  .object({
+    amount: z.number().int(),
+    reason: RefundReason.optional(),
+    /** The reason in plain words, worded for the viewer. */
+    reasonText: z.string().optional(),
+    refundedBy: RefundedBy.optional(),
+    /** What the seller or admin wrote; absent for automatic refunds. */
+    note: z.string().optional(),
+    refundedAt: isoDateTime.optional(),
+    /** RFD-<random>. */
+    refundReference: z.string().optional(),
+    paymentReference: z.string().optional(),
+    /** Where the money went back to: "JazzCash 0300•••567", "Visa •••4242", "Bank transfer (ref …)". */
+    paidTo: z.string().optional(),
+    /** Typical timing for the method, marked as simulated. */
+    expectedArrival: z.string().optional(),
+  })
+  .meta({ id: 'RefundSummary' });
+
 export const WonTransactionDto = z
   .object({
     transactionId: z.string(),
@@ -455,6 +502,10 @@ export const WonTransactionDto = z
     reviewId: z.string().optional(),
     reviewStars: z.number().int().optional(),
     reviewComment: z.string().optional(),
+    /** How it was paid, once paid. */
+    payment: PaymentInfoDto.optional(),
+    /** Present when the sale was refunded. */
+    refund: RefundSummaryDto.optional(),
   })
   .meta({ id: 'WonTransaction' });
 
@@ -534,6 +585,10 @@ export const InvoiceDto = z
     disputeStatus: z.enum(['OPEN', 'RESOLVED_REFUNDED', 'RESOLVED_RELEASED']).optional(),
     disputeReason: z.string().optional(),
     disputeResolutionNote: z.string().optional(),
+    /** How it was paid, once paid; the seller gets the method name only. */
+    payment: PaymentInfoDto.optional(),
+    /** Present when the sale was refunded; the seller is not told where the money went. */
+    refund: RefundSummaryDto.optional(),
   })
   .meta({ id: 'Invoice' });
 
@@ -580,6 +635,8 @@ export const AdminTransactionDto = z
     paidAt: isoDateTime.optional(),
     shipByAt: isoDateTime.optional(),
     notShippedReportedAt: isoDateTime.optional(),
+    /** How it was paid, on a paid sale. */
+    payment: PaymentInfoDto.optional(),
   })
   .meta({ id: 'AdminTransaction' });
 
@@ -917,6 +974,8 @@ export const SellerItemDto = z
         reviewStars: z.number().int().optional(),
         /** What the next bidder would pay if offered an unpaid sale; null when there is nobody to offer to, or it is not an unpaid sale. */
         nextBidderOffer: z.number().int().nullable(),
+        /** Present when the sale was refunded: why, who, when and the reference, never the buyer's account. */
+        refund: RefundSummaryDto.optional(),
       })
       .optional(),
     /** The new listing created from this one's unpaid sale. */

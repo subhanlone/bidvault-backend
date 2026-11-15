@@ -14,7 +14,8 @@ import {
   respondToDisputeSchema,
 } from '../../openapi/requests.js';
 import { dispatchEmail, sendPaymentCompletedEmail } from '../../services/email.service.js';
-import { chargeCard } from '../../services/payment-gateway.service.js';
+import { charge, type ChargeInput } from '../../services/payment-gateway.service.js';
+import { paymentInfo, refundSummary, type Viewer } from '../../services/refund-summary.js';
 import { getPlatformSettings, shipByAtFrom } from '../../services/settings.service.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import {
@@ -93,6 +94,8 @@ router.get(
       reviewId: tx.review?.id,
       reviewStars: tx.review?.stars,
       reviewComment: tx.review?.comment ?? undefined,
+      payment: paymentInfo(tx, 'buyer'),
+      refund: refundSummary(tx, 'buyer'),
     })));
   }),
 );
@@ -218,7 +221,14 @@ router.post(
   asyncHandler<z.infer<typeof payTransactionSchema>>(async (req, res) => {
     const winnerId = req.auth!.userId;
     const { transactionId } = req.params;
-    const { cardNumber, deliveryAddress, deliveryPhone } = req.body;
+    const body = req.body;
+    const { deliveryAddress, deliveryPhone } = body;
+    // Only the chosen method's field reaches the gateway; the schema has already refused any
+    // other method's field and normalised a wallet number.
+    const chargeInput: ChargeInput =
+      body.method === 'CARD' ? { method: 'CARD', cardNumber: body.cardNumber }
+        : body.method === 'BANK_TRANSFER' ? { method: 'BANK_TRANSFER', bankReference: body.bankReference }
+          : { method: body.method, walletNumber: body.walletNumber };
     const { shipByHours } = await getPlatformSettings();
 
     // The whole read-decide-write runs under a row lock — a double-clicked Pay button is
@@ -264,14 +274,14 @@ router.post(
         return { kind: 'removed' as const };
       }
 
-      const charge = chargeCard(cardNumber);
+      const result = charge(chargeInput);
 
-      if (!charge.ok) {
+      if (!result.ok) {
         await dbTx.auctionTransaction.update({
           where: { id: row.id },
-          data: { deliveryAddress, deliveryPhone, lastPaymentError: charge.reason },
+          data: { deliveryAddress, deliveryPhone, lastPaymentError: result.reason },
         });
-        return { kind: 'declined' as const, reason: charge.reason };
+        return { kind: 'declined' as const, reason: result.reason };
       }
 
       // FR-02: the seller's ship-by time runs from the payment, the way eBay's handling time does.
@@ -281,7 +291,12 @@ router.post(
         data: {
           deliveryAddress,
           deliveryPhone,
-          paymentReference: charge.reference,
+          paymentReference: result.reference,
+          // How it was paid, as a masked hint only. A retry after a declined card overwrites
+          // nothing stale: these are written only here, on success.
+          paymentMethod: result.method,
+          paymentAccountHint: result.accountHint,
+          bankTransferReference: result.bankTransferReference,
           status: 'COMPLETED',
           paidAt,
           shipByAt: shipByAtFrom(paidAt, shipByHours),
@@ -528,6 +543,9 @@ router.get(
       fail(res, 'Forbidden.', 403);
       return;
     }
+    // The invoice is shared, so how it was paid and refunded is worded for whoever asks: the
+    // seller learns the method's name, never the buyer's account or bank reference.
+    const viewer: Viewer = role === 'ADMIN' ? 'admin' : tx.winnerId === userId ? 'buyer' : 'seller';
 
     ok(res, {
       transactionId: tx.id,
@@ -550,6 +568,8 @@ router.get(
       disputeStatus: tx.dispute?.status,
       disputeReason: tx.dispute?.reason,
       disputeResolutionNote: tx.dispute?.resolutionNote ?? undefined,
+      payment: paymentInfo(tx, viewer),
+      refund: refundSummary(tx, viewer),
     });
   }),
 );
