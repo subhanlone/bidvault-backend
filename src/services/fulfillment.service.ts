@@ -1,4 +1,5 @@
-import type { Prisma, TransactionStatus } from '@prisma/client';
+import { randomBytes } from 'node:crypto';
+import type { Prisma, RefundReason, TransactionStatus } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
 import { getPlatformSettings } from './settings.service.js';
 import { noteStandingChange, sellerStanding } from './seller-limit.service.js';
@@ -390,7 +391,10 @@ export async function resolveDispute(
       // There is nothing to reverse.
       // B5 PR 3a: every refunded paid sale is a defect, which can bring the monthly limit back.
       const standingBefore = await sellerStanding(tx, sale.sellerId);
-      await tx.auctionTransaction.update({ where: { id: dispute.transactionId }, data: { status: 'REFUNDED' } });
+      await tx.auctionTransaction.update({
+        where: { id: dispute.transactionId },
+        data: refundRecordData('DISPUTE_UPHELD', { by: 'admin', userId: adminUserId, reason: note }, new Date()),
+      });
       await noteStandingChange(tx, sale.sellerId, standingBefore);
     }
 
@@ -603,6 +607,26 @@ export type RefundActor =
   | { by: 'admin'; userId: string; reason: string }
   | { by: 'system'; reason: string };
 
+/**
+ * The status flip to REFUNDED together with the refund record, so no path can set one without the
+ * other: when, an RFD- reference (made like PAY-), why, who, and the seller's or admin's own words
+ * (null for the worker, whose reason is fixed). Used by refundLockedSale and by resolveDispute.
+ */
+export function refundRecordData(
+  reason: RefundReason,
+  actor: RefundActor,
+  at: Date,
+): Prisma.AuctionTransactionUpdateInput {
+  return {
+    status: 'REFUNDED',
+    refundedAt: at,
+    refundReference: `RFD-${randomBytes(9).toString('base64url')}`,
+    refundReason: reason,
+    refundedBy: actor.by === 'seller' ? 'SELLER' : actor.by === 'admin' ? 'ADMIN' : 'SYSTEM',
+    refundNote: actor.by === 'system' ? null : actor.reason,
+  };
+}
+
 export type RefundedSale = {
   transactionId: string;
   auctionTitle: string;
@@ -620,13 +644,14 @@ export async function refundLockedSale(
   tx: Prisma.TransactionClient,
   transactionId: string,
   actor: RefundActor,
+  reason: RefundReason,
 ): Promise<RefundedSale> {
   // B5 PR 3a: every refunded paid sale is a defect, which can bring the monthly limit back.
   const { sellerId } = await tx.auctionTransaction.findUniqueOrThrow({ where: { id: transactionId }, select: { sellerId: true } });
   const standingBefore = await sellerStanding(tx, sellerId);
   const sale = await tx.auctionTransaction.update({
     where: { id: transactionId },
-    data: { status: 'REFUNDED' },
+    data: refundRecordData(reason, actor, new Date()),
     select: {
       winnerId: true,
       sellerId: true,
@@ -702,7 +727,8 @@ export async function refundUnshippedSale(
     if (actor.by === 'seller' && row.sellerId !== actor.userId) return { kind: 'forbidden' as const };
     // Only a sale paid and not yet sent. Once shipped, a problem goes through the buyer's dispute.
     if (row.status !== 'COMPLETED') return { kind: 'wrong-state' as const };
-    return { kind: 'ok' as const, refunded: await refundLockedSale(tx, row.id, actor) };
+    const reason = actor.by === 'seller' ? 'NOT_SHIPPED_SELLER' : 'NOT_SHIPPED_ADMIN';
+    return { kind: 'ok' as const, refunded: await refundLockedSale(tx, row.id, actor, reason) };
   });
 
   if (outcome.kind !== 'ok') return outcome;
@@ -739,7 +765,7 @@ export async function refundUnansweredReport(transactionId: string): Promise<Ref
     });
     const due = autoRefundAtOf({ status: 'COMPLETED', notShippedReportedAt });
     if (!due || due > new Date()) return { kind: 'wrong-state' as const };
-    return { kind: 'ok' as const, refunded: await refundLockedSale(tx, row.id, actor) };
+    return { kind: 'ok' as const, refunded: await refundLockedSale(tx, row.id, actor, 'NOT_SHIPPED_AUTO') };
   });
 
   if (outcome.kind !== 'ok') return outcome;
