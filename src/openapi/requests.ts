@@ -199,16 +199,23 @@ const payDelivery = {
   deliveryPhone: z.string().trim().min(7).max(20),
 };
 
-// JazzCash and Easypaisa take any Pakistani mobile number, stored nowhere in full: it is
-// normalised to 03XXXXXXXXX here and the gateway keeps only a masked hint.
-const pkMobile = z.string().trim().transform((raw, ctx) => {
-  const normalized = normalizePkMobile(raw);
-  if (!normalized) {
-    ctx.addIssue({ code: 'custom', message: 'Enter a Pakistani mobile number, e.g. 0300 1234567' });
-    return z.NEVER;
-  }
-  return normalized;
-});
+// JazzCash and Easypaisa take any Pakistani mobile number (03…, 92 3… or +92 3…, spaces and dashes
+// allowed), stored nowhere in full: it is normalised to 03XXXXXXXXX here and the gateway keeps only
+// a masked hint.
+const pkMobile = z
+  .string()
+  .trim()
+  .transform((raw, ctx) => {
+    const normalized = normalizePkMobile(raw);
+    if (!normalized) {
+      ctx.addIssue({ code: 'custom', message: 'Enter a Pakistani mobile number, e.g. 0300 1234567' });
+      return z.NEVER;
+    }
+    return normalized;
+  })
+  // An example only: a description would also change the frontend's generated types (as a doc
+  // comment) for no change in shape. The accepted forms are listed in the comment above.
+  .meta({ example: '0300 1234567' });
 
 // One branch per payment method (all simulated). Each branch is strict, so a field belonging to
 // another method is a 400: a card number typed before the buyer switched to JazzCash can never
@@ -219,7 +226,9 @@ export const payTransactionSchema = z
       method: z.literal('CARD'),
       // Never stored — services/payment-gateway.service.ts reads it once to decide success/
       // decline and keeps only a "Visa •••4242" hint, the same as a real processor would.
-      cardNumber: z.string().trim().min(12).max(24),
+      // 12 to 19 digits (real card lengths), optionally grouped by single spaces or dashes: the
+      // stored hint is the last 4, so nothing but digits may reach it.
+      cardNumber: z.string().trim().max(24).regex(/^(?:\d[\s-]?){11,18}\d$/, 'Enter a card number: 12 to 19 digits'),
       ...payDelivery,
     }).strict(),
     z.object({

@@ -571,7 +571,7 @@ export async function takedownListing(
   io?: Server,
 ): Promise<TakedownListingResult> {
   const cancelActor: CancelActor = { userId: adminUserId, isAdmin: true, reason: `Listing removed: ${reason}` };
-  const refundActor: RefundActor = { by: 'admin', userId: adminUserId, reason: `Listing removed: ${reason}` };
+  const refundActor: RefundActor = { by: 'admin', userId: adminUserId, reason: `Listing removed: ${reason}`, note: reason };
 
   const outcome = await prisma.$transaction(async (tx) => {
     // Which auction belongs to this listing never changes, so it is read before taking any lock.

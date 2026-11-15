@@ -197,3 +197,47 @@ describe('payment and refund details in the read models', () => {
     expect(invoice.refund).toEqual({ amount: invoice.amount, paymentReference: 'PAY-legacy0001' });
   });
 });
+
+describe('review follow-ups', () => {
+  const get = (path: string, token: string) => request(app).get(api(path)).set(bearer(token));
+
+  /** A sale paid before payment methods existed: a reference, no method, no hint. */
+  async function legacy(data: Record<string, unknown>) {
+    await prisma.auctionTransaction.update({
+      where: { id: w.transactionId },
+      data: { paidAt: new Date(), paymentReference: 'PAY-legacy0002', deliveryAddress: '123 Test Street, Karachi', deliveryPhone: '03001234567', ...data },
+    });
+  }
+
+  it('refuses a card number that is not 12 to 19 digits, so no letters reach the stored hint', async () => {
+    const res = await pay({ method: 'CARD', cardNumber: 'abcd efgh ijkl' });
+    expect(res.status).toBe(400);
+    expect(resError(res).details).toHaveProperty('cardNumber');
+    expect((await reload(w.transactionId)).status).toBe('PENDING');
+  });
+
+  it('a legacy paid sale shows as Card in my-wins, with no refund', async () => {
+    await legacy({ status: 'COMPLETED' });
+    const mine = resData<WonRow[]>(await get('/payments/my-wins', w.buyer.token)).find((t) => t.transactionId === w.transactionId);
+    expect(mine?.payment).toEqual({ method: 'CARD', methodLabel: 'Card' });
+    expect(mine?.refund).toBeUndefined();
+  });
+
+  it('a legacy paid sale shows as Card on the admin unshipped list', async () => {
+    await legacy({ status: 'COMPLETED', shipByAt: new Date(Date.now() - 60_000) });
+    const row = resData<AdminRow[]>(await get('/admin/transactions/unshipped', w.admin.token)).find((t) => t.transactionId === w.transactionId);
+    expect(row?.payment).toEqual({ method: 'CARD', methodLabel: 'Card' });
+  });
+
+  it('a legacy refunded sale gives the seller the amount and payment reference only', async () => {
+    await legacy({ status: 'REFUNDED' });
+    const item = resData<{ items: SellerItemRow[] }>(await get('/seller/items?tab=sold', w.seller.token)).items
+      .find((i) => i.sale?.transactionId === w.transactionId);
+    expect(item?.sale?.refund).toEqual({ amount: expect.any(Number) as number, paymentReference: 'PAY-legacy0002' });
+  });
+
+  it('the contract shows what a wallet number looks like', async () => {
+    const { document } = await import('../src/openapi/document.js');
+    expect(JSON.stringify(document.components?.schemas?.PayTransactionRequest)).toContain('0300 1234567');
+  });
+});

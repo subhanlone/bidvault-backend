@@ -144,7 +144,10 @@ const pkr = (amount: number) => `PKR ${amount.toLocaleString()}`;
 
 /** The buyer's in-app notice: how much, where it went, why, the references and when it lands. */
 export function buyerRefundMessage(title: string, v: RefundSummaryView): string {
-  const parts = [`Refunded ${pkr(v.amount)} for "${title}"${v.paidTo ? ` to your ${v.paidTo}` : ''}.`];
+  // "Back to: …" reads right for every method ("Back to: Card", "Back to: Bank transfer (ref …)"),
+  // where "to your <method>" did not.
+  const parts = [`Refunded ${pkr(v.amount)} for "${title}".`];
+  if (v.paidTo) parts.push(`Back to: ${v.paidTo}.`);
   if (v.reasonText) parts.push(`Why: ${sentence(v.reasonText)}`);
   if (v.note) parts.push(`Note: ${sentence(v.note)}`);
   if (v.refundReference) parts.push(`Refund ref ${v.refundReference}${v.paymentReference ? ` (payment ${v.paymentReference})` : ''}.`);
