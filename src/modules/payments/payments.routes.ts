@@ -15,6 +15,7 @@ import {
 } from '../../openapi/requests.js';
 import { dispatchEmail, sendPaymentCompletedEmail } from '../../services/email.service.js';
 import { charge, type ChargeInput } from '../../services/payment-gateway.service.js';
+import { paymentInfo, refundSummary, type Viewer } from '../../services/refund-summary.js';
 import { getPlatformSettings, shipByAtFrom } from '../../services/settings.service.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
 import {
@@ -93,6 +94,8 @@ router.get(
       reviewId: tx.review?.id,
       reviewStars: tx.review?.stars,
       reviewComment: tx.review?.comment ?? undefined,
+      payment: paymentInfo(tx, 'buyer'),
+      refund: refundSummary(tx, 'buyer'),
     })));
   }),
 );
@@ -540,6 +543,9 @@ router.get(
       fail(res, 'Forbidden.', 403);
       return;
     }
+    // The invoice is shared, so how it was paid and refunded is worded for whoever asks: the
+    // seller learns the method's name, never the buyer's account or bank reference.
+    const viewer: Viewer = role === 'ADMIN' ? 'admin' : tx.winnerId === userId ? 'buyer' : 'seller';
 
     ok(res, {
       transactionId: tx.id,
@@ -562,6 +568,8 @@ router.get(
       disputeStatus: tx.dispute?.status,
       disputeReason: tx.dispute?.reason,
       disputeResolutionNote: tx.dispute?.resolutionNote ?? undefined,
+      payment: paymentInfo(tx, viewer),
+      refund: refundSummary(tx, viewer),
     });
   }),
 );

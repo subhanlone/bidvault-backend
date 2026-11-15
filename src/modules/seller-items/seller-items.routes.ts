@@ -13,6 +13,7 @@ import { findNextBidAmounts } from '../../services/auction-control.service.js';
 import { disputeResponseDueAt, shipByFields } from '../../services/fulfillment.service.js';
 import { getPlatformSettings } from '../../services/settings.service.js';
 import { sellerLimits } from '../../services/seller-limit.service.js';
+import { refundSummary } from '../../services/refund-summary.js';
 import {
   SELLER_ITEM_TABS,
   STAGE_TAB,
@@ -217,6 +218,7 @@ async function toDtos(rows: ItemRow[]): Promise<SellerItemDtoType[]> {
         payoutAt: sale.ledgerEntry?.createdAt.toISOString(),
         reviewStars: sale.review?.stars,
         nextBidderOffer: next,
+        refund: refundSummary(sale, 'seller'),
       },
       relistedAs: row.relistedAs ? { listingId: row.relistedAs.id, listingCode: row.relistedAs.listingCode } : undefined,
     };
