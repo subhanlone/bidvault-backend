@@ -93,6 +93,8 @@ describe('POST /payments/:id/pay with a method', () => {
   it('refuses a wallet payment carrying cardNumber', async () => {
     const res = await pay({ method: 'JAZZCASH', walletNumber: '03001234567', cardNumber: APPROVED_TEST_CARD });
     expect(res.status).toBe(400);
+    // The 400 names the field that does not belong, so a client can say which one it is.
+    expect(resError(res).details).toHaveProperty('cardNumber');
     expect((await reload(w.transactionId)).status).toBe('PENDING');
   });
 
