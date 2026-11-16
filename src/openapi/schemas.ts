@@ -752,12 +752,10 @@ export const OtpIssuedDto = z
     message: z.string(),
     resetCode: z.string().optional(),
     verificationCode: z.string().optional(),
-    // Optional because both routes that return this have a neutral early exit — an
-    // unknown address on forgot-password, an already-verified one on resend-verification.
-    // Those answer with a message and nothing else, deliberately: an expiry timestamp
-    // would confirm the account exists, which is the enumeration leak the neutral
-    // response is there to prevent. Declaring it required made the contract describe a
-    // response the server has never sent. Found by the response-contract middleware.
+    // Optional. forgot-password never sends it: its reply is identical for a registered and an
+    // unknown address (message only; resetCode outside production), because a timestamp on one
+    // path and not the other told them apart (report TC8). resend-verification sends it to an
+    // unverified account and leaves it out on its neutral exit (an already-verified address).
     codeExpiresAt: isoDateTime.optional(),
   })
   .meta({ id: 'OtpIssued' });
