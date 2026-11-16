@@ -522,6 +522,8 @@ router.post(
   }),
 );
 
+const FORGOT_PASSWORD_REPLY = 'If that email is registered, a reset code was sent.';
+
 router.post(
   '/forgot-password',
   authEmailIpRateLimit,
@@ -531,9 +533,12 @@ router.post(
     const { email } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
-    // FP-01: return generic 200 regardless — prevents email enumeration
+    // FP-01: the reply must not say whether the address is registered, so a registered and an
+    // unknown address get the same status, message and fields. The registered path used to answer
+    // "Reset code sent." with a codeExpiresAt, which told them apart (report test case TC8). Only
+    // the development-only resetCode differs, and production never sends it.
     if (!user) {
-      ok(res, { message: 'If that email is registered, a reset code was sent.' });
+      ok(res, { message: FORGOT_PASSWORD_REPLY });
       return;
     }
 
@@ -555,9 +560,8 @@ router.post(
     dispatchEmail(sendPasswordResetEmail({ email: user.email, name: user.name }, code), 'password reset');
 
     ok(res, {
-      message: 'Reset code sent.',
+      message: FORGOT_PASSWORD_REPLY,
       resetCode: env.NODE_ENV === 'production' ? undefined : code,
-      codeExpiresAt: codeExpiresAt.toISOString(),
     });
   }),
 );
