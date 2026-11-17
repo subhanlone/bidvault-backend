@@ -95,6 +95,11 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/auctions/{auctionId}/cancel',
     url: (w) => `/auctions/${w.liveAuctionId}/cancel`, allow: ['BUYER', 'SELLER'],
     body: () => ({ reason: 'Authz probe' }) },
+  // Role gate only, like cancel: the ownership, reserve and expectedBid checks are in
+  // tests/end-auction-now.test.ts.
+  { method: 'post', contractPath: '/auctions/{auctionId}/end-now',
+    url: (w) => `/auctions/${w.liveAuctionId}/end-now`, allow: ['BUYER', 'SELLER'],
+    body: () => ({ expectedBid: 21_000 }) },
 
   // ---- listings -------------------------------------------------------------------------
   { method: 'post', contractPath: '/listings/upload-signature', url: () => '/listings/upload-signature', allow: ['SELLER'] },
