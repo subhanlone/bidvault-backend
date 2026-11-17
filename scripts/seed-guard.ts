@@ -66,6 +66,16 @@ export function assertSeedTarget(scriptName: string): SeedGuardResult {
  * A password from the environment, or a hard stop. There is deliberately no default: a
  * default is how a known credential ends up in a database nobody meant to put it in.
  */
+/**
+ * A seeded account's address: the variable when it is set, otherwise a fallback on the reserved
+ * `bidvault.local` domain. Seeds used to write real-looking Gmail addresses, and a local backend
+ * with an email key would then mail whoever owns them; nothing can be delivered to `.local`.
+ */
+export function seedEmail(variable: string, fallback: string): string {
+  const value = process.env[variable]?.trim().toLowerCase();
+  return value ? value : fallback;
+}
+
 export function requiredPassword(variable: string): string {
   const value = process.env[variable];
   if (!value || value.length < 8) {

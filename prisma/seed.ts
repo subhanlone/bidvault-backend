@@ -1,6 +1,6 @@
 import { PrismaClient, AuctionStatus, ListingStatus, UserRole, ItemCondition } from '@prisma/client';
 import { hash } from '@node-rs/bcrypt';
-import { assertSeedTarget, requiredPassword } from '../scripts/seed-guard.js';
+import { assertSeedTarget, requiredPassword, seedEmail } from '../scripts/seed-guard.js';
 import { enrolledSellerFields } from '../scripts/seed-seller.js';
 
 assertSeedTarget('prisma:seed');
@@ -19,7 +19,7 @@ async function upsertUser(params: {
   role: UserRole;
   password: string;
   isEmailVerified?: boolean;
-  seller?: ReturnType<typeof enrolledSellerFields>;
+  seller?: ReturnType<typeof enrolledSellerFields> & { sellerLimitOverrideItems?: number; sellerLimitOverrideValue?: number };
 }) {
   const passwordHash = await hash(params.password, 12);
   return prisma.user.upsert({
@@ -46,25 +46,33 @@ async function main() {
   const sellerPassword = requiredPassword('SEED_SELLER_PASSWORD');
   const adminPassword = requiredPassword('SEED_ADMIN_PASSWORD');
 
+  // Addresses from the environment when set; otherwise on the undeliverable bidvault.local domain.
   const buyer = await upsertUser({
     name: 'Sawera Noor',
-    email: 'sawera@gmail.com',
+    email: seedEmail('SEED_BUYER_EMAIL', 'buyer@bidvault.local'),
     role: UserRole.BUYER,
     password: buyerPassword,
   });
 
   const seller = await upsertUser({
     name: 'Ahmed Raza',
-    email: 'ahmed@gmail.com',
+    email: seedEmail('SEED_SELLER_EMAIL', 'seller@bidvault.local'),
     // FR-13: an ordinary account that has enrolled as a seller, as every real seller is (B5).
     role: UserRole.BUYER,
     password: sellerPassword,
-    seller: enrolledSellerFields('Lahore', 'Punjab'),
+    seller: {
+      ...enrolledSellerFields('Lahore', 'Punjab'),
+      // B5: a new seller may list 10 items or PKR 150,000 a month until three sales are delivered;
+      // this one's PKR 285,000 phone is over that, so an admin has raised their personal limit,
+      // as the Users screen lets an admin do. Without it the item could not have been listed.
+      sellerLimitOverrideItems: 20,
+      sellerLimitOverrideValue: 1_000_000,
+    },
   });
 
   await upsertUser({
     name: 'Admin BidVault',
-    email: 'admin@bidvault.com',
+    email: seedEmail('SEED_ADMIN_EMAIL', 'admin@bidvault.local'),
     role: UserRole.ADMIN,
     password: adminPassword,
   });
