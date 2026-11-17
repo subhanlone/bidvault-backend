@@ -42,6 +42,7 @@ import {
   sendSessionsRevokedSecurityAlertEmail,
   sendAccountDeletedEmail,
   sendVerificationResentEmail,
+  sendAccountExistsEmail,
 } from '../../services/email.service.js';
 import {
   authEmailAddressRateLimit,
@@ -172,24 +173,26 @@ router.post(
   asyncHandler<z.infer<typeof registerSchema>>(async (req, res) => {
     const { name, email, password, role } = req.body;
     const normalizedEmail = email.toLowerCase();
+    // Hashed before anything else, whatever the address: the hash is most of this route's time,
+    // so an address that already has an account must not answer measurably faster.
+    const passwordHash = await hashPassword(password);
 
+    // An address that already has an account gets the same answer as a new one: the reply must
+    // not tell anyone which addresses are registered (OWASP authentication cheat sheet). What
+    // differs is only the email the owner receives.
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (existing) {
-      fail(res, 'An account with this email already exists.', 409);
+      await answerExistingRegistration(res, existing);
       return;
     }
 
-    // BV-043: the pre-check above gives the good message on the common path, but a concurrent
-    // identical request can still win the race between that read and this write -- the loser
-    // hit the shared P2002 handler's generic "A record with these details already exists."
-    // instead of this route's own wording. This is the authoritative fallback for that race.
     let user;
     try {
       user = await prisma.user.create({
         data: {
           name,
           email: normalizedEmail,
-          passwordHash: await hashPassword(password),
+          passwordHash,
           // Every account starts as a plain one; the legacy SELLER value (older clients) also
           // grants the capability, as the migration did for accounts that already existed.
           role: role ?? 'BUYER',
@@ -199,9 +202,14 @@ router.post(
         },
       });
     } catch (err) {
+      // BV-043: a concurrent identical request won the race between the read above and this
+      // write. The account now exists, so this one is answered like any other existing address.
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        fail(res, 'An account with this email already exists.', 409);
-        return;
+        const winner = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+        if (winner) {
+          await answerExistingRegistration(res, winner);
+          return;
+        }
       }
       throw err;
     }
@@ -218,17 +226,42 @@ router.post(
 
     dispatchEmail(sendWelcomeEmail({ email: user.email, name: user.name }, code), 'welcome');
 
-    ok(
-      res,
-      {
-        user: sanitizeUser(user),
-        verificationCode: env.NODE_ENV === 'production' ? undefined : code,
-        codeExpiresAt: codeExpiresAt.toISOString(),
-      },
-      201,
-    );
+    ok(res, registrationReply(codeExpiresAt, code), 201);
   }),
 );
+
+const REGISTRATION_REPLY = 'Check your email for a verification code.';
+
+/** One shape for every address. The code itself only outside production, for local testing. */
+function registrationReply(codeExpiresAt: Date, code?: string) {
+  return {
+    message: REGISTRATION_REPLY,
+    verificationCode: env.NODE_ENV === 'production' ? undefined : code,
+    codeExpiresAt: codeExpiresAt.toISOString(),
+  };
+}
+
+/**
+ * Registration with an address that already has an account: the same 201 a new address gets.
+ * An unverified account is sent a fresh code, so its owner can finish signing up (their original
+ * password stands; the one just typed is not stored). A verified one is told that an account
+ * already exists, with the way to sign in or reset the password.
+ */
+async function answerExistingRegistration(res: Response, user: { id: string; email: string; name: string; isEmailVerified: boolean }) {
+  // (A deleted account cannot be reached here: its address is on the reserved .invalid domain,
+  // which the request schema refuses.)
+  if (user.isEmailVerified) {
+    dispatchEmail(sendAccountExistsEmail({ email: user.email, name: user.name }), 'account exists');
+    ok(res, registrationReply(new Date(Date.now() + OTP_EXPIRY_MS)), 201);
+    return;
+  }
+  await prisma.emailVerificationToken.deleteMany({ where: { userId: user.id, consumedAt: null } });
+  const code = generateOtp();
+  const codeExpiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
+  await prisma.emailVerificationToken.create({ data: { userId: user.id, code, expiresAt: codeExpiresAt } });
+  dispatchEmail(sendVerificationResentEmail({ email: user.email, name: user.name }, code), 'verification resent (register)');
+  ok(res, registrationReply(codeExpiresAt, code), 201);
+}
 
 router.post(
   '/verify-email',
@@ -656,8 +689,11 @@ router.post(
     const { email } = req.body;
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
+    // One reply for every address (TC8's sibling): the same message and the same fields, so the
+    // verification screen's countdown works either way and nothing tells a registered, unverified
+    // address apart from an unknown or already verified one. Only the development-only code differs.
     if (!user || user.isEmailVerified) {
-      ok(res, { message: 'If that email exists and is unverified, a new code was sent.' });
+      ok(res, { message: RESEND_REPLY, codeExpiresAt: new Date(Date.now() + OTP_EXPIRY_MS).toISOString() });
       return;
     }
 
@@ -679,12 +715,14 @@ router.post(
     dispatchEmail(sendVerificationResentEmail({ email: user.email, name: user.name }, code), 'verification resent');
 
     ok(res, {
-      message: 'Verification code resent.',
+      message: RESEND_REPLY,
       verificationCode: env.NODE_ENV === 'production' ? undefined : code,
       codeExpiresAt: codeExpiresAt.toISOString(),
     });
   }),
 );
+
+const RESEND_REPLY = 'If that email is registered and not yet verified, a new code was sent.';
 
 router.post(
   '/change-password',

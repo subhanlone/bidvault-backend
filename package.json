@@ -22,6 +22,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
+    "seed:e2e": "node --env-file=.env.test --env-file-if-exists=../frontend/.env.test --import tsx scripts/seed-e2e.ts",
     "lint": "eslint ."
   },
   "dependencies": {

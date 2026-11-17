@@ -5,7 +5,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
-import { resData } from './helpers/api.js';
+import { resData, resError } from './helpers/api.js';
 
 vi.mock('resend', () => ({
   Resend: class {
@@ -146,7 +146,7 @@ describe('what it refuses', () => {
   it('a reserve that has not been met', async () => {
     const res = await endNow(w.seller.token, 21_000);
     expect(res.status).toBe(409);
-    expect(res.body.error).toBe('The reserve price has not been met yet.');
+    expect(resError(res).error).toBe('The reserve price has not been met yet.');
     await expectNothingEnded();
   });
 
@@ -154,7 +154,7 @@ describe('what it refuses', () => {
     await reserveMet();
     const res = await endNow(w.seller.token, 20_500);
     expect(res.status).toBe(409);
-    expect(res.body.error).toContain('PKR 21,000');
+    expect(resError(res).error).toContain('PKR 21,000');
     await expectNothingEnded();
   });
 
@@ -170,7 +170,7 @@ describe('what it refuses', () => {
     await prisma.auction.update({ where: { id: w.liveAuctionId }, data: { bidCount: 0, reservePrice: null } });
     const res = await endNow(w.seller.token, 21_000);
     expect(res.status).toBe(409);
-    expect(res.body.error).toContain('Cancel it instead');
+    expect(resError(res).error).toContain('Cancel it instead');
   });
 
   it('an auction that is no longer live', async () => {
@@ -178,7 +178,7 @@ describe('what it refuses', () => {
     expect((await endNow(w.seller.token, 21_000)).status).toBe(200);
     const again = await endNow(w.seller.token, 21_000);
     expect(again.status).toBe(409);
-    expect(again.body.error).toBe('Only a live auction can be ended.');
+    expect(resError(again).error).toBe('Only a live auction can be ended.');
     expect(await prisma.auctionTransaction.count({ where: { auctionId: w.liveAuctionId } })).toBe(1);
   });
 

@@ -8,7 +8,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
-import { resError } from './helpers/api.js';
+import { resData, resError } from './helpers/api.js';
 
 vi.mock('resend', () => ({
   Resend: class {
@@ -50,7 +50,7 @@ afterAll(async () => {
 });
 
 describe('duplicate submit past the pre-check', () => {
-  it('registration: falls back to the specific 409 message, not the generic one', async () => {
+  it('registration: a race lost to the unique constraint gets the same neutral 201 as any existing address', async () => {
     await prisma.user.create({
       data: {
         name: 'Already Registered',
@@ -71,8 +71,10 @@ describe('duplicate submit past the pre-check', () => {
       role: 'BUYER',
     });
 
-    expect(res.status).toBe(409);
-    expect(resError(res).error).toBe('An account with this email already exists.');
+    // Not the generic P2002 500/409 and not a leak: the reply a new address gets.
+    expect(res.status).toBe(201);
+    expect(resData<{ message: string }>(res).message).toBe('Check your email for a verification code.');
+    expect(await prisma.user.count({ where: { email: 'racer@test.local' } })).toBe(1);
   });
 
   it('reviews: falls back to the specific 409 message, not the generic one', async () => {

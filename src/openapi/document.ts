@@ -436,7 +436,13 @@ const documentInput = {
     // EndAuctionNowRequest. The seller ends a live auction with bids and a met (or no) reserve, and
     // the highest bidder wins as at a normal close. A new `auction:ended` socket event tells the
     // auction's room to refetch.
-    version: '13.2.0',
+    //
+    // 14.0.0, 2026-11-18, major: POST /auth/register no longer tells a new address from one that
+    // already has an account. Registration drops `user` and gains `message`, and the 409 for an existing
+    // address is gone: every address gets the same 201, and the owner of an existing account is
+    // emailed instead. Breaking for a caller that read `user` or relied on the 409; the one client
+    // reads neither. Not shape-changing: resend-verification now always sends codeExpiresAt and one message.
+    version: '14.0.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -480,11 +486,11 @@ const documentInput = {
     '/auth/register': {
       post: {
         tags: ['Auth'],
+        summary: 'Neutral response — the same 201 whether or not the address already has an account',
         requestBody: jsonRequest(R.registerSchema),
         responses: {
-          201: okBody(S.RegistrationDto, 'Account created; verification code sent'),
+          201: okBody(S.RegistrationDto, 'A verification code was sent, or the owner of an existing account was emailed'),
           400: badRequest,
-          409: errBody('Email already registered'),
         },
       },
     },
