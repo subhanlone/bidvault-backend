@@ -1,13 +1,12 @@
 /**
- * Bidder and reviewer identity masking on the two unauthenticated feeds (BV-039).
+ * Who a bid or a review shows as.
  *
- * GET /:auctionId/bids and GET /reviews/seller/:sellerId were both public -- no requireAuth --
- * so an anonymous visitor could previously enumerate exactly who bid, how much, when, and
- * correlate one person's bidding across the whole platform via buyerId. Both now mask the
- * bidder/reviewer to a stable pseudonym; the bids feed additionally exposes `isMine`, computed
- * server-side from the caller's own token, so the caller's own bids are still distinguishable
- * without revealing anyone's real identity. The bids feed has since become members-only (D10,
- * tests/guest-browsing.test.ts); the reviews stay public.
+ * BV-039 masked the bidder ("Bidder N") on GET /:auctionId/bids and the bid:placed broadcast,
+ * and the reviewer ("Reviewer N") on GET /reviews/seller/:sellerId. On 2026-11-18 the product
+ * owner decided to show real names instead. What stays from BV-039:
+ * - the bid feed is for signed-in members only (D10, tests/guest-browsing.test.ts);
+ * - neither feed carries buyerId, an email or a phone, only the name;
+ * - `isMine` still marks the caller's own bids, computed server-side from the token.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
@@ -68,15 +67,29 @@ afterAll(async () => {
   redisConnection.disconnect();
 });
 
+async function nameOf(userId: string) {
+  return (await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true } })).name;
+}
+
+/** Fails if the serialized body carries any id, email or phone of the given users. */
+function expectNoContactDetails(body: unknown, users: { id: string; email: string }[]) {
+  const text = JSON.stringify(body);
+  for (const u of users) {
+    expect(text).not.toContain(u.id);
+    expect(text).not.toContain(u.email);
+  }
+  expect(text).not.toMatch(/"(buyerId|email|phone|buyerEmail|buyerPhone)"/);
+}
+
 async function freshAuction() {
   const listing = await prisma.listing.create({
     data: {
-      listingCode: `TEST-MASK-${Math.random().toString(36).slice(2, 8)}`,
+      listingCode: `TEST-IDENT-${Math.random().toString(36).slice(2, 8)}`,
       sellerId: w.seller.id,
-      title: 'Identity Masking Test Auction',
+      title: 'Bidder Identity Test Auction',
       category: 'Electronics & Gadgets',
       condition: 'NEW',
-      description: 'Seeded by the identity-masking suite.',
+      description: 'Seeded by the bid and review identity suite.',
       startPrice: 1_000,
       minIncrement: 100,
       durationDays: 1,
@@ -103,39 +116,51 @@ async function freshAuction() {
   return auction.id;
 }
 
-describe('public bid feed', () => {
-  it('masks every bidder, drops buyerId, and marks only the caller\'s own bids as mine', async () => {
+describe('bid feed', () => {
+  it('shows every bidder by real name to the seller, a bidder and the admin, with no ids or contact details', async () => {
     const auctionId = await freshAuction();
-    // w.buyer bids first, then w.otherBuyer -- first-appearance order should drive numbering.
     await request(app).post(api(`/auctions/${auctionId}/bids`)).set(auth(w.buyer.token)).send({ amount: 1_000 });
     await request(app).post(api(`/auctions/${auctionId}/bids`)).set(auth(w.otherBuyer.token)).send({ amount: 1_100 });
+    const buyerName = await nameOf(w.buyer.id);
+    const otherBuyerName = await nameOf(w.otherBuyer.id);
 
-    // D10: the list is for signed-in members. The seller never bid here, so they see the masked
-    // view with nothing marked as theirs.
+    // The seller never bid here, so nothing is marked as theirs.
     const asSeller = await request(app).get(api(`/auctions/${auctionId}/bids`)).set(auth(w.seller.token));
     expect(asSeller.status).toBe(200);
     const sellerItems = resData<Paginated<PublicBidItem>>(asSeller).items;
-    for (const item of sellerItems) {
-      expect(item).not.toHaveProperty('buyerId');
-      expect(item.isMine).toBe(false);
-    }
     // Newest first: otherBuyer's 1,100 bid, then buyer's 1,000 bid.
-    expect(sellerItems[0].buyerName).toBe('Bidder 2');
-    expect(sellerItems[1].buyerName).toBe('Bidder 1');
+    expect(sellerItems.map((i) => i.buyerName)).toEqual([otherBuyerName, buyerName]);
+    expect(sellerItems.every((i) => i.isMine === false)).toBe(true);
+    expectNoContactDetails(asSeller.body, [w.buyer, w.otherBuyer]);
 
+    // A bidder sees the other bidder's real name too, and only their own bid is marked as theirs.
     const asBuyer = await request(app).get(api(`/auctions/${auctionId}/bids`)).set(auth(w.buyer.token));
-    const mine = resData<Paginated<PublicBidItem>>(asBuyer).items.filter((i) => i.isMine);
-    expect(mine).toHaveLength(1);
-    expect(mine[0].buyerName).toBe('Bidder 1');
+    const buyerItems = resData<Paginated<PublicBidItem>>(asBuyer).items;
+    expect(buyerItems.map((i) => [i.buyerName, i.isMine])).toEqual([[otherBuyerName, false], [buyerName, true]]);
+    expectNoContactDetails(asBuyer.body, [w.otherBuyer]);
 
-    // The admin monitor reads the same feed, with the same masking.
+    // The admin monitor reads the same feed: real names, nothing marked as the admin's.
     const asAdmin = await request(app).get(api(`/auctions/${auctionId}/bids`)).set(auth(w.admin.token));
-    expect(
-      resData<Paginated<PublicBidItem>>(asAdmin).items.every((i) => i.isMine === false),
-    ).toBe(true);
+    const adminItems = resData<Paginated<PublicBidItem>>(asAdmin).items;
+    expect(adminItems.map((i) => i.buyerName)).toEqual([otherBuyerName, buyerName]);
+    expect(adminItems.every((i) => i.isMine === false)).toBe(true);
+    expectNoContactDetails(asAdmin.body, [w.buyer, w.otherBuyer]);
   });
 
-  it('never sends buyerId on the bid:placed socket broadcast, and masks the name there too', async () => {
+  it('labels a bid whose account was deleted as "Deleted user"', async () => {
+    const auctionId = await freshAuction();
+    // BV-018: a deleted account's bid survives with buyerId cleared.
+    await prisma.bid.create({ data: { auctionId, buyerId: null, amount: 1_000 } });
+
+    const res = await request(app).get(api(`/auctions/${auctionId}/bids`)).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    const items = resData<Paginated<PublicBidItem>>(res).items;
+    expect(items).toHaveLength(1);
+    expect(items[0].buyerName).toBe('Deleted user');
+    expect(items[0].isMine).toBe(false);
+  });
+
+  it('sends the real name, and no buyerId, on the bid:placed socket broadcast', async () => {
     const auctionId = await freshAuction();
 
     const res = await request(app)
@@ -152,8 +177,12 @@ describe('public bid feed', () => {
     const placed = emit.mock.calls.filter(([event]) => event === 'bid:placed');
     expect(placed).toHaveLength(1);
     const [, payload] = placed[0] as [string, { auctionId: string; bid: Record<string, unknown> }];
-    expect(payload.bid).not.toHaveProperty('buyerId');
-    expect(payload.bid.buyerName).toBe('Bidder 1');
+    expect(payload.bid.buyerName).toBe(await nameOf(w.buyer.id));
+    expectNoContactDetails(payload, [w.buyer]);
+
+    const received = emit.mock.calls.filter(([event]) => event === 'bid:received');
+    expect(received).toHaveLength(1);
+    expectNoContactDetails(received[0][1], [w.buyer]);
   });
 });
 
@@ -161,12 +190,12 @@ describe('public seller reviews', () => {
   async function deliveredTransaction(buyerId: string, listingCodeSuffix: string) {
     const listing = await prisma.listing.create({
       data: {
-        listingCode: `TEST-REVMASK-${listingCodeSuffix}`,
+        listingCode: `TEST-REVIDENT-${listingCodeSuffix}`,
         sellerId: w.seller.id,
         title: `Delivered Item ${listingCodeSuffix}`,
         category: 'Electronics & Gadgets',
         condition: 'USED',
-        description: 'Seeded by the review-masking suite.',
+        description: 'Seeded by the bid and review identity suite.',
         startPrice: 1_000,
         minIncrement: 100,
         durationDays: 1,
@@ -201,7 +230,7 @@ describe('public seller reviews', () => {
     });
   }
 
-  it('masks reviewer names to a stable pseudonym instead of the real name', async () => {
+  it('shows each reviewer by real name to a guest, with no ids or contact details', async () => {
     const tx1 = await deliveredTransaction(w.buyer.id, '1');
     const tx2 = await deliveredTransaction(w.otherBuyer.id, '2');
 
@@ -217,14 +246,12 @@ describe('public seller reviews', () => {
       .send({ transactionId: tx2.id, stars: 4 });
     expect(second.status).toBe(201);
 
+    // No token: the seller's reviews are public.
     const res = await request(app).get(api(`/reviews/seller/${w.seller.id}`));
     expect(res.status).toBe(200);
     const reviews = resData<{ reviews: PublicReview[] }>(res).reviews;
-    for (const r of reviews) {
-      expect(r.buyerName).toMatch(/^Reviewer \d+$/);
-    }
     // Newest first: otherBuyer's review, then buyer's.
-    expect(reviews[0].buyerName).toBe('Reviewer 2');
-    expect(reviews[1].buyerName).toBe('Reviewer 1');
+    expect(reviews.map((r) => r.buyerName)).toEqual([await nameOf(w.otherBuyer.id), await nameOf(w.buyer.id)]);
+    expectNoContactDetails(res.body, [w.buyer, w.otherBuyer]);
   });
 });

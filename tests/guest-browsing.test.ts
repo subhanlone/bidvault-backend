@@ -145,20 +145,22 @@ describe('the list of bids needs an account (D10)', () => {
   it('answers 401 to a caller with no token', async () => {
     const res = await bids();
     expect(res.status).toBe(401);
-    expect(JSON.stringify(res.body)).not.toContain('Bidder');
+    // No bidder of any kind reaches a guest: neither the real name members now see nor an id.
+    expect(JSON.stringify(res.body)).not.toContain('Test Buyer');
+    expect(JSON.stringify(res.body)).not.toContain(w.buyer.id);
   });
 
   it('answers 401 to a token that is not valid', async () => {
     expect((await bids().set(auth('not-a-real-token'))).status).toBe(401);
   });
 
-  it('still answers a signed-in buyer, masked as before and with their own bid marked', async () => {
+  it('still answers a signed-in buyer, by real name and with their own bid marked', async () => {
     const res = await bids().set(auth(w.buyer.token));
     expect(res.status).toBe(200);
     const items = (res.body as { data: { items: { isMine: boolean; buyerName: string }[] } }).data.items;
     expect(items).toHaveLength(1);
     expect(items[0].isMine).toBe(true);
-    expect(items[0].buyerName).toBe('Bidder 1');
+    expect(items[0].buyerName).toBe('Test Buyer');
     expect(items[0]).not.toHaveProperty('buyerId');
   });
 

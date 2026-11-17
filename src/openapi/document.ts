@@ -425,7 +425,13 @@ const documentInput = {
     // server used to accept any 12-24 characters, letters included, and kept their last 4 as the
     // stored hint; a card number with letters was never valid input and the one client already sends
     // digits only, so no real caller can notice: minor, not major. walletNumber gains an example.
-    version: '13.1.0',
+    //
+    // 13.1.1, 2026-11-18, patch: no shape changed. The value of buyerName on GET
+    // /auctions/{auctionId}/bids, on the bid:placed socket entry and on GET /reviews/seller/{sellerId}
+    // is now the person's real name, not a "Bidder N" / "Reviewer N" pseudonym (the product owner's
+    // decision; BV-039's D10 members-only gate on the bid feed stays). Still a plain string, still no
+    // buyerId, email or phone, so no caller's parsing can break.
+    version: '13.1.1',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +

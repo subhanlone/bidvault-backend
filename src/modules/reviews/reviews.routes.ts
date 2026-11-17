@@ -195,18 +195,13 @@ router.get(
         include: {
           auction: { select: { title: true } },
           transaction: { select: { winnerId: true } },
+          // This route is public. BV-039 masked the reviewer as "Reviewer N"; since 2026-11-18,
+          // by the product owner's decision, the reviewer's real name is shown. Only the name:
+          // no buyerId, email or phone. A deleted reviewer's anonymised name reads "Deleted User".
+          buyer: { select: { name: true } },
         },
       }),
     ]);
-
-    // BV-039: this route is unauthenticated, same problem as the public bid feed -- mask to a
-    // stable per-seller pseudonym rather than the reviewer's real name. Not paginated (a fixed
-    // top-50), so a rank computed from just this page stays stable for as long as this same
-    // window is being shown.
-    const rank = new Map<string, number>();
-    for (const r of [...reviews].reverse()) {
-      if (!rank.has(r.buyerId)) rank.set(r.buyerId, rank.size + 1);
-    }
 
     ok(res, {
       sellerId,
@@ -216,7 +211,7 @@ router.get(
         reviewId: r.id,
         stars: r.stars,
         comment: r.comment,
-        buyerName: `Reviewer ${rank.get(r.buyerId)}`,
+        buyerName: r.buyer.name,
         itemTitle: r.auction.title,
         // A review can only be written by the buyer of a delivered sale (POST /reviews), so this is
         // true for every review written today. It is read from the data and not assumed: a sale

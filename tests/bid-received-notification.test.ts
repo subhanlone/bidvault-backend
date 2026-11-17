@@ -87,6 +87,9 @@ describe('the notification', () => {
     expect(rows[0].message).toContain('"Live Test Auction"');
     expect(rows[0].message).toContain('PKR 22,000');
     expect(rows[0].message).toContain('2 bids');
+    // The seller is told who placed the latest bid, by name only.
+    expect(rows[0].message).toContain('by Other Buyer.');
+    expect(rows[0].message).not.toContain('other-buyer@test.local');
   });
 
   it('a later bid updates the unread one instead of adding another', async () => {
@@ -100,6 +103,8 @@ describe('the notification', () => {
     expect(rows[0].id).toBe(first.id);
     expect(rows[0].message).toContain('PKR 23,000');
     expect(rows[0].message).toContain('3 bids');
+    // The refreshed text names the newest bidder, not the one who started it.
+    expect(rows[0].message).toContain('by Test Buyer.');
     expect(rows[0].createdAt.getTime()).toBeGreaterThanOrEqual(first.createdAt.getTime());
   });
 
