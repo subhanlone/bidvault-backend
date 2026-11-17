@@ -339,17 +339,18 @@ describe('registration and the user object', () => {
   it('registers a plain account when no role is sent', async () => {
     const res = await register({});
     expect(res.status).toBe(201);
-    expect(resData<{ user: object }>(res).user).toMatchObject({ role: 'BUYER', isSeller: false, sellerSince: null });
+    // The reply carries no user (it must look the same for an address that already has one).
     const row = await prisma.user.findUniqueOrThrow({ where: { email: 'reg@test.local' } });
-    expect(row.isSeller).toBe(false);
+    expect(row).toMatchObject({ role: 'BUYER', isSeller: false, sellerSince: null });
   });
 
   it('still accepts the legacy role field: SELLER sets the capability, BUYER does not', async () => {
     const seller = await register({ role: 'SELLER', email: 'legacy-seller@test.local' });
     expect(seller.status).toBe(201);
-    expect(resData<{ user: object }>(seller).user).toMatchObject({ isSeller: true });
+    expect(await prisma.user.findUniqueOrThrow({ where: { email: 'legacy-seller@test.local' } })).toMatchObject({ isSeller: true });
     const buyer = await register({ role: 'BUYER', email: 'legacy-buyer@test.local' });
-    expect(resData<{ user: object }>(buyer).user).toMatchObject({ isSeller: false });
+    expect(buyer.status).toBe(201);
+    expect(await prisma.user.findUniqueOrThrow({ where: { email: 'legacy-buyer@test.local' } })).toMatchObject({ isSeller: false });
   });
 
   it('reports isSeller and sellerSince on /auth/me, and they change when the user enrols', async () => {

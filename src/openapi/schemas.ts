@@ -739,9 +739,11 @@ export const PasswordChangedDto = z
  * OTPs come back in the response outside production, for local testing — hence optional.
  * In production these fields are absent.
  */
+// The same shape for a new address and one that already has an account (2026-11-18): the reply
+// must not tell anyone which addresses are registered, so it carries no user and no 409.
 export const RegistrationDto = z
   .object({
-    user: UserDto,
+    message: z.string(),
     verificationCode: z.string().optional(),
     codeExpiresAt: isoDateTime,
   })
@@ -754,8 +756,8 @@ export const OtpIssuedDto = z
     verificationCode: z.string().optional(),
     // Optional. forgot-password never sends it: its reply is identical for a registered and an
     // unknown address (message only; resetCode outside production), because a timestamp on one
-    // path and not the other told them apart (report TC8). resend-verification sends it to an
-    // unverified account and leaves it out on its neutral exit (an already-verified address).
+    // path and not the other told them apart (report TC8). resend-verification always sends it,
+    // for every address, for the same reason (2026-11-18), and the verification screen counts down to it.
     codeExpiresAt: isoDateTime.optional(),
   })
   .meta({ id: 'OtpIssued' });

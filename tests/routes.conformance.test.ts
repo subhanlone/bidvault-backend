@@ -214,7 +214,11 @@ describe('auth', () => {
       .post(api('/auth/resend-verification'))
       .send({ email: w.buyer.email });
     expect(res.status).toBe(200);
-    expect(resData<{ codeExpiresAt?: string }>(res).codeExpiresAt).toBeUndefined();
+    // The neutral path carries the same fields as a real resend (registration-enumeration.test.ts),
+    // just never a code.
+    const data = resData<{ codeExpiresAt?: string; verificationCode?: string }>(res);
+    expect(typeof data.codeExpiresAt).toBe('string');
+    expect(data.verificationCode).toBeUndefined();
   });
 
   it('POST /auth/change-password', async () => {

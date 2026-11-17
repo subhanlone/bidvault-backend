@@ -314,6 +314,23 @@ export async function sendVerificationResentEmail(to: { email: string; name: str
   ));
 }
 
+/**
+ * Someone tried to register with an address that already has a verified account. Registration
+ * answers exactly as for a new address (so the form cannot be used to learn who has an account),
+ * and the owner is told here instead.
+ */
+export async function sendAccountExistsEmail(to: { email: string; name: string }): Promise<void> {
+  await send(to.email, 'You already have a BidVault account', base(
+    'You already have an account',
+    `
+    ${h1('You already have an account')}
+    ${p(`Hi ${to.name}, someone just tried to create a new BidVault account with this email address. It already has an account, so no new one was made.`)}
+    ${p('If it was you, sign in with your password, or use "Forgot password?" on the sign-in page to choose a new one.')}
+    ${p('If it was not you, you can ignore this email. Your account has not been changed.')}
+    `,
+  ));
+}
+
 // ---------------------------------------------------------------------------
 // Listing emails
 // ---------------------------------------------------------------------------
