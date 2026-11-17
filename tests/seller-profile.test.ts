@@ -253,13 +253,12 @@ describe("a seller's public reviews", () => {
     expect((await reviewsOf()).data.reviews[0].verifiedPurchase).toBe(false);
   });
 
-  it('shows the reviewer as a number, and carries no id, e-mail or real name', async () => {
+  it('shows the reviewer by real name, and carries no id or e-mail', async () => {
     await reviewTheSale(5);
     const res = await request(app).get(api(`/reviews/seller/${w.seller.id}`));
     const text = JSON.stringify(res.body);
-    expect((res.body as { data: { reviews: PublicReview[] } }).data.reviews[0].buyerName).toBe('Reviewer 1');
+    expect((res.body as { data: { reviews: PublicReview[] } }).data.reviews[0].buyerName).toBe('Test Buyer');
     expect(text).not.toContain(w.buyer.id);
     expect(text).not.toContain(w.buyer.email);
-    expect(text).not.toContain('Test Buyer');
   });
 });

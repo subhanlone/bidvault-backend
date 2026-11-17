@@ -6,10 +6,10 @@ import { getAccountAccess } from '../services/user-status.service.js';
 export type Role = 'BUYER' | 'SELLER' | 'ADMIN';
 
 /**
- * BV-039: some routes are genuinely public but still need to know *who's asking*, without
- * making authentication mandatory -- the public bid feed masks every bidder's identity except
- * the caller's own. A missing, malformed or expired token is not an error here, it just means
- * an anonymous view; only a token that verifies gets req.auth populated.
+ * BV-039: for a route that is genuinely public but still needs to know *who's asking*, without
+ * making authentication mandatory (the bid feed used this before D10 made it members-only). A
+ * missing, malformed or expired token is not an error here, it just means an anonymous view;
+ * only a token that verifies gets req.auth populated.
  */
 export function optionalAuth() {
   return (req: Request, _res: Response, next: NextFunction): void => {

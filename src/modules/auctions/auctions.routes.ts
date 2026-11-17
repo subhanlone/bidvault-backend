@@ -198,12 +198,10 @@ router.get(
   // AdminAuctionMonitor.tsx reads this feed for its live view.
   //
   // BV-039: before D10 this route was public and published full bidder identity to anonymous
-  // visitors, who could enumerate exactly who bid, how much and when, and correlate one person's
-  // bidding across the whole platform via buyerId. The masking stays for every caller: the
-  // caller's identity is read here only to compute `isMine`. Masking is uniform, the admin
-  // monitor included, so a passively-watched in-progress auction gets the same privacy treatment
-  // as any other viewer. Real identity for actual investigation (a dispute, a stuck payout) is
-  // what GET /admin/disputes and GET /admin/transactions are for, not this feed.
+  // visitors. D10 closed that; the "Bidder N" pseudonyms BV-039 also added were removed on
+  // 2026-11-18 by the product owner's decision, so a signed-in member, the seller and the admin
+  // all see each bidder's real name. Only the name: buyerId, email and phone are still never sent.
+  // `isMine` is computed server-side so the caller's own bids read "You".
   requireAuth(['BUYER', 'SELLER', 'ADMIN']),
   asyncHandler(async (req, res) => {
     const auctionId = req.params.auctionId;
@@ -225,30 +223,19 @@ router.get(
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
+      include: { buyer: { select: { name: true } } },
     });
 
     const { pageRows, nextCursor } = slicePage(rows, limit, (b) => b.createdAt, (b) => b.id);
-
-    // A stable pseudonym per bidder, numbered by the order they first bid on *this* auction --
-    // independent of which page of the (newest-first) history is being read, and cheap at this
-    // project's scale. distinct + orderBy returns exactly the first row per buyerId in that
-    // order, per Prisma's documented semantics.
-    const firstAppearances = await prisma.bid.findMany({
-      where: { auctionId, buyerId: { not: null } },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { buyerId: true },
-      distinct: ['buyerId'],
-    });
-    const rank = new Map(firstAppearances.map((b, i) => [b.buyerId, i + 1]));
 
     ok(res, {
       items: pageRows.map((bid) => ({
         bidId: bid.id,
         auctionId: bid.auctionId,
-        // BV-018: buyerId can be null (an anonymised, deleted account) -- still genuinely
-        // reachable, not hypothetical, so it gets its own label rather than a numbered one.
         isMine: bid.buyerId === requesterId,
-        buyerName: bid.buyerId === null ? 'Deleted user' : `Bidder ${rank.get(bid.buyerId)}`,
+        // BV-018: buyerId can be null (a deleted account whose bids were kept) -- still genuinely
+        // reachable, not hypothetical, so it gets its own label.
+        buyerName: bid.buyer?.name ?? 'Deleted user',
         amount: bid.amount,
         timestamp: bid.createdAt.toISOString(),
       })),
@@ -370,9 +357,10 @@ router.post(
         // so two simultaneous bids cannot both see "no unread one yet" and create two.
         const bidCount = row.bidCount + 1;
         const bidsText = bidCount === 1 ? '1 bid' : `${bidCount} bids`;
+        // createdBid.buyer is the caller, who has just bid, so it is never the deleted-account case.
         const sellerText = {
           title: 'New bid on your auction',
-          message: `"${row.title}" now has ${bidsText}. Latest: PKR ${amount.toLocaleString()}.`,
+          message: `"${row.title}" now has ${bidsText}. Latest: PKR ${amount.toLocaleString()} by ${createdBid.buyer!.name}.`,
         };
         const refreshed = await tx.notification.updateMany({
           where: { userId: row.sellerId, type: 'BID_RECEIVED', auctionId: row.id, isRead: false },
@@ -403,35 +391,28 @@ router.post(
     // Redis overlay that used to shadow it here) -- live viewers get the update below via the
     // socket broadcast, not by re-reading the row.
     //
-    // BV-039: the bid broadcast gets the same masking as GET /:auctionId/bids -- no buyerId, name
-    // replaced by the same stable per-auction pseudonym that route computes. The bidder's own
-    // client already has their real identity from this handler's own response below; it does not
-    // need the broadcast to tell it "that was you". D10: it only goes to signed-in sockets; a
-    // guest's socket is told the price and the count instead (see the emits below).
+    // The bid broadcast carries what GET /:auctionId/bids carries: the bidder's real name and no
+    // buyerId (the pseudonyms were removed on 2026-11-18). The bidder's own client already knows
+    // the bid is theirs from this handler's own response below. D10: it only goes to signed-in
+    // sockets; a guest's socket is told the price and the count instead (see the emits below).
     const io = req.app.get('io') as Server | undefined;
     if (io) {
       // To the seller's own room, so their Live Auctions screen and notification bell update at once.
-      // The numbers only: no bidder, masked or not, since nothing here needs one.
+      // The numbers only: the bidder's name reaches the seller in the notification text, which the
+      // bell refetches on this event.
       io.to(sellerRoom(result.sellerId)).emit('bid:received', {
         auctionId,
         bidCount: result.bidCount,
         currentBid: bid.amount,
       });
-      const firstAppearances = await prisma.bid.findMany({
-        where: { auctionId, buyerId: { not: null } },
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        select: { buyerId: true },
-        distinct: ['buyerId'],
-      });
-      const rank = firstAppearances.findIndex((b) => b.buyerId === bid.buyerId) + 1;
-      // D10: the masked entry goes to signed-in sockets only. A guest's socket is in the guests
+      // D10: the named entry goes to signed-in sockets only. A guest's socket is in the guests
       // room and is told the numbers, which is all a price display needs.
       io.to(auctionMembersRoom(auctionId)).emit('bid:placed', {
         auctionId,
         bid: {
           bidId: bid.id,
           amount: bid.amount,
-          buyerName: `Bidder ${rank}`,
+          buyerName: buyer.name,
           timestamp: bid.createdAt.toISOString(),
         },
       });
