@@ -8,14 +8,14 @@ import { PrismaClient, ItemCondition, AuctionStatus } from '@prisma/client';
 import { hash } from '@node-rs/bcrypt';
 import { auctionLifecycleQueue, scheduleAuctionLifecycle } from '../src/queues/auction-lifecycle.queue.js';
 import { redisConnection } from '../src/infra/redis.js';
-import { assertSeedTarget, requiredPassword } from './seed-guard.js';
+import { assertSeedTarget, seedPassword } from './seed-guard.js';
 import { randomBytes } from 'node:crypto';
 import { enrolledSellerFields } from './seed-seller.js';
 import { generateListingCode } from '../src/utils/listing-code.js';
 
 // This script is designed to be pointed at production (see the header above), so the guard
 // permits that — it just has to be asked for by name via ALLOW_PRODUCTION_SEED=1.
-assertSeedTarget('seed-demo-auctions');
+const target = assertSeedTarget('seed-demo-auctions');
 
 const prisma = new PrismaClient();
 
@@ -34,7 +34,8 @@ function trustedSeller(city: string, province: Parameters<typeof enrolledSellerF
 async function upsertUser(params: {
   email: string; name: string; seller?: ReturnType<typeof trustedSeller> | ReturnType<typeof enrolledSellerFields>;
 }) {
-  const passwordHash = await hash(requiredPassword('SEED_DEMO_PASSWORD'), 12);
+  // Locally the first name and 12345; on production SEED_DEMO_PASSWORD is required (seedPassword).
+  const passwordHash = await hash(seedPassword('SEED_DEMO_PASSWORD', params.name.split(' ')[0], target), 12);
   return prisma.user.upsert({
     where: { email: params.email },
     update: {},
@@ -53,21 +54,21 @@ async function upsertUser(params: {
 async function main() {
   // ── Demo buyers & sellers ───────────────────────────────────────────────
   const buyers = await Promise.all([
-    // On the undeliverable bidvault.local domain: these used to be real-looking Gmail addresses,
-    // which a backend with an email key would have mailed.
-    upsertUser({ email: 'bilal.khan@demo.bidvault.local', name: 'Bilal Khan' }),
-    upsertUser({ email: 'ayesha.malik@demo.bidvault.local', name: 'Ayesha Malik' }),
-    upsertUser({ email: 'hamza.sheikh@demo.bidvault.local', name: 'Hamza Sheikh' }),
-    upsertUser({ email: 'fatima.iqbal@demo.bidvault.local', name: 'Fatima Iqbal' }),
-    upsertUser({ email: 'usman.tariq@demo.bidvault.local', name: 'Usman Tariq' }),
+    // On BidVault's own domain: these used to be real-looking Gmail addresses, which a backend with
+    // an email key would have mailed.
+    upsertUser({ email: 'bilal.khan@bidvault.tech', name: 'Bilal Khan' }),
+    upsertUser({ email: 'ayesha.malik@bidvault.tech', name: 'Ayesha Malik' }),
+    upsertUser({ email: 'hamza.sheikh@bidvault.tech', name: 'Hamza Sheikh' }),
+    upsertUser({ email: 'fatima.iqbal@bidvault.tech', name: 'Fatima Iqbal' }),
+    upsertUser({ email: 'usman.tariq@bidvault.tech', name: 'Usman Tariq' }),
   ]);
   const [bilal, ayesha, hamza, fatima, usman] = buyers;
 
   // B5: a new seller may list 10 items or PKR 150,000 a month. Zainab's phone and Tariq's car are
   // over that, so both have an admin-raised limit; Sana's items fit the ordinary one.
-  const sellerZainab = await upsertUser({ email: 'zainab.hussain@demo.bidvault.local', name: 'Zainab Hussain', seller: trustedSeller('Karachi', 'Sindh') });
-  const sellerTariq = await upsertUser({ email: 'tariq.mehmood@demo.bidvault.local', name: 'Tariq Mehmood', seller: trustedSeller('Lahore', 'Punjab') });
-  const sellerSana = await upsertUser({ email: 'sana.aslam@demo.bidvault.local', name: 'Sana Aslam', seller: enrolledSellerFields('Islamabad', 'Islamabad Capital Territory') });
+  const sellerZainab = await upsertUser({ email: 'zainab.hussain@bidvault.tech', name: 'Zainab Hussain', seller: trustedSeller('Karachi', 'Sindh') });
+  const sellerTariq = await upsertUser({ email: 'tariq.mehmood@bidvault.tech', name: 'Tariq Mehmood', seller: trustedSeller('Lahore', 'Punjab') });
+  const sellerSana = await upsertUser({ email: 'sana.aslam@bidvault.tech', name: 'Sana Aslam', seller: enrolledSellerFields('Islamabad', 'Islamabad Capital Territory') });
 
   interface DemoItem {
     seller: typeof sellerZainab;

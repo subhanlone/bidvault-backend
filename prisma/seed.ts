@@ -1,9 +1,9 @@
 import { PrismaClient, AuctionStatus, ListingStatus, UserRole, ItemCondition } from '@prisma/client';
 import { hash } from '@node-rs/bcrypt';
-import { assertSeedTarget, requiredPassword, seedEmail } from '../scripts/seed-guard.js';
+import { assertSeedTarget, seedPassword } from '../scripts/seed-guard.js';
 import { enrolledSellerFields } from '../scripts/seed-seller.js';
 
-assertSeedTarget('prisma:seed');
+const target = assertSeedTarget('prisma:seed');
 
 const prisma = new PrismaClient();
 
@@ -41,22 +41,22 @@ async function upsertUser(params: {
 }
 
 async function main() {
-  // Passwords come from the environment, with no defaults — see scripts/seed-guard.ts.
-  const buyerPassword = requiredPassword('SEED_BUYER_PASSWORD');
-  const sellerPassword = requiredPassword('SEED_SELLER_PASSWORD');
-  const adminPassword = requiredPassword('SEED_ADMIN_PASSWORD');
+  // Locally each password is the first name and 12345; on production they must come from the
+  // environment (scripts/seed-guard.ts, seedPassword).
+  const buyerPassword = seedPassword('SEED_BUYER_PASSWORD', 'Sawera', target);
+  const sellerPassword = seedPassword('SEED_SELLER_PASSWORD', 'Ahmed', target);
+  const adminPassword = seedPassword('SEED_ADMIN_PASSWORD', 'Admin', target);
 
-  // Addresses from the environment when set; otherwise on the undeliverable bidvault.local domain.
   const buyer = await upsertUser({
     name: 'Sawera Noor',
-    email: seedEmail('SEED_BUYER_EMAIL', 'buyer@bidvault.local'),
+    email: 'sawera.noor@bidvault.tech',
     role: UserRole.BUYER,
     password: buyerPassword,
   });
 
   const seller = await upsertUser({
     name: 'Ahmed Raza',
-    email: seedEmail('SEED_SELLER_EMAIL', 'seller@bidvault.local'),
+    email: 'ahmed.raza@bidvault.tech',
     // FR-13: an ordinary account that has enrolled as a seller, as every real seller is (B5).
     role: UserRole.BUYER,
     password: sellerPassword,
@@ -72,7 +72,7 @@ async function main() {
 
   await upsertUser({
     name: 'Admin BidVault',
-    email: seedEmail('SEED_ADMIN_EMAIL', 'admin@bidvault.local'),
+    email: 'admin@bidvault.tech',
     role: UserRole.ADMIN,
     password: adminPassword,
   });

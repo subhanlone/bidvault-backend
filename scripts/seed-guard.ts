@@ -67,13 +67,14 @@ export function assertSeedTarget(scriptName: string): SeedGuardResult {
  * default is how a known credential ends up in a database nobody meant to put it in.
  */
 /**
- * A seeded account's address: the variable when it is set, otherwise a fallback on the reserved
- * `bidvault.local` domain. Seeds used to write real-looking Gmail addresses, and a local backend
- * with an email key would then mail whoever owns them; nothing can be delivered to `.local`.
+ * A seeded account's password. On a local or test database the account's first name followed by
+ * 12345 (e.g. "Sawera12345"), so a developer can sign in as anyone without looking it up; the
+ * variable, when set, wins. On production there is no such default: the variable is required,
+ * because a password derivable from a public repository must never reach a real database (BV-062).
  */
-export function seedEmail(variable: string, fallback: string): string {
-  const value = process.env[variable]?.trim().toLowerCase();
-  return value ? value : fallback;
+export function seedPassword(variable: string, firstName: string, target: SeedGuardResult): string {
+  if (process.env[variable] || target.isProduction) return requiredPassword(variable);
+  return `${firstName}12345`;
 }
 
 export function requiredPassword(variable: string): string {
