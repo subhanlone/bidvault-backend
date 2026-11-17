@@ -145,9 +145,12 @@ console.log(`${base}${isProduction ? '  (production — read-only)' : ''}\n`);
 await check('/health');
 await check('/stats');
 await check('/settings/public');
-const auctions = (await check('/auctions', { note: 'every auction in the list' })) as
-  | Array<Record<string, unknown>>
+// GET /auctions is cursor-paginated: the data is { items, nextCursor }, not the bare array it was
+// before pagination (that left `auctions.filter is not a function` below whenever it had rows).
+const auctionPage = (await check('/auctions', { note: 'every auction in the list' })) as
+  | { items: Array<Record<string, unknown>> }
   | undefined;
+const auctions = auctionPage?.items;
 
 // Path parameters come from what the server just returned, so this needs no fixture ids and
 // stays correct as the data changes.
