@@ -1,6 +1,6 @@
 /**
  * One-off script: populates realistic demo auctions, one per category, plus
- * one already-closed auction with a completed transaction + review. Not part
+ * one already-closed auction whose sale was paid, shipped and delivered, with a review. Not part
  * of the regular prisma:seed reset — run manually against whichever DATABASE_URL
  * is active in the environment (e.g. via `railway run` for production).
  */
@@ -8,13 +8,14 @@ import { PrismaClient, ItemCondition, AuctionStatus } from '@prisma/client';
 import { hash } from '@node-rs/bcrypt';
 import { auctionLifecycleQueue, scheduleAuctionLifecycle } from '../src/queues/auction-lifecycle.queue.js';
 import { redisConnection } from '../src/infra/redis.js';
-import { assertSeedTarget, requiredPassword } from './seed-guard.js';
+import { assertSeedTarget, seedPassword } from './seed-guard.js';
+import { randomBytes } from 'node:crypto';
 import { enrolledSellerFields } from './seed-seller.js';
 import { generateListingCode } from '../src/utils/listing-code.js';
 
 // This script is designed to be pointed at production (see the header above), so the guard
 // permits that — it just has to be asked for by name via ALLOW_PRODUCTION_SEED=1.
-assertSeedTarget('seed-demo-auctions');
+const target = assertSeedTarget('seed-demo-auctions');
 
 const prisma = new PrismaClient();
 
@@ -25,10 +26,16 @@ function hoursFromNow(h: number): Date {
   return new Date(Date.now() + h * 60 * 60 * 1000);
 }
 
+/** A demo seller trusted with more than a new seller's monthly limit, as an admin can grant (B5). */
+function trustedSeller(city: string, province: Parameters<typeof enrolledSellerFields>[1]) {
+  return { ...enrolledSellerFields(city, province), sellerLimitOverrideItems: 20, sellerLimitOverrideValue: 10_000_000 };
+}
+
 async function upsertUser(params: {
-  email: string; name: string; seller?: ReturnType<typeof enrolledSellerFields>;
+  email: string; name: string; seller?: ReturnType<typeof trustedSeller> | ReturnType<typeof enrolledSellerFields>;
 }) {
-  const passwordHash = await hash(requiredPassword('SEED_DEMO_PASSWORD'), 12);
+  // Locally the first name and 12345; on production SEED_DEMO_PASSWORD is required (seedPassword).
+  const passwordHash = await hash(seedPassword('SEED_DEMO_PASSWORD', params.name.split(' ')[0], target), 12);
   return prisma.user.upsert({
     where: { email: params.email },
     update: {},
@@ -47,17 +54,21 @@ async function upsertUser(params: {
 async function main() {
   // ── Demo buyers & sellers ───────────────────────────────────────────────
   const buyers = await Promise.all([
-    upsertUser({ email: 'bilal.khan.demo@gmail.com', name: 'Bilal Khan' }),
-    upsertUser({ email: 'ayesha.malik.demo@gmail.com', name: 'Ayesha Malik' }),
-    upsertUser({ email: 'hamza.sheikh.demo@gmail.com', name: 'Hamza Sheikh' }),
-    upsertUser({ email: 'fatima.iqbal.demo@gmail.com', name: 'Fatima Iqbal' }),
-    upsertUser({ email: 'usman.tariq.demo@gmail.com', name: 'Usman Tariq' }),
+    // On BidVault's own domain: these used to be real-looking Gmail addresses, which a backend with
+    // an email key would have mailed.
+    upsertUser({ email: 'bilal.khan@bidvault.tech', name: 'Bilal Khan' }),
+    upsertUser({ email: 'ayesha.malik@bidvault.tech', name: 'Ayesha Malik' }),
+    upsertUser({ email: 'hamza.sheikh@bidvault.tech', name: 'Hamza Sheikh' }),
+    upsertUser({ email: 'fatima.iqbal@bidvault.tech', name: 'Fatima Iqbal' }),
+    upsertUser({ email: 'usman.tariq@bidvault.tech', name: 'Usman Tariq' }),
   ]);
   const [bilal, ayesha, hamza, fatima, usman] = buyers;
 
-  const sellerZainab = await upsertUser({ email: 'zainab.hussain.demo@gmail.com', name: 'Zainab Hussain', seller: enrolledSellerFields('Karachi', 'Sindh') });
-  const sellerTariq = await upsertUser({ email: 'tariq.mehmood.demo@gmail.com', name: 'Tariq Mehmood', seller: enrolledSellerFields('Lahore', 'Punjab') });
-  const sellerSana = await upsertUser({ email: 'sana.aslam.demo@gmail.com', name: 'Sana Aslam', seller: enrolledSellerFields('Islamabad', 'Islamabad Capital Territory') });
+  // B5: a new seller may list 10 items or PKR 150,000 a month. Zainab's phone and Tariq's car are
+  // over that, so both have an admin-raised limit; Sana's items fit the ordinary one.
+  const sellerZainab = await upsertUser({ email: 'zainab.hussain@bidvault.tech', name: 'Zainab Hussain', seller: trustedSeller('Karachi', 'Sindh') });
+  const sellerTariq = await upsertUser({ email: 'tariq.mehmood@bidvault.tech', name: 'Tariq Mehmood', seller: trustedSeller('Lahore', 'Punjab') });
+  const sellerSana = await upsertUser({ email: 'sana.aslam@bidvault.tech', name: 'Sana Aslam', seller: enrolledSellerFields('Islamabad', 'Islamabad Capital Territory') });
 
   interface DemoItem {
     seller: typeof sellerZainab;
@@ -271,6 +282,10 @@ async function main() {
         currentBid: lastBid ? lastBid.amount : item.startPrice,
         bidCount: item.bids.length,
         status: item.status,
+        // What the close writes: whether the top bid cleared the reserve (null when none was set).
+        ...(item.status === AuctionStatus.CLOSED && {
+          reserveMet: item.reservePrice === undefined ? null : (lastBid?.amount ?? 0) >= item.reservePrice,
+        }),
         startTime: item.startTime,
         endTime: item.endTime,
       },
@@ -283,14 +298,33 @@ async function main() {
     }
 
     if (item.closedSale) {
+      // The sale as the real flow leaves it once the buyer confirms receipt: paid by card (the
+      // hint only, as the gateway keeps), shipped within the ship-by window, DELIVERED, and the
+      // payout released to the seller's ledger. A review is only possible on a DELIVERED sale.
+      const paidAt = new Date(item.endTime.getTime() + 6 * 60 * 60 * 1000);
       const tx = await prisma.auctionTransaction.create({
         data: {
           auctionId: auction.id,
           winnerId: item.closedSale.winner.id,
           sellerId: item.seller.id,
           finalAmount: item.closedSale.finalAmount,
-          status: 'COMPLETED',
+          status: 'DELIVERED',
+          paidAt,
+          paymentReference: `PAY-${randomBytes(9).toString('base64url')}`,
+          paymentMethod: 'CARD',
+          paymentAccountHint: 'Visa •••4242',
+          deliveryAddress: 'House 12, Street 4, Gulberg III, Lahore',
+          deliveryPhone: '0301 2345678',
+          shipByAt: new Date(paidAt.getTime() + 72 * 60 * 60 * 1000),
+          shippedAt: new Date(paidAt.getTime() + 20 * 60 * 60 * 1000),
         },
+      });
+      await prisma.ledgerEntry.create({
+        data: { sellerId: item.seller.id, transactionId: tx.id, amount: tx.finalAmount },
+      });
+      await prisma.user.update({
+        where: { id: item.seller.id },
+        data: { ledgerBalance: { increment: tx.finalAmount } },
       });
       await prisma.sellerReview.create({
         data: {
