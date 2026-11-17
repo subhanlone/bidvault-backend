@@ -12,6 +12,8 @@ import {
   sendListingTakenDownEmail,
 } from './email.service.js';
 import { announceRefund, refundLockedSale, type RefundActor, type RefundedSale } from './fulfillment.service.js';
+import { closeAuction } from '../workers/close-auction.js';
+import { auctionRoom } from '../socket/auction-subscriptions.js';
 
 /**
  * Phase 6 (LIFECYCLE-IMPLEMENTATION-PLAN.md): auction cancellation (B4/C4), the payment-deadline
@@ -158,6 +160,87 @@ export async function cancelAuction(
   if (outcome.kind !== 'ok') return { kind: outcome.kind };
   await announceCancel(auctionId, outcome.cancelled, actor, io);
   return { kind: 'ok' };
+}
+
+// ---------------------------------------------------------------------------
+// End Now (2026-11-18): the seller ends a live auction early and the highest bidder wins
+// ---------------------------------------------------------------------------
+
+export type EndAuctionNowResult =
+  | { kind: 'ok'; sold: boolean; finalAmount: number | null }
+  | { kind: 'not-found' }
+  | { kind: 'forbidden' }
+  | { kind: 'wrong-state' }
+  | { kind: 'no-bids' }
+  | { kind: 'reserve-not-met' }
+  | { kind: 'bid-changed'; currentBid: number };
+
+/**
+ * Ends the seller's own live auction now and sells it to the highest bidder, exactly as if its
+ * time had run out. Offered only when it can sell: there are bids, and the reserve is met or none
+ * was set. A bid-free auction is cancelled instead (cancelAuction); a reserve-not-met one waits.
+ *
+ * `expectedBid` is the highest bid the seller saw when they confirmed. A bid that arrived since is
+ * refused here rather than sold at a price the seller never looked at.
+ *
+ * Under the row lock, endTime becomes now: from that commit on, the bid route refuses the auction
+ * ("Auction has already ended"), so nothing can land between this and the close. The close itself
+ * is closeAuction(), the worker's own, so the sale, the payment deadline, the notices and the
+ * e-mails are the ones every ended auction gets.
+ */
+export async function endAuctionNow(
+  auctionId: string,
+  sellerId: string,
+  expectedBid: number,
+  io?: Server,
+): Promise<EndAuctionNowResult> {
+  const locked = await prisma.$transaction(async (tx) => {
+    const [row] = await tx.$queryRaw<
+      Array<{ id: string; sellerId: string; status: string; bidCount: number; currentBid: number; reservePrice: number | null }>
+    >`
+      SELECT id, "sellerId", status, "bidCount", "currentBid", "reservePrice" FROM "Auction" WHERE id = ${auctionId} FOR UPDATE
+    `;
+    if (!row) return { kind: 'not-found' as const };
+    if (row.sellerId !== sellerId) return { kind: 'forbidden' as const };
+    if (row.status !== 'ACTIVE') return { kind: 'wrong-state' as const };
+    if (row.bidCount === 0) return { kind: 'no-bids' as const };
+    if (row.reservePrice !== null && row.currentBid < row.reservePrice) return { kind: 'reserve-not-met' as const };
+    if (row.currentBid !== expectedBid) return { kind: 'bid-changed' as const, currentBid: row.currentBid };
+
+    await tx.auction.update({ where: { id: row.id }, data: { endTime: new Date() } });
+    await tx.auditLog.create({
+      data: {
+        actorUserId: sellerId,
+        action: 'AUCTION_ENDED_EARLY',
+        entityType: 'Auction',
+        entityId: row.id,
+        metadata: { highestBid: row.currentBid, bidCount: row.bidCount },
+      },
+    });
+    return { kind: 'ok' as const };
+  });
+  if (locked.kind !== 'ok') return locked;
+
+  const closed = await closeAuction(auctionId, { endedEarly: true });
+  // The worker closed it in the moment between the two transactions (its time ran out just then):
+  // whatever it decided stands, and this request did not end it.
+  if (closed.alreadyClosed) return { kind: 'wrong-state' };
+
+  // The close has committed, so a failure here must not undo the answer. A job left behind is
+  // harmless: closeAuction refuses an auction that is no longer ACTIVE.
+  try {
+    await cancelScheduledJob(auctionId);
+  } catch (err) {
+    console.error(`[auction-control] Could not remove the close job for ended auction ${auctionId}:`, err);
+  }
+  // To everyone watching, guests included: their countdown still shows time left until they
+  // refetch the auction, which this tells them to do.
+  io?.to(auctionRoom(auctionId)).emit('auction:ended', { auctionId });
+
+  const sale = closed.sold
+    ? await prisma.auctionTransaction.findUnique({ where: { auctionId }, select: { finalAmount: true } })
+    : null;
+  return { kind: 'ok', sold: closed.sold, finalAmount: sale?.finalAmount ?? null };
 }
 
 // ---------------------------------------------------------------------------

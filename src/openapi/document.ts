@@ -431,7 +431,12 @@ const documentInput = {
     // is now the person's real name, not a "Bidder N" / "Reviewer N" pseudonym (the product owner's
     // decision; BV-039's D10 members-only gate on the bid feed stays). Still a plain string, still no
     // buyerId, email or phone, so no caller's parsing can break.
-    version: '13.1.1',
+    //
+    // 13.2.0, 2026-11-18, minor (additive): POST /auctions/{auctionId}/end-now and its
+    // EndAuctionNowRequest. The seller ends a live auction with bids and a met (or no) reserve, and
+    // the highest bidder wins as at a normal close. A new `auction:ended` socket event tells the
+    // auction's room to refetch.
+    version: '13.2.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -859,6 +864,31 @@ const documentInput = {
           403: forbidden,
           404: notFound,
           409: errBody('Not ACTIVE, or bids already exist (an admin can cancel those instead)'),
+        },
+      },
+    },
+    '/auctions/{auctionId}/end-now': {
+      post: {
+        tags: ['Auctions'],
+        security: [{ bearerAuth: [] }],
+        summary: 'The seller ends their live auction now and the highest bidder wins, as if its time had run out',
+        requestParams: { path: z.object({ auctionId: z.string() }) },
+        requestBody: jsonRequest(R.endAuctionNowSchema),
+        responses: {
+          200: okBody(
+            z.object({
+              auctionId: z.string(),
+              status: z.literal('CLOSED'),
+              sold: z.boolean(),
+              finalAmount: z.number().int().nullable(),
+            }),
+            'Ended',
+          ),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Not ACTIVE, no bids, the reserve is not met, or the highest bid is no longer expectedBid'),
         },
       },
     },
