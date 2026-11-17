@@ -416,6 +416,19 @@ describe('auctions', () => {
     expect(res.status).toBe(200);
     expect(resData<{ status: string }>(res).status).toBe('CANCELLED');
   });
+
+  it('POST /auctions/{auctionId}/end-now', async () => {
+    hit('post', '/auctions/{auctionId}/end-now');
+    // w.liveAuctionId has one bid of 21,000 under a 25,000 reserve (world.ts); lower the reserve so
+    // the seller may end it. The full behaviour is in tests/end-auction-now.test.ts.
+    await prisma.auction.update({ where: { id: w.liveAuctionId }, data: { reservePrice: 20_000 } });
+    const res = await request(app)
+      .post(api(`/auctions/${w.liveAuctionId}/end-now`))
+      .set(auth(w.seller.token))
+      .send({ expectedBid: 21_000 });
+    expect(res.status).toBe(200);
+    expect(resData<{ status: string; sold: boolean }>(res)).toMatchObject({ status: 'CLOSED', sold: true });
+  });
 });
 
 // ---- listings ---------------------------------------------------------------------

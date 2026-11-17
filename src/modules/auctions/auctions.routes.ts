@@ -8,7 +8,7 @@ import { fail, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { sendValidationError, validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
-import { placeBidSchema, cancelAuctionSchema } from '../../openapi/requests.js';
+import { placeBidSchema, cancelAuctionSchema, endAuctionNowSchema } from '../../openapi/requests.js';
 import type { BidDtoType, BidWithAuctionDtoType } from '../../openapi/schemas.js';
 import { auctionInclude, buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from './auction-dto.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
@@ -16,7 +16,12 @@ import { buildBrowseQuery, parseBrowseQuery, readCursor } from './browse-query.j
 import { loadFacets } from './browse-facets.js';
 import { sellerRoom } from '../../socket/seller-room.js';
 import { auctionGuestsRoom, auctionMembersRoom } from '../../socket/auction-subscriptions.js';
-import { cancelAuction, type CancelAuctionResult } from '../../services/auction-control.service.js';
+import {
+  cancelAuction,
+  endAuctionNow,
+  type CancelAuctionResult,
+  type EndAuctionNowResult,
+} from '../../services/auction-control.service.js';
 import { anonymousSearchRateLimit } from '../../middleware/rate-limit.js';
 
 const CANCEL_ERROR_STATUS: Record<Exclude<CancelAuctionResult['kind'], 'ok'>, [string, number]> = {
@@ -24,6 +29,14 @@ const CANCEL_ERROR_STATUS: Record<Exclude<CancelAuctionResult['kind'], 'ok'>, [s
   forbidden: ['You can only cancel your own auctions.', 403],
   'wrong-state': ['Only an active auction can be cancelled.', 409],
   'has-bids': ['An auction with bids can only be cancelled by an admin.', 409],
+};
+
+const END_NOW_ERROR_STATUS: Record<Exclude<EndAuctionNowResult['kind'], 'ok' | 'bid-changed'>, [string, number]> = {
+  'not-found': ['Auction not found.', 404],
+  forbidden: ['You can only end your own auctions.', 403],
+  'wrong-state': ['Only a live auction can be ended.', 409],
+  'no-bids': ['An auction with no bids cannot be sold. Cancel it instead.', 409],
+  'reserve-not-met': ['The reserve price has not been met yet.', 409],
 };
 
 const router = Router();
@@ -465,6 +478,33 @@ router.post(
       return;
     }
     ok(res, { auctionId: req.params.auctionId, status: 'CANCELLED' });
+  }),
+);
+
+// 2026-11-18: the seller ends their live auction now and the highest bidder wins, as if its time
+// had run out. Only with bids and the reserve met (or none set); see endAuctionNow.
+router.post(
+  '/:auctionId/end-now',
+  requireAuth(['BUYER', 'SELLER']),
+  validateBody(endAuctionNowSchema),
+  asyncHandler<z.infer<typeof endAuctionNowSchema>>(async (req, res) => {
+    const io = req.app.get('io') as Server | undefined;
+    const result = await endAuctionNow(req.params.auctionId, req.auth!.userId, req.body.expectedBid, io);
+    if (result.kind === 'bid-changed') {
+      fail(res, `A new bid arrived: the highest bid is now PKR ${result.currentBid.toLocaleString()}. Check it and try again.`, 409);
+      return;
+    }
+    if (result.kind !== 'ok') {
+      const [message, status] = END_NOW_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, {
+      auctionId: req.params.auctionId,
+      status: 'CLOSED',
+      sold: result.sold,
+      finalAmount: result.finalAmount,
+    });
   }),
 );
 

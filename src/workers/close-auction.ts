@@ -29,7 +29,12 @@ export interface CloseResult {
   sold: boolean;
 }
 
-export async function closeAuction(auctionId: string): Promise<CloseResult> {
+export interface CloseOptions {
+  /** The seller ended it before its time with End Now; the winner's notice says so. */
+  endedEarly?: boolean;
+}
+
+export async function closeAuction(auctionId: string, options: CloseOptions = {}): Promise<CloseResult> {
   const auction = await prisma.auction.findUnique({
     where: { id: auctionId },
     include: { seller: true },
@@ -134,7 +139,9 @@ export async function closeAuction(auctionId: string): Promise<CloseResult> {
             userId: winBid.buyerId,
             type: 'AUCTION_WON',
             title: 'You won the auction!',
-            message: `Congratulations! You won "${auction.title}" with a bid of PKR ${winBid.amount.toLocaleString()}. Complete your payment to claim it.`,
+            message: options.endedEarly
+              ? `The seller ended "${auction.title}" early and your bid of PKR ${winBid.amount.toLocaleString()} won. Complete your payment to claim it.`
+              : `Congratulations! You won "${auction.title}" with a bid of PKR ${winBid.amount.toLocaleString()}. Complete your payment to claim it.`,
           },
         });
       }

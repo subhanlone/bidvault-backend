@@ -189,6 +189,13 @@ export const cancelAuctionSchema = z
   .object({ reason: z.string().trim().min(3).max(500) })
   .meta({ id: 'CancelAuctionRequest' });
 
+export const endAuctionNowSchema = z
+  .object({
+    /** The highest bid the seller saw when confirming; a different current bid is refused (409). */
+    expectedBid: z.number().int().positive().max(2_000_000_000),
+  })
+  .meta({ id: 'EndAuctionNowRequest' });
+
 // ---- payments ---------------------------------------------------------------------
 
 // BV-047 / E4: the platform held no delivery contact data at all before this. Collected
