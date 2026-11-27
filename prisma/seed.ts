@@ -1,9 +1,9 @@
 import { PrismaClient, AuctionStatus, ListingStatus, UserRole, ItemCondition } from '@prisma/client';
 import { hash } from '@node-rs/bcrypt';
-import { assertSeedTarget, requiredPassword } from '../scripts/seed-guard.js';
+import { assertSeedTarget, seedPassword } from '../scripts/seed-guard.js';
 import { enrolledSellerFields } from '../scripts/seed-seller.js';
 
-assertSeedTarget('prisma:seed');
+const target = assertSeedTarget('prisma:seed');
 
 const prisma = new PrismaClient();
 
@@ -19,7 +19,7 @@ async function upsertUser(params: {
   role: UserRole;
   password: string;
   isEmailVerified?: boolean;
-  seller?: ReturnType<typeof enrolledSellerFields>;
+  seller?: ReturnType<typeof enrolledSellerFields> & { sellerLimitOverrideItems?: number; sellerLimitOverrideValue?: number };
 }) {
   const passwordHash = await hash(params.password, 12);
   return prisma.user.upsert({
@@ -41,30 +41,38 @@ async function upsertUser(params: {
 }
 
 async function main() {
-  // Passwords come from the environment, with no defaults — see scripts/seed-guard.ts.
-  const buyerPassword = requiredPassword('SEED_BUYER_PASSWORD');
-  const sellerPassword = requiredPassword('SEED_SELLER_PASSWORD');
-  const adminPassword = requiredPassword('SEED_ADMIN_PASSWORD');
+  // Locally each password is the first name and 12345; on production they must come from the
+  // environment (scripts/seed-guard.ts, seedPassword).
+  const buyerPassword = seedPassword('SEED_BUYER_PASSWORD', 'Sawera', target);
+  const sellerPassword = seedPassword('SEED_SELLER_PASSWORD', 'Ahmed', target);
+  const adminPassword = seedPassword('SEED_ADMIN_PASSWORD', 'Admin', target);
 
   const buyer = await upsertUser({
     name: 'Sawera Noor',
-    email: 'sawera@gmail.com',
+    email: 'sawera.noor@bidvault.tech',
     role: UserRole.BUYER,
     password: buyerPassword,
   });
 
   const seller = await upsertUser({
     name: 'Ahmed Raza',
-    email: 'ahmed@gmail.com',
+    email: 'ahmed.raza@bidvault.tech',
     // FR-13: an ordinary account that has enrolled as a seller, as every real seller is (B5).
     role: UserRole.BUYER,
     password: sellerPassword,
-    seller: enrolledSellerFields('Lahore', 'Punjab'),
+    seller: {
+      ...enrolledSellerFields('Lahore', 'Punjab'),
+      // B5: a new seller may list 10 items or PKR 150,000 a month until three sales are delivered;
+      // this one's PKR 285,000 phone is over that, so an admin has raised their personal limit,
+      // as the Users screen lets an admin do. Without it the item could not have been listed.
+      sellerLimitOverrideItems: 20,
+      sellerLimitOverrideValue: 1_000_000,
+    },
   });
 
   await upsertUser({
     name: 'Admin BidVault',
-    email: 'admin@bidvault.com',
+    email: 'admin@bidvault.tech',
     role: UserRole.ADMIN,
     password: adminPassword,
   });
