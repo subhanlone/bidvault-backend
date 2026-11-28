@@ -168,6 +168,12 @@ export const AuctionDto = z
      * null = no reserve set, false = not reached, true = reached.
      */
     reserveMet: z.boolean().nullable(),
+    /**
+     * The reserve amount, sent ONLY to the auction's own seller and only by GET
+     * /auctions/{auctionId} (their Live Monitor needs it to lower it). Absent for everyone else,
+     * on every other route, and when no reserve is set.
+     */
+    reservePrice: z.number().int().optional(),
     bidCount: z.number().int(),
     /** How many people have this auction on their watchlist (0 when nobody does). */
     watcherCount: z.number().int(),
@@ -944,6 +950,12 @@ export const SellerItemDto = z
         watcherCount: z.number().int(),
         /** null: no reserve was set, or the auction has not closed yet. */
         reserveMet: z.boolean().nullable(),
+        /**
+         * The auction's own increment and reserve, which the seller can change while it is live
+         * (PATCH .../min-increment, .../reserve). `listing` keeps the approved values.
+         */
+        minIncrement: z.number().int(),
+        reservePrice: z.number().int().optional(),
         startTime: isoDateTime,
         endTime: isoDateTime,
       })

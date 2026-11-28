@@ -256,3 +256,59 @@ describe('lowering the reserve', () => {
     expect((await live()).reservePrice).toBe(25_000);
   });
 });
+
+describe('who sees the live values', () => {
+  type AuctionView = { reservePrice?: number; reserveMet: boolean | null; minIncrement: number };
+  const detail = (token?: string) => {
+    const req = request(app).get(api(`/auctions/${w.liveAuctionId}`));
+    return token ? req.set(auth(token)) : req;
+  };
+
+  it('gives the reserve amount to the auction\'s own seller, and to nobody else', async () => {
+    const own = await detail(w.seller.token);
+    expect(own.status).toBe(200);
+    expect(resData<AuctionView>(own).reservePrice).toBe(25_000);
+    expect(takeViolations()).toEqual([]);
+
+    for (const token of [undefined, w.buyer.token, w.otherBuyer.token, w.otherSeller.token, w.admin.token, 'not-a-token']) {
+      const res = await detail(token);
+      expect(res.status).toBe(200);
+      expect(resData<AuctionView>(res)).not.toHaveProperty('reservePrice');
+      expect(resData<AuctionView>(res).reserveMet).toBe(false);
+    }
+  });
+
+  it('gives the seller the lowered reserve, and no field at all when there is none', async () => {
+    await setReserve(w.seller.token, 22_000);
+    expect(resData<AuctionView>(await detail(w.seller.token)).reservePrice).toBe(22_000);
+
+    await prisma.auction.update({ where: { id: w.liveAuctionId }, data: { reservePrice: null } });
+    const res = await detail(w.seller.token);
+    expect(resData<AuctionView>(res)).not.toHaveProperty('reservePrice');
+    expect(resData<AuctionView>(res).reserveMet).toBeNull();
+  });
+
+  it('never puts the reserve in the public auction list', async () => {
+    const res = await request(app).get(api('/auctions')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    const items = resData<{ items: Array<{ auctionId: string }> }>(res).items;
+    expect(items.some((a) => a.auctionId === w.liveAuctionId)).toBe(true);
+    expect(JSON.stringify(items)).not.toContain('reservePrice');
+  });
+
+  it('shows My Items the auction\'s live increment and reserve, and the listing\'s approved ones', async () => {
+    await setIncrement(w.seller.token, 3_000);
+    await setReserve(w.seller.token, 22_000);
+
+    const res = await request(app).get(api('/seller/items?tab=live')).set(auth(w.seller.token));
+    expect(res.status).toBe(200);
+    expect(takeViolations()).toEqual([]);
+    type Item = {
+      auction?: { auctionId: string; minIncrement: number; reservePrice?: number };
+      listing: { minIncrement: number; reservePrice?: number };
+    };
+    const item = resData<{ items: Item[] }>(res).items.find((i) => i.auction?.auctionId === w.liveAuctionId);
+    expect(item?.auction).toMatchObject({ minIncrement: 3_000, reservePrice: 22_000 });
+    expect(item?.listing).toMatchObject({ minIncrement: 1_000, reservePrice: 25_000 });
+  });
+});

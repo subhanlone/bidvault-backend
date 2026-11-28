@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "14.1.0",
+    "version": "14.2.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -1829,7 +1829,7 @@
         "tags": [
           "Auctions"
         ],
-        "summary": "currentBid and bidCount are read straight from the row — see BV-010",
+        "summary": "currentBid and bidCount are read straight from the row — see BV-010. Public; with a valid bearer token of the auction's own seller the reply also carries reservePrice",
         "parameters": [
           {
             "in": "path",
@@ -9192,6 +9192,11 @@
               "null"
             ]
           },
+          "reservePrice": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
           "bidCount": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -9499,6 +9504,16 @@
                   "null"
                 ]
               },
+              "minIncrement": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "reservePrice": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
               "startTime": {
                 "type": "string",
                 "format": "date-time",
@@ -9517,6 +9532,7 @@
               "bidCount",
               "watcherCount",
               "reserveMet",
+              "minIncrement",
               "startTime",
               "endTime"
             ],
