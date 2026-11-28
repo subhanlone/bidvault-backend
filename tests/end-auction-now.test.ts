@@ -82,7 +82,7 @@ describe('ending an auction now', () => {
     expect(sale.paymentDueAt!.getTime()).toBeGreaterThan(Date.now());
   });
 
-  it('tells the winner the seller ended it early', async () => {
+  it('tells the winner the seller concluded it early', async () => {
     await reserveMet();
     await endNow(w.seller.token, 21_000);
 
@@ -90,7 +90,7 @@ describe('ending an auction now', () => {
     const won = await prisma.notification.findFirstOrThrow({
       where: { userId: w.buyer.id, type: 'AUCTION_WON', message: { contains: 'Live Test Auction' } },
     });
-    expect(won.message).toContain('The seller ended "Live Test Auction" early');
+    expect(won.message).toContain('The seller concluded "Live Test Auction" early');
     expect(won.message).toContain('PKR 21,000');
   });
 
