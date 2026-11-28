@@ -4,11 +4,17 @@ import { AuctionStatus, Prisma } from '@prisma/client';
 import type { Server } from 'socket.io';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
-import { fail, ok } from '../../utils/response.js';
+import { fail, failField, ok } from '../../utils/response.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { sendValidationError, validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
-import { placeBidSchema, cancelAuctionSchema, endAuctionNowSchema } from '../../openapi/requests.js';
+import {
+  placeBidSchema,
+  cancelAuctionSchema,
+  endAuctionNowSchema,
+  changeMinIncrementSchema,
+  lowerReserveSchema,
+} from '../../openapi/requests.js';
 import type { BidDtoType, BidWithAuctionDtoType } from '../../openapi/schemas.js';
 import { auctionInclude, buildSellerStatsMap, buildWatcherCountMap, toAuctionDto } from './auction-dto.js';
 import { decodeCursor, parseLimit, slicePage } from '../../utils/pagination.js';
@@ -18,9 +24,13 @@ import { sellerRoom } from '../../socket/seller-room.js';
 import { auctionGuestsRoom, auctionMembersRoom } from '../../socket/auction-subscriptions.js';
 import {
   cancelAuction,
+  changeMinIncrement,
   endAuctionNow,
+  lowerReserve,
   type CancelAuctionResult,
+  type ChangeIncrementResult,
   type EndAuctionNowResult,
+  type LowerReserveResult,
 } from '../../services/auction-control.service.js';
 import { anonymousSearchRateLimit } from '../../middleware/rate-limit.js';
 
@@ -37,6 +47,27 @@ const END_NOW_ERROR_STATUS: Record<Exclude<EndAuctionNowResult['kind'], 'ok' | '
   'wrong-state': ['Only a live auction can be ended.', 409],
   'no-bids': ['An auction with no bids cannot be sold. Cancel it instead.', 409],
   'reserve-not-met': ['The reserve price has not been met yet.', 409],
+};
+
+// too-high is a field error, answered with failField like the same rule on a listing.
+const INCREMENT_ERROR_STATUS: Record<Exclude<ChangeIncrementResult['kind'], 'ok' | 'too-high'>, [string, number]> = {
+  'not-found': ['Auction not found.', 404],
+  forbidden: ['You can only change your own auctions.', 403],
+  'wrong-state': ['Only a live auction can be changed.', 409],
+  'final-hour': ['The minimum increment cannot be changed in the final hour of the auction.', 409],
+};
+
+// not-lower and below-start are field errors, answered with failField.
+const RESERVE_ERROR_STATUS: Record<
+  Exclude<LowerReserveResult['kind'], 'ok' | 'not-lower' | 'below-start'>,
+  [string, number]
+> = {
+  'not-found': ['Auction not found.', 404],
+  forbidden: ['You can only change your own auctions.', 403],
+  'wrong-state': ['Only a live auction can be changed.', 409],
+  'no-reserve': ['This auction has no reserve price.', 409],
+  'no-bids': ['The reserve can be lowered once the auction has a bid. With no bids, cancel it instead.', 409],
+  'reserve-met': ['The reserve price is already met.', 409],
 };
 
 const router = Router();
@@ -505,6 +536,54 @@ router.post(
       sold: result.sold,
       finalAmount: result.finalAmount,
     });
+  }),
+);
+
+// 2026-11-28 (FYP mid panel): the seller raises or lowers the minimum increment of their live
+// auction, within the listing bounds and never in its final hour; see changeMinIncrement.
+router.patch(
+  '/:auctionId/min-increment',
+  requireAuth(['BUYER', 'SELLER']),
+  validateBody(changeMinIncrementSchema),
+  asyncHandler<z.infer<typeof changeMinIncrementSchema>>(async (req, res) => {
+    const io = req.app.get('io') as Server | undefined;
+    const result = await changeMinIncrement(req.params.auctionId, req.auth!.userId, req.body.minIncrement, io);
+    if (result.kind === 'too-high') {
+      failField(res, 'minIncrement', `Minimum bid increment cannot exceed PKR ${result.max.toLocaleString()}.`);
+      return;
+    }
+    if (result.kind !== 'ok') {
+      const [message, status] = INCREMENT_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { auctionId: req.params.auctionId, minIncrement: result.minIncrement });
+  }),
+);
+
+// 2026-11-28 (FYP mid panel): the seller lowers a reserve their auction's bids have not reached,
+// at any time before it ends; at or below the current bid it is met. See lowerReserve.
+router.patch(
+  '/:auctionId/reserve',
+  requireAuth(['BUYER', 'SELLER']),
+  validateBody(lowerReserveSchema),
+  asyncHandler<z.infer<typeof lowerReserveSchema>>(async (req, res) => {
+    const io = req.app.get('io') as Server | undefined;
+    const result = await lowerReserve(req.params.auctionId, req.auth!.userId, req.body.reservePrice, io);
+    if (result.kind === 'not-lower') {
+      failField(res, 'reservePrice', 'The new reserve must be lower than the current one.');
+      return;
+    }
+    if (result.kind === 'below-start') {
+      failField(res, 'reservePrice', `The reserve cannot be below the starting price of PKR ${result.startPrice.toLocaleString()}.`);
+      return;
+    }
+    if (result.kind !== 'ok') {
+      const [message, status] = RESERVE_ERROR_STATUS[result.kind];
+      fail(res, message, status);
+      return;
+    }
+    ok(res, { auctionId: req.params.auctionId, reservePrice: result.reservePrice, reserveMet: result.reserveMet });
   }),
 );
 

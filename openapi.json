@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BidVault API",
-    "version": "14.0.0",
+    "version": "14.1.0",
     "description": "Auction platform API. Generated from the Zod schemas the server actually validates and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\nEvery route is rate limited to 300 requests per minute per client address and answers 429 with the standard `RateLimit` headers (draft-8) once that is exceeded. Routes that carry a tighter limit of their own declare 429 individually.\n\nEvery response, errors included, carries `Cache-Control: no-store`: what this API returns is about the signed-in caller (and the sign-in routes return the tokens themselves), so it is not meant to be stored by any cache."
   },
   "servers": [
@@ -2483,6 +2483,276 @@
           },
           "409": {
             "description": "Not ACTIVE, no bids, the reserve is not met, or the highest bid is no longer expectedBid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auctions/{auctionId}/min-increment": {
+      "patch": {
+        "tags": [
+          "Auctions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "The seller raises or lowers the minimum increment of their live auction, except in its final hour",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "auctionId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeMinIncrementRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "auctionId": {
+                          "type": "string"
+                        },
+                        "minIncrement": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "auctionId",
+                        "minIncrement"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not ACTIVE, or in the final hour of the auction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "minIncrement is above the platform maxBidIncrement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auctions/{auctionId}/reserve": {
+      "patch": {
+        "tags": [
+          "Auctions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "The seller lowers a reserve their live auction has bids for but has not reached",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "auctionId",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LowerReserveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Lowered; reserveMet is true when the current bid now reaches it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "auctionId": {
+                          "type": "string"
+                        },
+                        "reservePrice": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "reserveMet": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "auctionId",
+                        "reservePrice",
+                        "reserveMet"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but the wrong role for this route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not ACTIVE, no reserve, no bids, or the reserve is already met",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reservePrice is not below the current reserve, or is below the starting price",
             "content": {
               "application/json": {
                 "schema": {
@@ -7897,6 +8167,32 @@
         },
         "required": [
           "expectedBid"
+        ]
+      },
+      "ChangeMinIncrementRequest": {
+        "type": "object",
+        "properties": {
+          "minIncrement": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 2000000000
+          }
+        },
+        "required": [
+          "minIncrement"
+        ]
+      },
+      "LowerReserveRequest": {
+        "type": "object",
+        "properties": {
+          "reservePrice": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 2000000000
+          }
+        },
+        "required": [
+          "reservePrice"
         ]
       },
       "SubmitListingRequest": {

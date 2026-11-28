@@ -433,6 +433,28 @@ describe('auctions', () => {
     expect(res.status).toBe(200);
     expect(resData<{ status: string; sold: boolean }>(res)).toMatchObject({ status: 'CLOSED', sold: true });
   });
+
+  it('PATCH /auctions/{auctionId}/min-increment', async () => {
+    hit('patch', '/auctions/{auctionId}/min-increment');
+    // The full behaviour (bounds, the final-hour lock) is in tests/live-auction-edits.test.ts.
+    const res = await request(app)
+      .patch(api(`/auctions/${w.liveAuctionId}/min-increment`))
+      .set(auth(w.seller.token))
+      .send({ minIncrement: 2_000 });
+    expect(res.status).toBe(200);
+    expect(resData<{ minIncrement: number }>(res)).toMatchObject({ minIncrement: 2_000 });
+  });
+
+  it('PATCH /auctions/{auctionId}/reserve', async () => {
+    hit('patch', '/auctions/{auctionId}/reserve');
+    // w.liveAuctionId: one bid of 21,000 under a 25,000 reserve, start 20,000 (world.ts).
+    const res = await request(app)
+      .patch(api(`/auctions/${w.liveAuctionId}/reserve`))
+      .set(auth(w.seller.token))
+      .send({ reservePrice: 21_000 });
+    expect(res.status).toBe(200);
+    expect(resData<{ reserveMet: boolean }>(res)).toMatchObject({ reservePrice: 21_000, reserveMet: true });
+  });
 });
 
 // ---- listings ---------------------------------------------------------------------
