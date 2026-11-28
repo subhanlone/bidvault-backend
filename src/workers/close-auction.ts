@@ -140,7 +140,7 @@ export async function closeAuction(auctionId: string, options: CloseOptions = {}
             type: 'AUCTION_WON',
             title: 'You won the auction!',
             message: options.endedEarly
-              ? `The seller ended "${auction.title}" early and your bid of PKR ${winBid.amount.toLocaleString()} won. Complete your payment to claim it.`
+              ? `The seller concluded "${auction.title}" early and your bid of PKR ${winBid.amount.toLocaleString()} won. Complete your payment to claim it.`
               : `Congratulations! You won "${auction.title}" with a bid of PKR ${winBid.amount.toLocaleString()}. Complete your payment to claim it.`,
           },
         });
