@@ -196,6 +196,20 @@ export const endAuctionNowSchema = z
   })
   .meta({ id: 'EndAuctionNowRequest' });
 
+export const changeMinIncrementSchema = z
+  .object({
+    /** The new minimum increment in PKR; the server also caps it at the platform's maxBidIncrement. */
+    minIncrement: z.number().int().positive().max(MAX_MONEY),
+  })
+  .meta({ id: 'ChangeMinIncrementRequest' });
+
+export const lowerReserveSchema = z
+  .object({
+    /** The new reserve in PKR: below the current one, and not below the starting price. */
+    reservePrice: z.number().int().positive().max(MAX_MONEY),
+  })
+  .meta({ id: 'LowerReserveRequest' });
+
 // ---- payments ---------------------------------------------------------------------
 
 // BV-047 / E4: the platform held no delivery contact data at all before this. Collected

@@ -100,6 +100,14 @@ const OPERATIONS: Op[] = [
   { method: 'post', contractPath: '/auctions/{auctionId}/end-now',
     url: (w) => `/auctions/${w.liveAuctionId}/end-now`, allow: ['BUYER', 'SELLER'],
     body: () => ({ expectedBid: 21_000 }) },
+  // 2026-11-28 live edits. Role gate only, like end-now: ownership, the final-hour lock and the
+  // reserve rules are in tests/live-auction-edits.test.ts.
+  { method: 'patch', contractPath: '/auctions/{auctionId}/min-increment',
+    url: (w) => `/auctions/${w.liveAuctionId}/min-increment`, allow: ['BUYER', 'SELLER'],
+    body: () => ({ minIncrement: 2_000 }) },
+  { method: 'patch', contractPath: '/auctions/{auctionId}/reserve',
+    url: (w) => `/auctions/${w.liveAuctionId}/reserve`, allow: ['BUYER', 'SELLER'],
+    body: () => ({ reservePrice: 22_000 }) },
 
   // ---- listings -------------------------------------------------------------------------
   { method: 'post', contractPath: '/listings/upload-signature', url: () => '/listings/upload-signature', allow: ['SELLER'] },

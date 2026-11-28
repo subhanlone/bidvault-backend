@@ -244,6 +244,141 @@ export async function endAuctionNow(
 }
 
 // ---------------------------------------------------------------------------
+// Live edits (2026-11-28, the FYP mid panel): the seller changes the minimum increment of a live
+// auction, or lowers a reserve that bids have not reached
+// ---------------------------------------------------------------------------
+
+/**
+ * No increment change in an auction's final hour. A sudden jump then (500 to 50,000) would shut out
+ * every late bidder and hand the auction to whoever leads; lowering it is locked too, so the rules
+ * hold still for everyone at the end.
+ */
+export const INCREMENT_LOCK_MS = 60 * 60 * 1000;
+
+export type ChangeIncrementResult =
+  | { kind: 'ok'; minIncrement: number }
+  | { kind: 'not-found' }
+  | { kind: 'forbidden' }
+  | { kind: 'wrong-state' }
+  | { kind: 'final-hour' }
+  | { kind: 'too-high'; max: number };
+
+/**
+ * Sets the minimum increment of the seller's own live auction, up or down, within the same bounds
+ * a listing gets (1 to the platform's maxBidIncrement). Only the Auction changes: the Listing keeps
+ * the approved value, which a relist copies.
+ *
+ * Under the auction's row lock, the one the bid route takes, so a bid is checked against either
+ * the old increment or the new one, never a mix. The auction's room is told so every open bid
+ * panel shows the new minimum at once.
+ */
+export async function changeMinIncrement(
+  auctionId: string,
+  sellerId: string,
+  minIncrement: number,
+  io?: Server,
+): Promise<ChangeIncrementResult> {
+  const { maxBidIncrement } = await getPlatformSettings();
+  const result = await prisma.$transaction(async (tx) => {
+    const [row] = await tx.$queryRaw<
+      Array<{ id: string; sellerId: string; status: string; endTime: Date; minIncrement: number }>
+    >`
+      SELECT id, "sellerId", status, "endTime", "minIncrement" FROM "Auction" WHERE id = ${auctionId} FOR UPDATE
+    `;
+    if (!row) return { kind: 'not-found' as const };
+    if (row.sellerId !== sellerId) return { kind: 'forbidden' as const };
+    const msLeft = new Date(row.endTime).getTime() - Date.now();
+    if (row.status !== 'ACTIVE' || msLeft <= 0) return { kind: 'wrong-state' as const };
+    if (msLeft <= INCREMENT_LOCK_MS) return { kind: 'final-hour' as const };
+    if (minIncrement > maxBidIncrement) return { kind: 'too-high' as const, max: maxBidIncrement };
+    // The same value again is not a change: nothing to write, log or announce.
+    if (minIncrement === row.minIncrement) return { kind: 'ok' as const, minIncrement, changed: false };
+
+    await tx.auction.update({ where: { id: row.id }, data: { minIncrement } });
+    await tx.auditLog.create({
+      data: {
+        actorUserId: sellerId,
+        action: 'AUCTION_INCREMENT_CHANGED',
+        entityType: 'Auction',
+        entityId: row.id,
+        metadata: { from: row.minIncrement, to: minIncrement },
+      },
+    });
+    return { kind: 'ok' as const, minIncrement, changed: true };
+  });
+  if (result.kind !== 'ok') return result;
+
+  // To everyone watching, guests included: the increment is public, so it travels with the event.
+  if (result.changed) io?.to(auctionRoom(auctionId)).emit('auction:updated', { auctionId, minIncrement });
+  return { kind: 'ok', minIncrement };
+}
+
+export type LowerReserveResult =
+  | { kind: 'ok'; reservePrice: number; reserveMet: boolean }
+  | { kind: 'not-found' }
+  | { kind: 'forbidden' }
+  | { kind: 'wrong-state' }
+  | { kind: 'no-reserve' }
+  | { kind: 'no-bids' }
+  | { kind: 'reserve-met' }
+  | { kind: 'not-lower' }
+  | { kind: 'below-start'; startPrice: number };
+
+/**
+ * Lowers the reserve of the seller's own live auction that has bids but has not reached it, so the
+ * seller can still sell at a price they accept (eBay's own remedy; removing a reserve once there are
+ * bids is not offered, as on eBay, and lowering it to the current bid has the same effect). The new
+ * reserve must be below the old one and not below the starting price. Allowed up to the end, the
+ * final hour included: a lower reserve only makes a sale likelier, so no bidder can lose by it.
+ *
+ * At or below the current bid the reserve is met, and Conclude Now becomes available. Only the
+ * Auction changes, never the Listing. The room is told to refetch, without the amount: the reserve
+ * stays the seller's to know, and bidders only ever learn whether it is met.
+ */
+export async function lowerReserve(
+  auctionId: string,
+  sellerId: string,
+  reservePrice: number,
+  io?: Server,
+): Promise<LowerReserveResult> {
+  const result = await prisma.$transaction(async (tx) => {
+    const [row] = await tx.$queryRaw<
+      Array<{
+        id: string; sellerId: string; status: string; endTime: Date; bidCount: number;
+        currentBid: number; startPrice: number; reservePrice: number | null;
+      }>
+    >`
+      SELECT id, "sellerId", status, "endTime", "bidCount", "currentBid", "startPrice", "reservePrice"
+      FROM "Auction" WHERE id = ${auctionId} FOR UPDATE
+    `;
+    if (!row) return { kind: 'not-found' as const };
+    if (row.sellerId !== sellerId) return { kind: 'forbidden' as const };
+    if (row.status !== 'ACTIVE' || new Date(row.endTime).getTime() <= Date.now()) return { kind: 'wrong-state' as const };
+    if (row.reservePrice === null) return { kind: 'no-reserve' as const };
+    if (row.bidCount === 0) return { kind: 'no-bids' as const };
+    if (row.currentBid >= row.reservePrice) return { kind: 'reserve-met' as const };
+    if (reservePrice >= row.reservePrice) return { kind: 'not-lower' as const };
+    if (reservePrice < row.startPrice) return { kind: 'below-start' as const, startPrice: row.startPrice };
+
+    await tx.auction.update({ where: { id: row.id }, data: { reservePrice } });
+    await tx.auditLog.create({
+      data: {
+        actorUserId: sellerId,
+        action: 'AUCTION_RESERVE_LOWERED',
+        entityType: 'Auction',
+        entityId: row.id,
+        metadata: { from: row.reservePrice, to: reservePrice, currentBid: row.currentBid },
+      },
+    });
+    return { kind: 'ok' as const, reservePrice, reserveMet: row.currentBid >= reservePrice };
+  });
+  if (result.kind !== 'ok') return result;
+
+  io?.to(auctionRoom(auctionId)).emit('auction:updated', { auctionId });
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Payment deadline sweep (A3)
 // ---------------------------------------------------------------------------
 

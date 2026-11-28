@@ -442,7 +442,14 @@ const documentInput = {
     // address is gone: every address gets the same 201, and the owner of an existing account is
     // emailed instead. Breaking for a caller that read `user` or relied on the 409; the one client
     // reads neither. Not shape-changing: resend-verification now always sends codeExpiresAt and one message.
-    version: '14.0.0',
+    //
+    // 14.1.0, 2026-11-28, minor (additive): PATCH /auctions/{auctionId}/min-increment
+    // (ChangeMinIncrementRequest) and PATCH /auctions/{auctionId}/reserve (LowerReserveRequest). The
+    // seller raises or lowers the increment of a live auction (1 to maxBidIncrement, never in its final
+    // hour), or lowers a reserve its bids have not reached (below the old one, not below the starting
+    // price). A new `auction:updated` socket event ({auctionId, minIncrement?}) tells the auction's room
+    // to refetch; it never carries the reserve.
+    version: '14.1.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -895,6 +902,45 @@ const documentInput = {
           403: forbidden,
           404: notFound,
           409: errBody('Not ACTIVE, no bids, the reserve is not met, or the highest bid is no longer expectedBid'),
+        },
+      },
+    },
+    '/auctions/{auctionId}/min-increment': {
+      patch: {
+        tags: ['Auctions'],
+        security: [{ bearerAuth: [] }],
+        summary: 'The seller raises or lowers the minimum increment of their live auction, except in its final hour',
+        requestParams: { path: z.object({ auctionId: z.string() }) },
+        requestBody: jsonRequest(R.changeMinIncrementSchema),
+        responses: {
+          200: okBody(z.object({ auctionId: z.string(), minIncrement: z.number().int() }), 'Changed'),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Not ACTIVE, or in the final hour of the auction'),
+          422: unprocessable('minIncrement is above the platform maxBidIncrement'),
+        },
+      },
+    },
+    '/auctions/{auctionId}/reserve': {
+      patch: {
+        tags: ['Auctions'],
+        security: [{ bearerAuth: [] }],
+        summary: 'The seller lowers a reserve their live auction has bids for but has not reached',
+        requestParams: { path: z.object({ auctionId: z.string() }) },
+        requestBody: jsonRequest(R.lowerReserveSchema),
+        responses: {
+          200: okBody(
+            z.object({ auctionId: z.string(), reservePrice: z.number().int(), reserveMet: z.boolean() }),
+            'Lowered; reserveMet is true when the current bid now reaches it',
+          ),
+          400: badRequest,
+          401: unauthorized,
+          403: forbidden,
+          404: notFound,
+          409: errBody('Not ACTIVE, no reserve, no bids, or the reserve is already met'),
+          422: unprocessable('reservePrice is not below the current reserve, or is below the starting price'),
         },
       },
     },
