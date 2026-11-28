@@ -449,7 +449,13 @@ const documentInput = {
     // hour), or lowers a reserve its bids have not reached (below the old one, not below the starting
     // price). A new `auction:updated` socket event ({auctionId, minIncrement?}) tells the auction's room
     // to refetch; it never carries the reserve.
-    version: '14.1.0',
+    //
+    // 14.2.0, 2026-11-28, minor (additive): two optional/new fields so a seller sees the live values
+    // after those edits. Auction gains an optional `reservePrice`, sent only by GET
+    // /auctions/{auctionId} and only to the auction's own seller (everyone else still gets just
+    // reserveMet). SellerItem.auction gains `minIncrement` and an optional `reservePrice`, the
+    // auction's own (SellerItem.listing keeps the approved values).
+    version: '14.2.0',
     description:
       'Auction platform API. Generated from the Zod schemas the server actually validates ' +
       'and serves — see backend/src/openapi. Do not hand-edit openapi.json.\n\n' +
@@ -791,7 +797,9 @@ const documentInput = {
       get: {
         tags: ['Auctions'],
         requestParams: { path: z.object({ auctionId: z.string() }) },
-        summary: 'currentBid and bidCount are read straight from the row — see BV-010',
+        summary:
+          'currentBid and bidCount are read straight from the row — see BV-010. Public; with a valid ' +
+          'bearer token of the auction\'s own seller the reply also carries reservePrice',
         responses: { 200: okBody(S.AuctionDto, 'The auction'), 404: notFound },
       },
     },

@@ -5,7 +5,7 @@ import type { Server } from 'socket.io';
 import { prisma } from '../../db/prisma.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { fail, failField, ok } from '../../utils/response.js';
-import { requireAuth } from '../../middleware/auth.js';
+import { optionalAuth, requireAuth } from '../../middleware/auth.js';
 import { sendValidationError, validateBody } from '../../middleware/validate.js';
 import { dispatchEmail, sendBidPlacedEmail } from '../../services/email.service.js';
 import {
@@ -217,6 +217,8 @@ router.get(
 
 router.get(
   '/:auctionId',
+  // Public, but it notices who is asking: the auction's own seller also gets the reserve.
+  optionalAuth(),
   asyncHandler(async (req, res) => {
     const auction = await prisma.auction.findUnique({
       where: { id: req.params.auctionId },
@@ -231,7 +233,11 @@ router.get(
     const statsMap = await buildSellerStatsMap([auction.sellerId]);
     const watchers = await buildWatcherCountMap([auction.id]);
     const dto = toAuctionDto(auction, statsMap, watchers);
-    ok(res, dto);
+    // 2026-11-28: the seller's Live Monitor needs the live reserve to lower it (PATCH .../reserve),
+    // and it is theirs to know. Nobody else ever gets the amount (see toAuctionDto); the response
+    // is no-store, so no cache can hand it on.
+    const ownSeller = req.auth?.userId === auction.sellerId;
+    ok(res, ownSeller && auction.reservePrice !== null ? { ...dto, reservePrice: auction.reservePrice } : dto);
   }),
 );
 

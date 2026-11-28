@@ -104,7 +104,8 @@ export function toAuctionDto(
     // GET /auctions and GET /auctions/:id, so publishing the amount hands every bidder the
     // seller's hidden floor: bid exactly the reserve and never a rupee more, or walk away on
     // seeing it is out of reach. Only the derived verdict goes out. The owning seller and
-    // admins still get the number through the listing DTO, which is role-gated.
+    // admins still get the number through the listing DTO, which is role-gated, and the owning
+    // seller also gets the live amount from GET /auctions/:id (see that route), never from here.
     //
     // null   = no reserve was set
     // false  = reserve not reached (live comparison while open, the worker's recorded

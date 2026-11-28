@@ -195,6 +195,10 @@ async function toDtos(rows: ItemRow[]): Promise<SellerItemDtoType[]> {
         bidCount: auction.bidCount,
         watcherCount: watchers.get(auction.id) ?? 0,
         reserveMet: auction.reserveMet,
+        // The live values: a seller may change both while the auction runs, and the listing keeps
+        // the approved ones (2026-11-28).
+        minIncrement: auction.minIncrement,
+        reservePrice: auction.reservePrice ?? undefined,
         startTime: auction.startTime.toISOString(),
         endTime: auction.endTime.toISOString(),
       },
